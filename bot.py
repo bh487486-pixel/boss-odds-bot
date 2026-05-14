@@ -1,10 +1,14 @@
 import requests
 import time
+import os
 from datetime import datetime, timedelta
 
-BOT_TOKEN = "8750460017:AAHlOiVn6FSvbVbv0clP9Kbc92eah8eITBg"
-CHAT_ID = "8463436388"
+# 🔐 VARIABLES (desde Render)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+API_KEY = os.getenv("API_KEY")
 
+# Evita repetir picks
 enviados = set()
 
 def enviar_telegram(mensaje):
@@ -17,20 +21,47 @@ def enviar_telegram(mensaje):
     requests.post(url, data=data)
 
 def obtener_partidos():
-    # 🔴 CAMBIA por tu API real
-    url = "https://api.sample.com/matches"
-    response = requests.get(url)
-    return response.json()
+    sports = [
+        "soccer_spain_la_liga",
+        "soccer_epl",
+        "basketball_nba",
+        "baseball_mlb"
+    ]
+
+    partidos = []
+
+    for sport in sports:
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h"
+        res = requests.get(url)
+
+        if res.status_code != 200:
+            continue
+
+        data = res.json()
+
+        for game in data:
+            try:
+                home = game["home_team"]
+                away = game["away_team"]
+
+                # Hora del partido (UTC → México aprox -6h)
+                fecha_utc = datetime.fromisoformat(game["commence_time"].replace("Z", "+00:00"))
+                fecha_local = fecha_utc - timedelta(hours=6)
+
+                partidos.append({
+                    "home": home,
+                    "away": away,
+                    "date": fecha_local
+                })
+
+            except:
+                continue
+
+    return partidos
 
 def generar_pick(match):
-    equipo1 = match.get("home", "Equipo A")
-    equipo2 = match.get("away", "Equipo B")
-
-    fecha_str = match.get("date")
-    fecha_partido = datetime.strptime(fecha_str, "%Y-%m-%d %H:%M:%S")
-
-    fecha = fecha_partido.strftime("%d/%m/%Y")
-    hora = fecha_partido.strftime("%I:%M %p")
+    fecha = match["date"].strftime("%d/%m/%Y")
+    hora = match["date"].strftime("%I:%M %p")
 
     return f"""🔥 PICKS VIP 🔥
 ━━━━━━━━━━━━━━
@@ -38,9 +69,9 @@ def generar_pick(match):
 ⏰ Hora: {hora}
 
 🎯 Pick:
-➡️ Evento: {equipo1} vs {equipo2}
-➡️ Tipo de apuesta: Over 2.5 goles
-➡️ Cuota: 1.85
+➡️ Evento: {match['home']} vs {match['away']}
+➡️ Tipo de apuesta: Ganador (local)
+➡️ Cuota: 1.80
 ➡️ Stake: 7/10
 
 Confía en el proceso 💰
@@ -53,48 +84,22 @@ def revisar_partidos():
 
     for match in partidos:
         try:
-            fecha_str = match.get("date")
-            fecha_partido = datetime.strptime(fecha_str, "%Y-%m-%d %H:%M:%S")
+            fecha_partido = match["date"]
 
             # ✅ Solo partidos de HOY
             if fecha_partido.date() != hoy:
                 continue
 
-            # ❌ Ignorar partidos ya iniciados o finalizados
+            # ❌ Ignorar partidos ya iniciados
             if fecha_partido <= ahora:
                 continue
 
-            # ⏰ Calcular tiempo restante
             diferencia = fecha_partido - ahora
 
-            # ✅ Solo enviar 30 min antes
+            # ⏰ 30 min antes
             if timedelta(minutes=29) <= diferencia <= timedelta(minutes=31):
 
-                partido_id = f"{match.get('home')}-{match.get('away')}-{fecha_str}"
-
-                if partido_id not in enviados:
-                    mensaje = generar_pick(match)
-                    enviar_telegram(mensaje)
-                    enviados.add(partido_id)
-
-        except:
-            continue
-
-def main():
-    enviar_telegram("🔥 Boss Odds Bot ACTIVADO 🔥")
-    
-
-    while True:
-        revisar_partidos()
-        time.sleep(60)
-
-if __name__ == "__main__":
-    main()
-diferencia = fecha_partido - ahora
-
-            if timedelta(minutes=29) <= diferencia <= timedelta(minutes=31):
-
-                partido_id = f"{match.get('home')}-{match.get('away')}-{fecha_str}"
+                partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
 
                 if partido_id not in enviados:
                     mensaje = generar_pick(match)
