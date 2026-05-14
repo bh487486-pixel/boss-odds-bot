@@ -2,8 +2,8 @@ import requests
 import time
 from datetime import datetime, timedelta
 
-BOT_TOKEN = 8750460017:AAHlOiVn6FSvbVbv0clP9Kbc92eah8eITBg
-CHAT_ID = 8463436388
+BOT_TOKEN = "8750460017:AAHlOiVn6FSvbVbv0clP9Kbc92eah8eITBg"
+CHAT_ID = "8463436388"
 
 enviados = set()
 
