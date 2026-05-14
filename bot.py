@@ -3,10 +3,12 @@ import time
 import os
 from datetime import datetime, timedelta
 
+# 🔐 Variables (Render)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
 
+# Evitar duplicados
 enviados = set()
 
 def enviar_telegram(mensaje):
@@ -22,14 +24,17 @@ def obtener_partidos():
     sports = [
         "soccer_spain_la_liga",
         "soccer_epl",
-        "baseball_mlb",
-        "basketball_nba"
+        "basketball_nba",
+        "baseball_mlb"
     ]
 
     partidos = []
 
     for sport in sports:
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h,spreads,totals,corner_totals"
+        url = (
+            f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
+            f"?apiKey={API_KEY}&regions=us&markets=h2h,spreads,totals,corner_totals"
+        )
         res = requests.get(url)
 
         if res.status_code != 200:
@@ -39,36 +44,25 @@ def obtener_partidos():
 
         for game in data:
             try:
-                fecha_utc = datetime.fromisoformat(game["commence_time"].replace("Z", "+00:00"))
+                # UTC → México (aprox -6h)
+                fecha_utc = datetime.fromisoformat(
+                    game["commence_time"].replace("Z", "+00:00")
+                )
                 fecha_local = fecha_utc - timedelta(hours=6)
 
                 partidos.append({
                     "home": game["home_team"],
                     "away": game["away_team"],
                     "date": fecha_local,
-                    "bookmakers": game.get("bookmakers", []),
-                    "sport": sport
+                    "bookmakers": game.get("bookmakers", [])
                 })
-
             except:
                 continue
 
     return partidos
 
-def logica_corners(match):
-    # 🔥 lógica simple pero útil
-    equipos_ofensivos = ["Liverpool", "Man City", "Real Madrid", "Barcelona", "Bayern"]
-
-    if match["home"] in equipos_ofensivos or match["away"] in equipos_ofensivos:
-        return {
-            "tipo": "Córners",
-            "pick": "Over 9.5",
-            "cuota": 1.80
-        }
-
-    return None
-
-def mejor_pick(match):
+# 🧠 Detección simple de "value"
+def detectar_valor(match):
     try:
         bookmakers = match["bookmakers"]
         if not bookmakers:
@@ -77,49 +71,57 @@ def mejor_pick(match):
         markets = bookmakers[0]["markets"]
 
         mejor = None
-        mejor_cuota = 0
-        tipo = ""
-        linea = ""
+        mejor_score = 0
 
         for market in markets:
-            nombre = market["key"]
+            if market["key"] not in ["h2h", "spreads", "totals", "corner_totals"]:
+                continue
 
-            for outcome in market["outcomes"]:
-                cuota = outcome["price"]
+            for o in market["outcomes"]:
+                cuota = o["price"]
 
-                if 1.60 <= cuota <= 3.50:
-                    if cuota > mejor_cuota:
-                        mejor_cuota = cuota
-                        mejor = outcome
-                        tipo = nombre
-                        linea = outcome.get("point", "")
+                # filtro básico
+                if cuota < 1.60 or cuota > 4.00:
+                    continue
 
-        # 🎯 SI HAY MERCADO REAL
-        if mejor:
-            if tipo == "h2h":
-                tipo_txt = "Ganador"
-            elif tipo == "spreads":
-                tipo_txt = "Hándicap"
-            elif tipo == "totals":
-                tipo_txt = "Over/Under"
-            elif tipo == "corner_totals":
-                tipo_txt = "Córners"
-            else:
-                tipo_txt = tipo
+                # probabilidad implícita
+                prob = 1 / cuota
 
-            return {
-                "tipo": tipo_txt,
-                "pick": mejor["name"],
-                "cuota": mejor_cuota,
-                "linea": linea
-            }
+                # ⚠️ estimación simple (simulación de edge)
+                prob_estimada = prob * 1.10  # asumimos ligera ineficiencia
 
-        # 🔥 SI NO HAY → lógica de córners
-        corners = logica_corners(match)
-        if corners:
-            return corners
+                value = (prob_estimada * cuota) - 1
 
-        return None
+                if value > mejor_score:
+                    mejor_score = value
+                    mejor = {
+                        "tipo": market["key"],
+                        "pick": o["name"],
+                        "cuota": cuota,
+                        "linea": o.get("point", "")
+                    }
+
+        if not mejor:
+            return None
+
+        # traducir mercado
+        if mejor["tipo"] == "h2h":
+            tipo_txt = "Ganador"
+        elif mejor["tipo"] == "spreads":
+            tipo_txt = "Hándicap"
+        elif mejor["tipo"] == "totals":
+            tipo_txt = "Over/Under"
+        elif mejor["tipo"] == "corner_totals":
+            tipo_txt = "Córners"
+        else:
+            tipo_txt = mejor["tipo"]
+
+        return {
+            "tipo": tipo_txt,
+            "pick": mejor["pick"],
+            "cuota": mejor["cuota"],
+            "linea": mejor["linea"]
+        }
 
     except:
         return None
@@ -128,7 +130,7 @@ def generar_mensaje(match, pick):
     fecha = match["date"].strftime("%d/%m/%Y")
     hora = match["date"].strftime("%I:%M %p")
 
-    linea = f" ({pick.get('linea','')})" if pick.get("linea") else ""
+    linea = f" ({pick['linea']})" if pick["linea"] else ""
 
     return f"""🔥 PICKS VIP 🔥
 ━━━━━━━━━━━━━━
@@ -154,21 +156,24 @@ def revisar_partidos():
         try:
             fecha_partido = match["date"]
 
+            # Solo hoy
             if fecha_partido.date() != hoy:
                 continue
 
+            # No partidos ya iniciados
             if fecha_partido <= ahora:
                 continue
 
             diferencia = fecha_partido - ahora
 
+            # 30 min antes
             if timedelta(minutes=29) <= diferencia <= timedelta(minutes=31):
 
                 partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
 
                 if partido_id not in enviados:
 
-                    pick = mejor_pick(match)
+                    pick = detectar_valor(match)
 
                     if pick:
                         mensaje = generar_mensaje(match, pick)
