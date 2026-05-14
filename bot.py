@@ -82,6 +82,30 @@ def revisar_partidos():
 
 def main():
     enviar_telegram("🔥 Boss Odds Bot ACTIVADO 🔥")
+    
+
+    while True:
+        revisar_partidos()
+        time.sleep(60)
+
+if __name__ == "__main__":
+    main()
+diferencia = fecha_partido - ahora
+
+            if timedelta(minutes=29) <= diferencia <= timedelta(minutes=31):
+
+                partido_id = f"{match.get('home')}-{match.get('away')}-{fecha_str}"
+
+                if partido_id not in enviados:
+                    mensaje = generar_pick(match)
+                    enviar_telegram(mensaje)
+                    enviados.add(partido_id)
+
+        except:
+            continue
+
+def main():
+    enviar_telegram("🔥 Boss Odds Bot ACTIVADO 🔥")
 
     while True:
         revisar_partidos()
