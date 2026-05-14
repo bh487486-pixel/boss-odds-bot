@@ -3,7 +3,6 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# 🔐 VARIABLES DESDE RENDER
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
@@ -23,13 +22,14 @@ def obtener_partidos():
     sports = [
         "soccer_spain_la_liga",
         "soccer_epl",
-        "baseball_mlb"
+        "baseball_mlb",
+        "basketball_nba"
     ]
 
     partidos = []
 
     for sport in sports:
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h"
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h,spreads,totals,corner_totals"
         res = requests.get(url)
 
         if res.status_code != 200:
@@ -39,18 +39,15 @@ def obtener_partidos():
 
         for game in data:
             try:
-                home = game["home_team"]
-                away = game["away_team"]
-
-                # Convertir hora UTC a México (-6)
                 fecha_utc = datetime.fromisoformat(game["commence_time"].replace("Z", "+00:00"))
                 fecha_local = fecha_utc - timedelta(hours=6)
 
                 partidos.append({
-                    "home": home,
-                    "away": away,
+                    "home": game["home_team"],
+                    "away": game["away_team"],
                     "date": fecha_local,
-                    "bookmakers": game.get("bookmakers", [])
+                    "bookmakers": game.get("bookmakers", []),
+                    "sport": sport
                 })
 
             except:
@@ -58,70 +55,95 @@ def obtener_partidos():
 
     return partidos
 
-def generar_pick(match):
-    home = match["home"]
-    away = match["away"]
-    fecha_partido = match["date"]
+def logica_corners(match):
+    # 🔥 lógica simple pero útil
+    equipos_ofensivos = ["Liverpool", "Man City", "Real Madrid", "Barcelona", "Bayern"]
 
-    fecha = fecha_partido.strftime("%d/%m/%Y")
-    hora = fecha_partido.strftime("%I:%M %p")
+    if match["home"] in equipos_ofensivos or match["away"] in equipos_ofensivos:
+        return {
+            "tipo": "Córners",
+            "pick": "Over 9.5",
+            "cuota": 1.80
+        }
 
+    return None
+
+def mejor_pick(match):
     try:
         bookmakers = match["bookmakers"]
-
         if not bookmakers:
             return None
 
-        markets = bookmakers[0]["markets"][0]["outcomes"]
+        markets = bookmakers[0]["markets"]
 
-        odds_home = None
-        odds_away = None
+        mejor = None
+        mejor_cuota = 0
+        tipo = ""
+        linea = ""
 
-        for o in markets:
-            if o["name"] == home:
-                odds_home = o["price"]
-            elif o["name"] == away:
-                odds_away = o["price"]
+        for market in markets:
+            nombre = market["key"]
 
-        if odds_home is None or odds_away is None:
-            return None
+            for outcome in market["outcomes"]:
+                cuota = outcome["price"]
 
-        # 🎯 Elegir favorito (cuota más baja)
-        if odds_home < odds_away:
-            pick = home
-            cuota = odds_home
-        else:
-            pick = away
-            cuota = odds_away
+                if 1.60 <= cuota <= 3.50:
+                    if cuota > mejor_cuota:
+                        mejor_cuota = cuota
+                        mejor = outcome
+                        tipo = nombre
+                        linea = outcome.get("point", "")
 
-        # ❌ Filtrar picks basura
-        if cuota < 1.50 or cuota > 3.50:
-            return None
+        # 🎯 SI HAY MERCADO REAL
+        if mejor:
+            if tipo == "h2h":
+                tipo_txt = "Ganador"
+            elif tipo == "spreads":
+                tipo_txt = "Hándicap"
+            elif tipo == "totals":
+                tipo_txt = "Over/Under"
+            elif tipo == "corner_totals":
+                tipo_txt = "Córners"
+            else:
+                tipo_txt = tipo
 
-        # 🎚 Stake dinámico
-        if cuota < 2.0:
-            stake = "8/10"
-        elif cuota < 2.5:
-            stake = "7/10"
-        else:
-            stake = "6/10"
+            return {
+                "tipo": tipo_txt,
+                "pick": mejor["name"],
+                "cuota": mejor_cuota,
+                "linea": linea
+            }
 
-        return f"""🔥 PICKS VIP 🔥
+        # 🔥 SI NO HAY → lógica de córners
+        corners = logica_corners(match)
+        if corners:
+            return corners
+
+        return None
+
+    except:
+        return None
+
+def generar_mensaje(match, pick):
+    fecha = match["date"].strftime("%d/%m/%Y")
+    hora = match["date"].strftime("%I:%M %p")
+
+    linea = f" ({pick.get('linea','')})" if pick.get("linea") else ""
+
+    return f"""🔥 PICKS VIP 🔥
 ━━━━━━━━━━━━━━
 📅 Fecha: {fecha}
 ⏰ Hora: {hora}
 
 🎯 Pick:
-➡️ Evento: {home} vs {away}
-➡️ Pick: {pick}
-➡️ Cuota: {cuota}
-➡️ Stake: {stake}
+➡️ Evento: {match['home']} vs {match['away']}
+➡️ Tipo: {pick['tipo']}
+➡️ Pick: {pick['pick']}{linea}
+➡️ Cuota: {pick['cuota']}
+➡️ Stake: 7/10
 
 Confía en el sistema 💰
 """
-
-    except:
-        return None
 
 def revisar_partidos():
     partidos = obtener_partidos()
@@ -132,25 +154,24 @@ def revisar_partidos():
         try:
             fecha_partido = match["date"]
 
-            # ✅ Solo hoy
             if fecha_partido.date() != hoy:
                 continue
 
-            # ❌ Ignorar partidos ya iniciados
             if fecha_partido <= ahora:
                 continue
 
             diferencia = fecha_partido - ahora
 
-            # ⏰ 30 min antes
             if timedelta(minutes=29) <= diferencia <= timedelta(minutes=31):
 
                 partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
 
                 if partido_id not in enviados:
-                    mensaje = generar_pick(match)
 
-                    if mensaje:
+                    pick = mejor_pick(match)
+
+                    if pick:
+                        mensaje = generar_mensaje(match, pick)
                         enviar_telegram(mensaje)
                         enviados.add(partido_id)
 
