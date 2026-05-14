@@ -3,55 +3,78 @@ import requests
 import os
 import random
 
+API_KEY = os.getenv("API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+SPORTS = [
+    "soccer_spain_la_liga",
+    "soccer_epl",
+    "basketball_nba",
+    "baseball_mlb"
+]
 
 def enviar(texto):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": texto})
 
-equipos = [
-    "Real Madrid vs Barcelona",
-    "PSG vs Bayern",
-    "Manchester City vs Liverpool",
-    "Inter vs Milan",
-    "Juventus vs Napoli",
-    "Dodgers vs Yankees",
-    "Astros vs Red Sox"
-]
+def obtener_partidos():
+    partidos = []
 
-apuestas = [
-    "Over 2.5 goles",
-    "Under 2.5 goles",
-    "Ambos anotan",
-    "Gana local",
-    "Gana visitante"
-]
+    for sport in SPORTS:
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h"
+        res = requests.get(url)
+
+        if res.status_code != 200:
+            continue
+
+        data = res.json()
+
+        for game in data:
+            home = game["home_team"]
+            away = game["away_team"]
+
+            if not game["bookmakers"]:
+                continue
+
+            odds = game["bookmakers"][0]["markets"][0]["outcomes"]
+
+            for o in odds:
+                partidos.append({
+                    "match": f"{home} vs {away}",
+                    "team": o["name"],
+                    "price": o["price"]
+                })
+
+    return partidos
 
 def generar_pick():
-    partido = random.choice(equipos)
-    apuesta = random.choice(apuestas)
-    cuota = round(random.uniform(1.5, 3.5), 2)
+    partidos = obtener_partidos()
+
+    if not partidos:
+        return "⚠️ No hay partidos disponibles"
+
+    pick = random.choice(partidos)
+
     stake = random.randint(5, 10)
 
     return f"""
 🔥 PICKS VIP 🔥
 ─────────────────────
 🎯 Pick:
-➡️ Tipo de apuesta: {apuesta}
-➡️ Evento: {partido}
-➡️ Cuota: {cuota}
+➡️ Tipo de apuesta: Ganador
+➡️ Evento: {pick['match']}
+➡️ Pick: {pick['team']}
+➡️ Cuota: {pick['price']}
 ➡️ Stake: {stake}/10
 
-Confía en el proceso. 💰
+Confía en el sistema. 💰
 """
 
-# mensaje inicial
-enviar("🔥 Boss Odds Bot AUTOMÁTICO ACTIVADO 🔥")
+enviar("🔥 Boss Odds MX AUTOMÁTICO ACTIVADO 🔥")
 
 while True:
-    pick = generar_pick()
-    enviar(pick)
+    mensaje = generar_pick()
+    enviar(mensaje)
 
-    # cada 4 horas
-    time.sleep(14400)
+    time.sleep(10800)  # cada 3 horas
