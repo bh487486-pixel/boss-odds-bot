@@ -8,6 +8,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
 
 enviados = set()
+avisados = set()
 
 def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -150,11 +151,20 @@ def revisar_partidos():
 
             diferencia = fecha_partido - ahora
 
-            # 🔥 NUEVA LÓGICA (NO FALLA)
+            partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
+
+            # 🔔 AVISO DE PARTIDO DETECTADO (10–60 min antes)
+            if timedelta(minutes=10) <= diferencia <= timedelta(minutes=60):
+                if partido_id not in avisados:
+                    enviar_telegram(
+                        f"👀 Partido detectado\n\n"
+                        f"{match['home']} vs {match['away']}\n"
+                        f"⏰ Empieza en {int(diferencia.total_seconds()//60)} min"
+                    )
+                    avisados.add(partido_id)
+
+            # 🔥 ENVÍO DEL PICK (0–3 min antes)
             if 0 <= diferencia.total_seconds() <= 180:
-
-                partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
-
                 if partido_id not in enviados:
 
                     pick = detectar_valor(match)
