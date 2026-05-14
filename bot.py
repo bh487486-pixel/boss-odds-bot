@@ -9,8 +9,23 @@ def enviar(texto):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": texto})
 
-enviar("🔥 Bot encendido 🔥")
+# Mensaje inicial
+enviar("🔥 Boss Odds Bot ACTIVADO 🔥")
 
 while True:
-    enviar("📊 El bot sigue activo...")
-    time.sleep(30)
+    pick = """
+🔥 PICKS VIP 🔥
+─────────────────────
+🎯 Pick:
+➡️ Tipo de apuesta: Over 2.5 goles
+➡️ Evento: Ejemplo FC vs Demo United
+➡️ Cuota: 1.85
+➡️ Stake: 7/10
+
+Confía en el proceso. 💰
+    """
+
+    enviar(pick)
+
+    # espera 6 horas (21600 segundos)
+    time.sleep(21600)
