@@ -3,12 +3,10 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# 🔐 Variables (Render)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
 
-# Evitar duplicados
 enviados = set()
 
 def enviar_telegram(mensaje):
@@ -31,10 +29,7 @@ def obtener_partidos():
     partidos = []
 
     for sport in sports:
-        url = (
-            f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-            f"?apiKey={API_KEY}&regions=us&markets=h2h,spreads,totals,corner_totals"
-        )
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h,spreads,totals,corner_totals"
         res = requests.get(url)
 
         if res.status_code != 200:
@@ -44,10 +39,7 @@ def obtener_partidos():
 
         for game in data:
             try:
-                # UTC → México (aprox -6h)
-                fecha_utc = datetime.fromisoformat(
-                    game["commence_time"].replace("Z", "+00:00")
-                )
+                fecha_utc = datetime.fromisoformat(game["commence_time"].replace("Z", "+00:00"))
                 fecha_local = fecha_utc - timedelta(hours=6)
 
                 partidos.append({
@@ -56,12 +48,12 @@ def obtener_partidos():
                     "date": fecha_local,
                     "bookmakers": game.get("bookmakers", [])
                 })
+
             except:
                 continue
 
     return partidos
 
-# 🧠 Detección simple de "value"
 def detectar_valor(match):
     try:
         bookmakers = match["bookmakers"]
@@ -80,16 +72,11 @@ def detectar_valor(match):
             for o in market["outcomes"]:
                 cuota = o["price"]
 
-                # filtro básico
                 if cuota < 1.60 or cuota > 4.00:
                     continue
 
-                # probabilidad implícita
                 prob = 1 / cuota
-
-                # ⚠️ estimación simple (simulación de edge)
-                prob_estimada = prob * 1.10  # asumimos ligera ineficiencia
-
+                prob_estimada = prob * 1.10
                 value = (prob_estimada * cuota) - 1
 
                 if value > mejor_score:
@@ -104,7 +91,6 @@ def detectar_valor(match):
         if not mejor:
             return None
 
-        # traducir mercado
         if mejor["tipo"] == "h2h":
             tipo_txt = "Ganador"
         elif mejor["tipo"] == "spreads":
@@ -156,18 +142,16 @@ def revisar_partidos():
         try:
             fecha_partido = match["date"]
 
-            # Solo hoy
             if fecha_partido.date() != hoy:
                 continue
 
-            # No partidos ya iniciados
             if fecha_partido <= ahora:
                 continue
 
             diferencia = fecha_partido - ahora
 
-            # 30 min antes
-            if timedelta(minutes=29) <= diferencia <= timedelta(minutes=31):
+            # 🧪 PRUEBA: 1–2 minutos antes
+            if timedelta(minutes=1) <= diferencia <= timedelta(minutes=2):
 
                 partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
 
