@@ -150,8 +150,8 @@ def revisar_partidos():
 
             diferencia = fecha_partido - ahora
 
-            # 🧪 PRUEBA: 1–2 minutos antes
-            if timedelta(minutes=1) <= diferencia <= timedelta(minutes=2):
+            # 🔥 NUEVA LÓGICA (NO FALLA)
+            if 0 <= diferencia.total_seconds() <= 180:
 
                 partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
 
