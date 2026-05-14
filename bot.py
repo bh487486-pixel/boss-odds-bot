@@ -1,80 +1,81 @@
-import time
 import requests
-import os
-import random
+import time
+from datetime import datetime, timedelta
 
-API_KEY = os.getenv("API_KEY")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+BOT_TOKEN = "TU_TOKEN"
+CHAT_ID = "TU_CHAT_ID"
 
-SPORTS = [
-    "soccer_spain_la_liga",
-    "soccer_epl",
-    "basketball_nba",
-    "baseball_mlb"
-]
+enviados = set()
 
-def enviar(texto):
+def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": texto})
+    data = {
+        "chat_id": CHAT_ID,
+        "text": mensaje,
+        "parse_mode": "Markdown"
+    }
+    requests.post(url, data=data)
 
 def obtener_partidos():
-    partidos = []
+    # 🔴 CAMBIA por tu API real
+    url = "https://api.sample.com/matches"
+    response = requests.get(url)
+    return response.json()
 
-    for sport in SPORTS:
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h"
-        res = requests.get(url)
+def generar_pick(match):
+    equipo1 = match.get("home", "Equipo A")
+    equipo2 = match.get("away", "Equipo B")
 
-        if res.status_code != 200:
-            continue
+    fecha_str = match.get("date")
+    fecha_partido = datetime.strptime(fecha_str, "%Y-%m-%d %H:%M:%S")
 
-        data = res.json()
+    fecha_formateada = fecha_partido.strftime("%d/%m/%Y")
+    hora_formateada = fecha_partido.strftime("%I:%M %p")
 
-        for game in data:
-            home = game["home_team"]
-            away = game["away_team"]
+    return f"""🔥 PICKS VIP 🔥
+━━━━━━━━━━━━━━
+📅 Fecha: {fecha_formateada}
+⏰ Hora: {hora_formateada}
 
-            if not game["bookmakers"]:
-                continue
-
-            odds = game["bookmakers"][0]["markets"][0]["outcomes"]
-
-            for o in odds:
-                partidos.append({
-                    "match": f"{home} vs {away}",
-                    "team": o["name"],
-                    "price": o["price"]
-                })
-
-    return partidos
-
-def generar_pick():
-    partidos = obtener_partidos()
-
-    if not partidos:
-        return "⚠️ No hay partidos disponibles"
-
-    pick = random.choice(partidos)
-
-    stake = random.randint(5, 10)
-
-    return f"""
-🔥 PICKS VIP 🔥
-─────────────────────
 🎯 Pick:
-➡️ Tipo de apuesta: Ganador
-➡️ Evento: {pick['match']}
-➡️ Pick: {pick['team']}
-➡️ Cuota: {pick['price']}
-➡️ Stake: {stake}/10
+➡️ Evento: {equipo1} vs {equipo2}
+➡️ Tipo de apuesta: Over 2.5 goles
+➡️ Cuota: 1.85
+➡️ Stake: 7/10
 
-Confía en el sistema. 💰
+Confía en el proceso 💰
 """
 
-enviar("🔥 Boss Odds MX AUTOMÁTICO ACTIVADO 🔥")
+def revisar_partidos():
+    partidos = obtener_partidos()
 
-while True:
-    mensaje = generar_pick()
-    enviar(mensaje)
+    for match in partidos:
+        try:
+            fecha_str = match.get("date")
+            fecha_partido = datetime.strptime(fecha_str, "%Y-%m-%d %H:%M:%S")
 
-    time.sleep(10800)  # cada 3 horas
+            ahora = datetime.now()
+            diferencia = fecha_partido - ahora
+
+            # ⏰ Enviar 30 min antes SIN importar el día
+            if timedelta(minutes=29) <= diferencia <= timedelta(minutes=31):
+
+                partido_id = f"{match.get('home')}-{match.get('away')}-{fecha_str}"
+
+                if partido_id not in enviados:
+                    mensaje = generar_pick(match)
+                    enviar_telegram(mensaje)
+                    enviados.add(partido_id)
+
+        except:
+            continue
+
+def main():
+    enviar_telegram("🔥 Boss Odds Bot ACTIVADO 🔥")
+
+    while True:
+        revisar_partidos()
+        time.sleep(60)  # revisa cada minuto
+
+if __name__ == "__main__":
+    main()
