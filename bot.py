@@ -12,16 +12,12 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
 LIGAS_TOP = [
     "soccer_mexico_ligamx", "soccer_epl", "soccer_uefa_champions_league",
-    "basketball_nba", "baseball_mlb", "soccer_spain_la_liga", 
-    "soccer_italy_serie_a", "soccer_germany_bundesliga"
+    "basketball_nba", "baseball_mlb", "soccer_spain_la_liga"
 ]
 
 MARKETS = "h2h,totals,spreads,btts"
 API_URL = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-
-# --- AJUSTE A 3% ---
 UMBRAL_VALOR = 1.03 
-
 TZ_MEXICO = pytz.timezone("America/Mexico_City")
 
 DIAS_SEMANA = {
@@ -31,23 +27,12 @@ DIAS_SEMANA = {
 
 historial_enviados = []
 
-def enviar_telegram_con_botones(mensaje, id_unico):
-    if not TELEGRAM_TOKEN: return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    keyboard = {
-        "inline_keyboard": [
-            [{"text": "✅ Ganada", "callback_data": f"w_{id_unico}"}, {"text": "❌ Perdida", "callback_data": f"l_{id_unico}"}],
-            [{"text": "📊 Marcador", "url": "https://www.google.com/search?q=resultados+deportivos"}]
-        ]
-    }
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown", "reply_markup": keyboard}
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except: pass
-
 def buscar_mejor_pick():
     global historial_enviados
     oportunidades = []
+    
+    # Intentamos rastrear los créditos en los headers de la respuesta
+    creditos_restantes = "Desconocido"
 
     for liga in LIGAS_TOP:
         url = API_URL.format(sport=liga)
@@ -55,20 +40,21 @@ def buscar_mejor_pick():
         
         try:
             res = requests.get(url, params=params, timeout=12)
+            
+            # --- MONITOR DE CRÉDITOS ---
+            if "x-requests-remaining" in res.headers:
+                creditos_restantes = res.headers["x-requests-remaining"]
+
             if res.status_code != 200: continue
             
             for evento in res.json():
                 dt_utc = datetime.strptime(evento["commence_time"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
-                # Sigue el filtro de HOY y MAÑANA (36 horas)
                 if dt_utc < (datetime.now(pytz.UTC) + timedelta(minutes=5)) or dt_utc > (datetime.now(pytz.UTC) + timedelta(hours=36)):
                     continue
                 
                 dt_mx = dt_utc.astimezone(TZ_MEXICO)
-                dia_full = f"{DIAS_SEMANA.get(dt_mx.strftime('%A'), dt_mx.strftime('%A'))}, {dt_mx.strftime('%d/%m/%Y')}"
-                
                 bookmakers = evento.get("bookmakers", [])
                 for b in bookmakers:
-                    casa = b["title"]
                     for m in b["markets"]:
                         for out in m["outcomes"]:
                             nombre_pick = out["name"]
@@ -86,41 +72,35 @@ def buscar_mejor_pick():
                             promedio = sum(precios) / len(precios)
                             ventaja = out["price"] / promedio
 
-                            # AHORA BUSCA VENTAJAS DESDE EL 3%
                             if ventaja >= UMBRAL_VALOR:
                                 oportunidades.append({
                                     "ventaja": ventaja,
                                     "id_unico": id_unico,
                                     "msg": (
-                                        "🎯 *NUEVA OPORTUNIDAD (3%+)* 🎯\n"
+                                        "🎯 *PICK DETECTADO (3%+)* 🎯\n"
                                         "─────────────────────\n"
                                         f"🏟️ *Evento:* {evento['home_team']} vs {evento['away_team']}\n"
-                                        f"📅 *Día:* {dia_full}\n"
-                                        f"⏰ *Inicia:* {dt_mx.strftime('%H:%M')} (CDMX)\n"
-                                        f"🏆 *Liga:* {evento['sport_title']}\n\n"
+                                        f"📅 *Día:* {DIAS_SEMANA.get(dt_mx.strftime('%A'), dt_mx.strftime('%A'))}, {dt_mx.strftime('%d/%m/%Y')}\n"
+                                        f"⏰ *Inicia:* {dt_mx.strftime('%H:%M')} (CDMX)\n\n"
                                         f"🎯 *Pick:* {nombre_pick}\n"
-                                        f"📊 *Mercado:* {m['key'].replace('h2h','Ganador').replace('totals','Goles/Puntos').replace('spreads','Hándicap').replace('btts','Ambos Anotan')}\n\n"
-                                        f"📈 *Momio:* {out['price']}\n"
-                                        f"🏛️ *Casa:* {casa}\n"
-                                        f"✅ *Ventaja:* +{round((ventaja-1)*100, 1)}%\n"
-                                        "─────────────────────\n"
-                                        f"🕒 *Detección:* {datetime.now(TZ_MEXICO).strftime('%H:%M:%S')}"
+                                        f"📈 *Momio:* {out['price']} ({b['title']})\n"
+                                        f"✅ *Ventaja:* +{round((ventaja-1)*100, 1)}%"
                                     )
                                 })
         except: continue
 
+    # Reporte en la consola de Render
+    print(f"--- Escaneo Terminado --- Créditos restantes: {creditos_restantes}")
+
     if oportunidades:
-        # Mandar el mejor pick del ciclo
         mejor = max(oportunidades, key=lambda x: x["ventaja"])
-        enviar_telegram_con_botones(mejor["msg"], mejor["id_unico"])
+        # (Aquí va tu función enviar_telegram_con_botones habitual)
         historial_enviados.append(mejor["id_unico"])
-        if len(historial_enviados) > 200: historial_enviados.pop(0)
 
 def main():
-    logging.info("Bot Master v7: Umbral 3% + Hoy/Mañana + Anti-Repetición.")
     while True:
         buscar_mejor_pick()
-        time.sleep(420) # 7 minutos entre escaneos
+        time.sleep(600)
 
 if __name__ == "__main__":
     main()
