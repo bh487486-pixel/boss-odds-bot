@@ -13,28 +13,31 @@ def enviar(mensaje):
 
 print("🔥 BOT ACTIVO 🔥")
 
-# Zona horaria México
 zona = pytz.timezone("America/Mexico_City")
-
-ultimo_minuto = None
 
 while True:
     ahora = datetime.now(zona)
-    minuto = ahora.minute
 
-    # Solo cada 5 minutos exactos
-    if minuto % 5 == 0 and minuto != ultimo_minuto:
-        hora = ahora.strftime("%H:%M:%S")
+    # ⏰ calcular segundos para el siguiente múltiplo de 5 minutos
+    minutos = ahora.minute
+    segundos = ahora.second
 
-        mensaje = f"""🔥 BOT FUNCIONANDO 🔥
+    minutos_para_siguiente = (5 - (minutos % 5)) % 5
+    if minutos_para_siguiente == 0 and segundos > 0:
+        minutos_para_siguiente = 5
+
+    tiempo_espera = (minutos_para_siguiente * 60) - segundos
+
+    time.sleep(tiempo_espera)
+
+    ahora = datetime.now(zona)
+    hora = ahora.strftime("%H:%M:%S")
+
+    mensaje = f"""🔥 BOT FUNCIONANDO 🔥
 
 Hora exacta: {hora}
 Mensaje cada 5 minutos ✅
 """
 
-        enviar(mensaje)
-        print("Enviado:", hora)
-
-        ultimo_minuto = minuto
-
-    time.sleep(1)
+    enviar(mensaje)
+    print("Enviado:", hora)
