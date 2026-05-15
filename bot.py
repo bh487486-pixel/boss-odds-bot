@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 import random
 
-print("BOT BOSS ODDS ACTIVO 🔥")
+print("🚀 BOT BOSS ODDS INICIADO")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -14,28 +14,29 @@ enviados = set()
 ultimo_update = 0
 cache_partidos = []
 
-# ⏱️ actualizar API cada 10 min
-TIEMPO_CACHE = 600  
+TIEMPO_CACHE = 600  # 10 minutos
 
 def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": mensaje
-    }
-    requests.post(url, data=data)
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": CHAT_ID,
+            "text": mensaje
+        }
+        requests.post(url, data=data)
+    except Exception as e:
+        print("Error Telegram:", e)
 
 def obtener_partidos():
     global ultimo_update, cache_partidos
 
     ahora = time.time()
 
-    # 🔥 usar cache para no gastar créditos
     if ahora - ultimo_update < TIEMPO_CACHE and cache_partidos:
-        print("Usando cache...")
+        print("🟡 Usando cache...")
         return cache_partidos
 
-    print("Consultando API...")
+    print("🔵 Consultando API...")
 
     sports = [
         "soccer_epl",
@@ -47,13 +48,13 @@ def obtener_partidos():
     partidos = []
 
     for sport in sports:
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h"
-
         try:
+            url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h"
             res = requests.get(url)
 
+            print(f"{sport} status:", res.status_code)
+
             if res.status_code != 200:
-                print("Error API:", sport)
                 continue
 
             data = res.json()
@@ -61,7 +62,7 @@ def obtener_partidos():
             for game in data:
                 fecha = datetime.fromisoformat(
                     game["commence_time"].replace("Z", "+00:00")
-                ).astimezone(timezone.utc)
+                )
 
                 partidos.append({
                     "home": game["home_team"],
@@ -69,13 +70,13 @@ def obtener_partidos():
                     "date": fecha
                 })
 
-        except:
-            continue
+        except Exception as e:
+            print("Error sport:", sport, e)
 
     cache_partidos = partidos
     ultimo_update = ahora
 
-    print("Partidos guardados:", len(partidos))
+    print("✅ Partidos encontrados:", len(partidos))
 
     return partidos
 
@@ -88,22 +89,23 @@ def generar_pick():
         "Hándicap -1.5"
     ]
 
-    pick = random.choice(tipos)
-    cuota = round(random.uniform(1.5, 3.0), 2)
-    stake = random.choice(["5/10", "6/10", "7/10"])
-
-    return pick, cuota, stake
+    return (
+        random.choice(tipos),
+        round(random.uniform(1.5, 3.0), 2),
+        random.choice(["5/10", "6/10", "7/10"])
+    )
 
 def revisar_partidos():
+    print("🔍 Revisando partidos...")
+
     partidos = obtener_partidos()
     ahora = datetime.now(timezone.utc)
-
-    print("Revisando partidos...")
 
     for match in partidos:
         try:
             fecha = match["date"]
 
+            # ignorar pasados
             if fecha <= ahora:
                 continue
 
@@ -111,9 +113,9 @@ def revisar_partidos():
 
             partido_id = f"{match['home']}-{match['away']}-{fecha}"
 
-            print(match["home"], "vs", match["away"], "| faltan:", int(minutos), "min")
+            print(match["home"], "vs", match["away"], "|", int(minutos), "min")
 
-            # 🔥 partidos en próximas 2 horas
+            # 🔥 ventana de 2 horas
             if 0 < minutos <= 120:
 
                 if partido_id in enviados:
@@ -137,13 +139,15 @@ Confía en el sistema 💰
                 enviar_telegram(mensaje)
                 enviados.add(partido_id)
 
-        except:
-            continue
+        except Exception as e:
+            print("Error match:", e)
 
 def main():
+    print("🟢 BOT CORRIENDO...")
+
     while True:
         revisar_partidos()
-        time.sleep(120)  # 🔥 cada 2 minutos (NO 1 min)
+        time.sleep(120)  # cada 2 minutos
 
 if __name__ == "__main__":
     main()
