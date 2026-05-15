@@ -2,7 +2,7 @@ import requests
 import time
 import os
 from datetime import datetime, timedelta, timezone
-
+print("VERSION NUEVA ACTIVADA 🚀")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
