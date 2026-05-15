@@ -2,42 +2,30 @@ import requests
 import time
 import os
 from datetime import datetime
-import pytz
+from zoneinfo import ZoneInfo  # viene con Python 3.9+
 
-TOKEN = os.getenv("TOKEN_BOT")
-CHAT_ID = os.getenv("ID_DE_CHAT")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-def enviar(mensaje):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": mensaje})
+def enviar(msg):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    r = requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    print("POST:", r.status_code, r.text[:100])
 
-print("🔥 BOT ACTIVO 🔥")
+print("🚀 BOT INICIADO")
 
-zona = pytz.timezone("America/Mexico_City")
+tz = ZoneInfo("America/Mexico_City")
 
 while True:
-    ahora = datetime.now(zona)
+    ahora = datetime.now(tz)
+    print("Loop:", ahora.strftime("%H:%M:%S"))
 
-    # ⏰ calcular segundos para el siguiente múltiplo de 5 minutos
-    minutos = ahora.minute
-    segundos = ahora.second
+    # enviar SOLO en 00,05,10,... y exactamente en segundo 00
+    if ahora.minute % 5 == 0 and ahora.second == 0:
+        hora = ahora.strftime("%H:%M:%S")
+        enviar(f"🔥 BOT FUNCIONANDO\n\nHora CDMX: {hora}")
+        # evita duplicar en el mismo minuto
+        time.sleep(1)
 
-    minutos_para_siguiente = (5 - (minutos % 5)) % 5
-    if minutos_para_siguiente == 0 and segundos > 0:
-        minutos_para_siguiente = 5
-
-    tiempo_espera = (minutos_para_siguiente * 60) - segundos
-
-    time.sleep(tiempo_espera)
-
-    ahora = datetime.now(zona)
-    hora = ahora.strftime("%H:%M:%S")
-
-    mensaje = f"""🔥 BOT FUNCIONANDO 🔥
-
-Hora exacta: {hora}
-Mensaje cada 5 minutos ✅
-"""
-
-    enviar(mensaje)
-    print("Enviado:", hora)
+    # revisar dos veces por segundo para no saltarse el segundo 00
+    time.sleep(0.5)
