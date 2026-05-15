@@ -16,79 +16,73 @@ LIGAS_TOP = [
     "soccer_italy_serie_a", "soccer_germany_bundesliga"
 ]
 
+# Mercados ampliados: Ganador, Totales, Hándicap y Ambos Anotan
+MARKETS = "h2h,totals,spreads,btts"
 API_URL = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
 UMBRAL_VALOR = 1.05 
 TZ_MEXICO = pytz.timezone("America/Mexico_City")
 
-# Días en español para el formato
 DIAS_SEMANA = {
     "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
     "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo"
 }
 
-partidos_enviados_hoy = set()
+# --- MEMORIA ANTI-REPETICIÓN ---
+historial_enviados = []
 
-def enviar_telegram_con_botones(mensaje, id_evento):
+def enviar_telegram_con_botones(mensaje, id_unico):
     if not TELEGRAM_TOKEN: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
     keyboard = {
         "inline_keyboard": [
-            [
-                {"text": "✅ Ganada", "callback_data": f"win_{id_evento}"},
-                {"text": "❌ Perdida", "callback_data": f"loss_{id_evento}"}
-            ],
-            [{"text": "📊 Marcador en Vivo", "url": "https://www.google.com/search?q=resultados+deportivos+hoy"}]
+            [{"text": "✅ Ganada", "callback_data": f"w_{id_unico}"}, {"text": "❌ Perdida", "callback_data": f"l_{id_unico}"}],
+            [{"text": "📊 Marcador", "url": "https://www.google.com/search?q=resultados+deportivos"}]
         ]
     }
-    
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": mensaje,
-        "parse_mode": "Markdown",
-        "reply_markup": keyboard
-    }
-    
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown", "reply_markup": keyboard}
     try:
         requests.post(url, json=payload, timeout=10)
     except: pass
 
 def buscar_mejor_pick():
-    global partidos_enviados_hoy
+    global historial_enviados
     oportunidades = []
 
     for liga in LIGAS_TOP:
         url = API_URL.format(sport=liga)
-        params = {"apiKey": ODDS_API_KEY, "regions": "us,eu", "markets": "h2h,totals", "oddsFormat": "decimal"}
+        params = {"apiKey": ODDS_API_KEY, "regions": "us,eu", "markets": MARKETS, "oddsFormat": "decimal"}
         
         try:
             res = requests.get(url, params=params, timeout=12)
             if res.status_code != 200: continue
             
             for evento in res.json():
-                id_evento = evento["id"]
-                if id_evento in partidos_enviados_hoy: continue
-
+                # --- FILTRO DE TIEMPO (PRÓXIMAS 36H) ---
                 dt_utc = datetime.strptime(evento["commence_time"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
-                ahora_utc = datetime.now(pytz.UTC)
-                
-                # Filtro: Solo hoy y mañana (próximas 36 horas)
-                if dt_utc < (ahora_utc + timedelta(minutes=10)) or dt_utc > (ahora_utc + timedelta(hours=36)):
+                if dt_utc < (datetime.now(pytz.UTC) + timedelta(minutes=10)) or dt_utc > (datetime.now(pytz.UTC) + timedelta(hours=36)):
                     continue
                 
-                # Conversión a zona horaria de México
                 dt_mx = dt_utc.astimezone(TZ_MEXICO)
-                dia_nombre = DIAS_SEMANA.get(dt_mx.strftime("%A"), dt_mx.strftime("%A"))
-                fecha_formateada = dt_mx.strftime("%d de %B") # Ejemplo: 15 de Mayo
-                hora_inicio = dt_mx.strftime("%H:%M")
-
+                dia_full = f"{DIAS_SEMANA.get(dt_mx.strftime('%A'), dt_mx.strftime('%A'))}, {dt_mx.strftime('%d/%m/%Y')}"
+                
                 bookmakers = evento.get("bookmakers", [])
-                if len(bookmakers) < 3: continue
-
                 for b in bookmakers:
                     casa = b["title"]
                     for m in b["markets"]:
                         for out in m["outcomes"]:
+                            # --- DETALLE DE MERCADO ---
+                            # Si es Over/Under, agregar el punto (ej: Over 2.5)
+                            nombre_pick = out["name"]
+                            if "point" in out:
+                                signo = "+" if out["point"] > 0 and m["key"] == "spreads" else ""
+                                nombre_pick = f"{out['name']} {signo}{out['point']}"
+                            
+                            # ID único que incluye evento + pick + línea para evitar repetición exacta
+                            id_unico = f"{evento['id']}_{m['key']}_{nombre_pick}"
+                            
+                            if id_unico in historial_enviados: continue
+
+                            # Comparar con el promedio
                             precios = [o["price"] for bk in bookmakers for mk in bk["markets"] 
                                       if mk["key"] == m["key"] for o in mk["outcomes"] if o["name"] == out["name"]]
                             
@@ -98,18 +92,19 @@ def buscar_mejor_pick():
                             if ventaja >= UMBRAL_VALOR:
                                 oportunidades.append({
                                     "ventaja": ventaja,
-                                    "id": id_evento,
+                                    "id_unico": id_unico,
                                     "msg": (
-                                        "💎 *PICK DE VALOR DETECTADO* 💎\n"
+                                        "💎 *PICK DE ALTO VALOR* 💎\n"
                                         "─────────────────────\n"
                                         f"🏟️ *Evento:* {evento['home_team']} vs {evento['away_team']}\n"
-                                        f"📅 *Día:* {dia_nombre}, {dt_mx.strftime('%d/%m/%Y')}\n"
-                                        f"⏰ *Inicia:* {hora_inicio} (CDMX)\n"
+                                        f"📅 *Día:* {dia_full}\n"
+                                        f"⏰ *Inicia:* {dt_mx.strftime('%H:%M')} (CDMX)\n"
                                         f"🏆 *Liga:* {evento['sport_title']}\n\n"
-                                        f"🎯 *Apuesta:* {out['name']} ({m['key']})\n"
+                                        f"🎯 *Pick:* {nombre_pick}\n"
+                                        f"📊 *Mercado:* {m['key'].replace('h2h','Ganador').replace('totals','Goles/Puntos').replace('spreads','Hándicap').replace('btts','Ambos Anotan')}\n\n"
                                         f"📈 *Momio:* {out['price']}\n"
                                         f"🏛️ *Casa:* {casa}\n"
-                                        f"📊 *Ventaja:* +{round((ventaja-1)*100, 1)}%\n"
+                                        f"✅ *Ventaja:* +{round((ventaja-1)*100, 1)}%\n"
                                         "─────────────────────\n"
                                         f"🕒 *Detección:* {datetime.now(TZ_MEXICO).strftime('%H:%M:%S')}"
                                     )
@@ -118,14 +113,16 @@ def buscar_mejor_pick():
 
     if oportunidades:
         mejor = max(oportunidades, key=lambda x: x["ventaja"])
-        enviar_telegram_con_botones(mejor["msg"], mejor["id"])
-        partidos_enviados_hoy.add(mejor["id"])
+        enviar_telegram_con_botones(mejor["msg"], mejor["id_unico"])
+        historial_enviados.append(mejor["id_unico"])
+        # Mantener historial corto para no saturar memoria
+        if len(historial_enviados) > 200: historial_enviados.pop(0)
 
 def main():
-    logging.info("Bot Master v5: Formato de Fecha y Día añadido.")
+    logging.info("Bot Master v6: Multimercado + Anti-Repetición Pro.")
     while True:
         buscar_mejor_pick()
-        time.sleep(600)
+        time.sleep(480) # 8 minutos entre escaneos
 
 if __name__ == "__main__":
     main()
