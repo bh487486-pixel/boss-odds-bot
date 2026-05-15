@@ -2,7 +2,7 @@ import os
 import time
 import requests
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def log(msg):
     print(msg)
@@ -50,11 +50,12 @@ def buscar_picks(api_key, bot_token, chat_id):
                 if len(bookmakers) < 5:
                     continue
                 
-                # Formatear el horario
+                # ---- CONVERSIÓN DE UTC A HORA DE MÉXICO (Ajuste de -6 horas) ----
                 try:
-                    dt = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
-                    fecha_hora_partido = dt.strftime("%Y-%m-%d a las %H:%M UTC")
-                except:
+                    dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
+                    dt_mexico = dt_utc - timedelta(hours=6) # Ajusta al huso horario de CDMX
+                    fecha_hora_partido = dt_mexico.strftime("%Y-%m-%d a las %H:%M Horario MX 🇲🇽")
+                except Exception as e:
                     fecha_hora_partido = commence_time_raw
                 
                 odds_home = []
@@ -81,7 +82,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 mejor_casino_home, mejor_precio_home = max(odds_home, key=lambda x: x[1])
                 ventaja_home = (mejor_precio_home / avg_home) - 1
                 
-                if ventaja_home >= 0.04: # Filtro del 4%
+                if ventaja_home >= 0.04:
                     todos_los_picks.append({
                         "id_unico": f"{partido_id}_home_{mejor_precio_home}",
                         "partido": nombre_partido,
@@ -114,17 +115,15 @@ def buscar_picks(api_key, bot_token, chat_id):
 
     # ---- FILTRO: HASTA 6 PICKS DE PARTIDOS DIFERENTES ----
     if todos_los_picks:
-        # Ordenamos de la mayor ventaja a la menor
         todos_los_picks.sort(key=lambda x: x["ventaja"], reverse=True)
         
         picks_enviados_hoy = 0
         partidos_ya_usados = set()
         
         for candidato in todos_los_picks:
-            if picks_enviados_hoy >= 6: # Aquí está el límite máximo de 6
+            if picks_enviados_hoy >= 6:
                 break
                 
-            # Si el pick no se ha mandado antes Y no hemos mandado este partido en este ciclo
             if candidato["id_unico"] not in ENVIADOS and candidato["partido"] not in partidos_ya_usados:
                 msg = (
                     f"🔥 *¡ALERTA DE VALOR!* 🔥\n\n"
@@ -139,19 +138,19 @@ def buscar_picks(api_key, bot_token, chat_id):
                 send_telegram(bot_token, chat_id, msg)
                 
                 ENVIADOS[candidato["id_unico"]] = True
-                partidos_ya_usados.add(candidato["partido"]) # Bloqueamos el partido para este ciclo
+                partidos_ya_usados.add(candidato["partido"])
                 picks_enviados_hoy += 1
                 
         if picks_enviados_hoy == 0:
             log("💤 Las mejores oportunidades ya fueron notificadas. Esperando nuevos movimientos.")
         else:
-            log(f"✅ Se enviaron {picks_enviados_hoy} picks de diferentes partidos.")
+            log(f"✅ Se enviaron {picks_enviados_hoy} picks corregidos con hora local.")
     else:
-        log("📉 No hay oportunidades que superen el filtro del 4% en este momento.")
+        log("📉 No hay oportunidades que superen el filtro en este momento.")
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MULTI-PICK (MAX 6 JUEGOS DISTINTOS) ACTIVADO")
+    log("🚀 BOT MULTI-PICK CORREGIDO (HORA MX) ACTIVADO")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
