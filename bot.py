@@ -1,111 +1,97 @@
 import requests
 import time
 import os
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime
+import pytz
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-API_KEY = os.getenv("API_KEY")
+# 🔐 Variables de entorno
+TOKEN = os.getenv("TOKEN_BOT")
+CHAT_ID = os.getenv("ID_DE_CHAT")
+API_KEY = os.getenv("API_FOOTBALL_KEY")
 
-tz = ZoneInfo("America/Mexico_City")
+# 🌎 Zona horaria México
+zona_mx = pytz.timezone("America/Mexico_City")
 
-def enviar_mensaje(texto):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+# 🔥 Función para enviar mensaje
+def enviar(msg):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     requests.post(url, data={
         "chat_id": CHAT_ID,
-        "text": texto
+        "text": msg
     })
 
-def obtener_partidos():
-    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
-
-    fechas = [
-        datetime.now(tz).strftime("%Y-%m-%d"),
-        (datetime.now(tz) + timedelta(days=1)).strftime("%Y-%m-%d")
-    ]
-
-    headers = {
-        "X-RapidAPI-Key": API_KEY,
-        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
-    }
-
-    partidos = []
-
-    for fecha in fechas:
-        try:
-            res = requests.get(url, headers=headers, params={"date": fecha})
-            data = res.json()
-            partidos.extend(data.get("response", []))
-        except:
-            continue
-
-    return partidos
-
-def elegir_mejor_partido(partidos):
-    ligas_buenas = [
-        "Premier League",
-        "La Liga",
-        "Serie A",
-        "Bundesliga",
-        "Ligue 1",
-        "Liga MX",
-        "MLS"
-    ]
-
-    for partido in partidos:
-        liga = partido["league"]["name"]
-        estado = partido["fixture"]["status"]["short"]
-
-        if liga in ligas_buenas and estado == "NS":
-            return partido
-
-    return None
-
-def generar_pick(partido):
-    if not partido:
-        return None  # 🔥 CLAVE: ya no manda texto basura
-
-    home = partido["teams"]["home"]["name"]
-    away = partido["teams"]["away"]["name"]
-    liga = partido["league"]["name"]
-
-    hora = partido["fixture"]["date"]
-    hora_local = datetime.fromisoformat(hora.replace("Z", "+00:00")).astimezone(tz)
-
-    return f"""🔥 PICKS AUTOMÁTICOS 🔥
-─────────────────────
-🎯 Evento: {home} vs {away}
-🏆 Liga: {liga}
-🕒 Hora: {hora_local.strftime("%H:%M")}
-
-➡️ Pick: Over 2.5 goles
-➡️ Stake: 6/10
-
-🤖 Boss Odds Bot"""
-
-print("🤖 BOT PRO CORRIENDO...")
+print("🔥 BOT INICIADO 🔥")
 
 ultimo_minuto = None
+ultimo_partido_enviado = None
 
 while True:
-    ahora = datetime.now(tz)
+    try:
+        ahora = datetime.now(zona_mx)
+        minuto = ahora.minute
 
-    if ahora.minute % 5 == 0:
-        if ultimo_minuto != ahora.minute:
+        print(f"⏳ Revisando... {ahora.strftime('%H:%M:%S')}")
 
-            print(f"⏳ Revisando partidos... {ahora.strftime('%H:%M:%S')}")
+        # Ejecutar cada 5 minutos exactos
+        if minuto % 5 == 0 and minuto != ultimo_minuto:
 
-            partidos = obtener_partidos()
-            partido = elegir_mejor_partido(partidos)
-            mensaje = generar_pick(partido)
+            ultimo_minuto = minuto
 
-            if mensaje:
-                enviar_mensaje(mensaje)
-                print("✅ PICK ENVIADO")
+            hora_actual = ahora.strftime("%H:%M:%S")
+
+            # 🔎 Consultar partidos de hoy
+            fecha = ahora.strftime("%Y-%m-%d")
+
+            url = "https://v3.football.api-sports.io/fixtures"
+
+            headers = {
+                "x-apisports-key": API_KEY
+            }
+
+            params = {
+                "date": fecha
+            }
+
+            response = requests.get(url, headers=headers, params=params)
+            data = response.json()
+
+            if "response" not in data or len(data["response"]) == 0:
+                enviar(f"❌ No hay partidos hoy ({hora_actual})")
             else:
-                print("❌ No hay picks buenos (NO se envía nada)")
+                enviado = False
 
-            ultimo_minuto = ahora.minute
+                for partido in data["response"]:
+                    liga = partido["league"]["name"]
+                    equipo1 = partido["teams"]["home"]["name"]
+                    equipo2 = partido["teams"]["away"]["name"]
 
-    time.sleep(1)
+                    id_partido = partido["fixture"]["id"]
+
+                    # Evitar repetir el mismo pick
+                    if id_partido == ultimo_partido_enviado:
+                        continue
+
+                    # 🎯 FILTRO (puedes mejorarlo luego)
+                    if "Friendly" not in liga:
+
+                        mensaje = f"""🔥 PICK DETECTADO 🔥
+
+{equipo1} vs {equipo2}
+Liga: {liga}
+
+Hora CDMX: {hora_actual}
+"""
+
+                        enviar(mensaje)
+                        ultimo_partido_enviado = id_partido
+                        enviado = True
+                        break
+
+                if not enviado:
+                    enviar(f"❌ No hay partidos buenos disponibles ({hora_actual})")
+
+        time.sleep(30)
+
+    except Exception as e:
+        print("❌ ERROR:", e)
+        time.sleep(60)
