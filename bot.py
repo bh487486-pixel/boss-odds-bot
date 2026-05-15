@@ -14,8 +14,7 @@ def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {
         "chat_id": CHAT_ID,
-        "text": mensaje,
-        "parse_mode": "Markdown"
+        "text": mensaje
     }
     requests.post(url, data=data)
 
@@ -30,7 +29,7 @@ def obtener_partidos():
     partidos = []
 
     for sport in sports:
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h,spreads,totals,corner_totals"
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h,spreads,totals"
         res = requests.get(url)
 
         if res.status_code != 200:
@@ -49,7 +48,6 @@ def obtener_partidos():
                     "date": fecha_local,
                     "bookmakers": game.get("bookmakers", [])
                 })
-
             except:
                 continue
 
@@ -63,53 +61,18 @@ def detectar_valor(match):
 
         markets = bookmakers[0]["markets"]
 
-        mejor = None
-        mejor_score = 0
-
         for market in markets:
-            if market["key"] not in ["h2h", "spreads", "totals", "corner_totals"]:
-                continue
-
             for o in market["outcomes"]:
                 cuota = o["price"]
 
-                if cuota < 1.60 or cuota > 4.00:
-                    continue
-
-                prob = 1 / cuota
-                prob_estimada = prob * 1.10
-                value = (prob_estimada * cuota) - 1
-
-                if value > mejor_score:
-                    mejor_score = value
-                    mejor = {
+                if 1.60 <= cuota <= 3.50:
+                    return {
                         "tipo": market["key"],
                         "pick": o["name"],
-                        "cuota": cuota,
-                        "linea": o.get("point", "")
+                        "cuota": cuota
                     }
 
-        if not mejor:
-            return None
-
-        if mejor["tipo"] == "h2h":
-            tipo_txt = "Ganador"
-        elif mejor["tipo"] == "spreads":
-            tipo_txt = "Hándicap"
-        elif mejor["tipo"] == "totals":
-            tipo_txt = "Over/Under"
-        elif mejor["tipo"] == "corner_totals":
-            tipo_txt = "Córners"
-        else:
-            tipo_txt = mejor["tipo"]
-
-        return {
-            "tipo": tipo_txt,
-            "pick": mejor["pick"],
-            "cuota": mejor["cuota"],
-            "linea": mejor["linea"]
-        }
-
+        return None
     except:
         return None
 
@@ -117,19 +80,16 @@ def generar_mensaje(match, pick):
     fecha = match["date"].strftime("%d/%m/%Y")
     hora = match["date"].strftime("%I:%M %p")
 
-    linea = f" ({pick['linea']})" if pick["linea"] else ""
-
     return f"""🔥 PICKS VIP 🔥
-━━━━━━━━━━━━━━
-📅 Fecha: {fecha}
-⏰ Hora: {hora}
 
-🎯 Pick:
-➡️ Evento: {match['home']} vs {match['away']}
-➡️ Tipo: {pick['tipo']}
-➡️ Pick: {pick['pick']}{linea}
+📅 {fecha}
+⏰ {hora}
+
+{match['home']} vs {match['away']}
+
+➡️ {pick['tipo']}
+➡️ {pick['pick']}
 ➡️ Cuota: {pick['cuota']}
-➡️ Stake: 7/10
 
 Confía en el sistema 💰
 """
@@ -137,33 +97,34 @@ Confía en el sistema 💰
 def revisar_partidos():
     partidos = obtener_partidos()
     ahora = datetime.now()
-    hoy = ahora.date()
+
+    print(f"Partidos encontrados: {len(partidos)}")
 
     for match in partidos:
         try:
             fecha_partido = match["date"]
 
-            if fecha_partido.date() != hoy:
-                continue
-
+            # ❌ ignorar pasados
             if fecha_partido <= ahora:
                 continue
 
             diferencia = fecha_partido - ahora
             partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
 
-            # 🔔 DETECTA PARTIDO (10 min a 2 horas antes)
-            if timedelta(minutes=10) <= diferencia <= timedelta(hours=2):
+            print(match["home"], "vs", match["away"], fecha_partido)
+
+            # 🔔 DETECTAR (hasta 3 horas antes)
+            if timedelta(minutes=5) <= diferencia <= timedelta(hours=3):
                 if partido_id not in avisados:
                     enviar_telegram(
                         f"👀 Partido detectado\n\n"
                         f"{match['home']} vs {match['away']}\n"
-                        f"⏰ Empieza en {int(diferencia.total_seconds()//60)} min"
+                        f"Empieza en {int(diferencia.total_seconds()/60)} min"
                     )
                     avisados.add(partido_id)
 
-            # 🔥 ENVÍA PICK (0–3 min antes)
-            if 0 <= diferencia.total_seconds() <= 180:
+            # 🔥 PICK (0–5 min antes)
+            if 0 <= diferencia.total_seconds() <= 300:
                 if partido_id not in enviados:
 
                     pick = detectar_valor(match)
