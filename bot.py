@@ -2,7 +2,9 @@ import requests
 import time
 import os
 from datetime import datetime, timedelta, timezone
+
 print("VERSION NUEVA ACTIVADA 🚀")
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
@@ -30,7 +32,7 @@ def obtener_partidos():
 
     for sport in sports:
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={API_KEY}&regions=us&markets=h2h,spreads,totals"
-        
+
         try:
             res = requests.get(url)
 
@@ -42,7 +44,6 @@ def obtener_partidos():
 
             for game in data:
                 try:
-                    # 🔥 TODO en UTC (esto arregla el error)
                     fecha_partido = datetime.fromisoformat(
                         game["commence_time"].replace("Z", "+00:00")
                     ).astimezone(timezone.utc)
@@ -105,7 +106,7 @@ Confía en el sistema 💰
 
 def revisar_partidos():
     partidos = obtener_partidos()
-    ahora = datetime.now(timezone.utc)  # 🔥 MISMO FORMATO QUE LOS PARTIDOS
+    ahora = datetime.now(timezone.utc)
 
     print(f"TOTAL partidos encontrados: {len(partidos)}")
 
@@ -113,27 +114,29 @@ def revisar_partidos():
         try:
             fecha_partido = match["date"]
 
-            # 🔥 YA NO FALLA
+            # ignorar partidos ya iniciados
             if fecha_partido <= ahora:
                 continue
 
             diferencia = fecha_partido - ahora
+            minutos = int(diferencia.total_seconds() / 60)
+
             partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
 
-            print(match["home"], "vs", match["away"], fecha_partido)
+            print(match["home"], "vs", match["away"], "| faltan:", minutos, "min")
 
-            # 👀 DETECTAR PARTIDO
-            if timedelta(minutes=5) <= diferencia <= timedelta(hours=6):
+            # 👀 AVISO (hasta 3 horas antes)
+            if timedelta(minutes=10) <= diferencia <= timedelta(hours=3):
                 if partido_id not in avisados:
                     enviar_telegram(
                         f"👀 Partido detectado\n\n"
                         f"{match['home']} vs {match['away']}\n"
-                        f"Empieza en {int(diferencia.total_seconds()/60)} min"
+                        f"Empieza en {minutos} min"
                     )
                     avisados.add(partido_id)
 
-            # 🔥 ENVIAR PICK
-            if 0 <= diferencia.total_seconds() <= 600:
+            # 🔥 PICK (30 minutos antes)
+            if 0 <= diferencia.total_seconds() <= 1800:
                 if partido_id not in enviados:
 
                     pick = detectar_valor(match)
