@@ -6,37 +6,33 @@ from datetime import datetime
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-enviado_hoy = False
-
 def enviar(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
-def generar_pick():
-    return f"""🔥 PICKS VIP 🔥
+print("🔥 BOT ACTIVO 🔥")
 
-📅 {datetime.now().strftime("%d/%m/%Y")}
-⏰ {datetime.now().strftime("%I:%M %p")}
-
-➡️ Evento: Partido del día
-➡️ Tipo: Over 2.5 goles
-➡️ Cuota: 1.85
-➡️ Stake: 7/10
-
-Confía en el sistema 💰
-"""
+ultimo_minuto = None
 
 while True:
-    hora = datetime.now().strftime("%H:%M")
+    ahora = datetime.now()
+    minuto = ahora.minute
 
-    # ⏰ ENVÍA UNA VEZ AL DÍA (ejemplo 7:00 PM)
-    if hora == "19:00" and not enviado_hoy:
-        enviar(generar_pick())
-        print("✅ PICK ENVIADO")
-        enviado_hoy = True
+    # Solo ejecutar en múltiplos de 5
+    if minuto % 5 == 0:
+        # Evitar que mande muchas veces en el mismo minuto
+        if ultimo_minuto != minuto:
+            hora = ahora.strftime("%H:%M:%S")
 
-    # 🔁 Reset diario
-    if hora == "00:00":
-        enviado_hoy = False
+            mensaje = f"""🔥 BOT FUNCIONANDO 🔥
 
-    time.sleep(30)
+Hora exacta: {hora}
+Mensaje cada 5 minutos ✔️
+"""
+
+            enviar(mensaje)
+            print("Mensaje enviado:", hora)
+
+            ultimo_minuto = minuto
+
+    time.sleep(5)
