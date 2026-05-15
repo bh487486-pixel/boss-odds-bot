@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import sys
+from datetime import datetime
 
 def log(msg):
     print(msg)
@@ -13,41 +14,52 @@ def send_telegram(token, chat_id, text):
     try:
         res = requests.post(url, json=payload, timeout=10)
         if res.status_code == 200:
-            log("📱 [Telegram] ¡Mensaje de alerta enviado con éxito!")
+            log("📱 [Telegram] ¡Alerta enviada con éxito!")
         else:
-            log(f"❌ [Telegram] Error al enviar: {res.status_code} - {res.text}")
+            log(f"❌ [Telegram] Error al enviar: {res.status_code}")
     except Exception as e:
         log(f"❌ [Telegram] Error de conexión: {e}")
 
-def buscar_apuestas(api_key, bot_token, chat_id):
-    # Monitoreamos MLB y Liga MX (para cuando haya partidos)
+# Historial para no repetir picks ya enviados
+ENVIADOS = {}
+
+def buscar_picks(api_key, bot_token, chat_id):
+    global ENVIADOS
     sports = ["baseball_mlb", "soccer_mexico_ligamx"]
     
+    todos_los_picks = []
+    
     for sport in sports:
-        log(f"🔍 Escaneando cuotas para: {sport}...")
+        log(f"🔍 Analizando mercado: {sport}...")
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h"
         
         try:
             res = requests.get(url, timeout=15)
             if res.status_code != 200:
-                log(f"⚠️ API no respondió bien para {sport}: Código {res.status_code}")
                 continue
             
             partidos = res.json()
             
             for partido in partidos:
+                partido_id = partido.get("id")
                 home_team = partido.get("home_team")
                 away_team = partido.get("away_team")
+                commence_time_raw = partido.get("commence_time")
                 bookmakers = partido.get("bookmakers", [])
                 
-                # Necesitamos al menos 3 casinos para poder sacar un promedio real
-                if len(bookmakers) < 3:
+                if len(bookmakers) < 5:
                     continue
+                
+                # Formatear el horario
+                try:
+                    dt = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
+                    fecha_hora_partido = dt.strftime("%Y-%m-%d a las %H:%M UTC")
+                except:
+                    fecha_hora_partido = commence_time_raw
                 
                 odds_home = []
                 odds_away = []
                 
-                # Extraemos los momios de cada casino
                 for bookie in bookmakers:
                     for market in bookie.get("markets", []):
                         if market.get("key") == "h2h":
@@ -60,47 +72,86 @@ def buscar_apuestas(api_key, bot_token, chat_id):
                 if not odds_home or not odds_away:
                     continue
                 
-                # Calculamos el promedio del mercado
                 avg_home = sum([o[1] for o in odds_home]) / len(odds_home)
                 avg_away = sum([o[1] for o in odds_away]) / len(odds_away)
                 
-                # REGLA DEL 3%: Si un casino ofrece un momio 3% más alto que el promedio, se manda
-                for casino, precio in odds_home:
-                    ventaja = (precio / avg_home) - 1
-                    if ventaja >= 0.03: 
-                        msg = (
-                            f"🚨 *¡PICK DE VALOR ENCONTRADO!* 🚨\n\n"
-                            f"⚾️ *Deporte:* {sport.replace('_', ' ').upper()}\n"
-                            f"⚔️ *Partido:* {away_team} vs {home_team}\n"
-                            f"🎯 *Apuesta:* Gana {home_team} (Local)\n"
-                            f"🏛 *Casino:* {casino}\n"
-                            f"📈 *Momio Ofrecido:* {precio}\n"
-                            f"📊 *Promedio Mercado:* {avg_home:.2f}\n"
-                            f"💰 *Ventaja Real:* {ventaja*100:.1f}%"
-                        )
-                        send_telegram(bot_token, chat_id, msg)
-                        
-                for casino, precio in odds_away:
-                    ventaja = (precio / avg_away) - 1
-                    if ventaja >= 0.03:
-                        msg = (
-                            f"🚨 *¡PICK DE VALOR ENCONTRADO!* 🚨\n\n"
-                            f"⚾️ *Deporte:* {sport.replace('_', ' ').upper()}\n"
-                            f"⚔️ *Partido:* {away_team} vs {home_team}\n"
-                            f"🎯 *Apuesta:* Gana {away_team} (Visitante)\n"
-                            f"🏛 *Casino:* {casino}\n"
-                            f"📈 *Momio Ofrecido:* {precio}\n"
-                            f"📊 *Promedio Mercado:* {avg_away:.2f}\n"
-                            f"💰 *Ventaja Real:* {ventaja*100:.1f}%"
-                        )
-                        send_telegram(bot_token, chat_id, msg)
+                nombre_partido = f"{away_team} vs {home_team}"
+                
+                # Evaluar Local
+                mejor_casino_home, mejor_precio_home = max(odds_home, key=lambda x: x[1])
+                ventaja_home = (mejor_precio_home / avg_home) - 1
+                
+                if ventaja_home >= 0.04: # Filtro del 4%
+                    todos_los_picks.append({
+                        "id_unico": f"{partido_id}_home_{mejor_precio_home}",
+                        "partido": nombre_partido,
+                        "apuesta": f"Gana {home_team} (Local)",
+                        "casino": mejor_casino_home,
+                        "momio": mejor_precio_home,
+                        "promedio": avg_home,
+                        "ventaja": ventaja_home,
+                        "horario": fecha_hora_partido
+                    })
+                
+                # Evaluar Visitante
+                mejor_casino_away, mejor_precio_away = max(odds_away, key=lambda x: x[1])
+                ventaja_away = (mejor_precio_away / avg_away) - 1
+                
+                if ventaja_away >= 0.04:
+                    todos_los_picks.append({
+                        "id_unico": f"{partido_id}_away_{mejor_precio_away}",
+                        "partido": nombre_partido,
+                        "apuesta": f"Gana {away_team} (Visitante)",
+                        "casino": mejor_casino_away,
+                        "momio": mejor_precio_away,
+                        "promedio": avg_away,
+                        "ventaja": ventaja_away,
+                        "horario": fecha_hora_partido
+                    })
                         
         except Exception as e:
-            log(f"❌ Error procesando datos de {sport}: {e}")
+            log(f"❌ Error escaneando: {e}")
+
+    # ---- FILTRO: HASTA 6 PICKS DE PARTIDOS DIFERENTES ----
+    if todos_los_picks:
+        # Ordenamos de la mayor ventaja a la menor
+        todos_los_picks.sort(key=lambda x: x["ventaja"], reverse=True)
+        
+        picks_enviados_hoy = 0
+        partidos_ya_usados = set()
+        
+        for candidato in todos_los_picks:
+            if picks_enviados_hoy >= 6: # Aquí está el límite máximo de 6
+                break
+                
+            # Si el pick no se ha mandado antes Y no hemos mandado este partido en este ciclo
+            if candidato["id_unico"] not in ENVIADOS and candidato["partido"] not in partidos_ya_usados:
+                msg = (
+                    f"🔥 *¡ALERTA DE VALOR!* 🔥\n\n"
+                    f"📅 *Horario:* {candidato['horario']}\n"
+                    f"⚔️ *Partido:* {candidato['partido']}\n"
+                    f"🎯 *Apuesta Recomendada:* {candidato['apuesta']}\n"
+                    f"🏛 *Casino:* {candidato['casino']}\n\n"
+                    f"📈 *Momio Encontrado:* {candidato['momio']}\n"
+                    f"📊 *Promedio General:* {candidato['promedio']:.2f}\n"
+                    f"💰 *Ventaja sobre Mercado:* {candidato['ventaja']*100:.1f}%"
+                )
+                send_telegram(bot_token, chat_id, msg)
+                
+                ENVIADOS[candidato["id_unico"]] = True
+                partidos_ya_usados.add(candidato["partido"]) # Bloqueamos el partido para este ciclo
+                picks_enviados_hoy += 1
+                
+        if picks_enviados_hoy == 0:
+            log("💤 Las mejores oportunidades ya fueron notificadas. Esperando nuevos movimientos.")
+        else:
+            log(f"✅ Se enviaron {picks_enviados_hoy} picks de diferentes partidos.")
+    else:
+        log("📉 No hay oportunidades que superen el filtro del 4% en este momento.")
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT ACTIVADO - MODO FRANCOTIRADOR")
+    log("🚀 BOT MULTI-PICK (MAX 6 JUEGOS DISTINTOS) ACTIVADO")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -108,26 +159,12 @@ def main():
     chat_id = os.getenv("CHAT_ID")
     
     if not api_key or not bot_token or not chat_id:
-        log("❌ ERROR CRÍTICO: Faltan variables de entorno en Render.")
+        log("❌ ERROR CRÍTICO: Variables de entorno ausentes.")
         return
 
     while True:
-        try:
-            # Revisamos rápido los créditos consumidos
-            url = f"https://api.the-odds-api.com/v4/sports/?apiKey={api_key}"
-            res = requests.get(url, timeout=15)
-            if res.status_code == 200:
-                creditos = res.headers.get('x-requests-remaining')
-                log(f"📡 API Conectada. Créditos restantes: {creditos}")
-                
-                # Ejecutamos el buscador real
-                buscar_apuestas(api_key, bot_token, chat_id)
-            else:
-                log(f"⚠️ Error de conexión con API: {res.status_code}")
-        except Exception as e:
-            log(f"❌ Error en ciclo principal: {e}")
-            
-        log("😴 Escaneo terminado. Pausa de 5 minutos...")
+        buscar_picks(api_key, bot_token, chat_id)
+        log("😴 Esperando 5 minutos para el siguiente escaneo...")
         time.sleep(300)
 
 if __name__ == "__main__":
