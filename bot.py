@@ -33,6 +33,7 @@ def obtener_partidos():
         res = requests.get(url)
 
         if res.status_code != 200:
+            print(f"Error API {sport}")
             continue
 
         data = res.json()
@@ -56,6 +57,7 @@ def obtener_partidos():
 def detectar_valor(match):
     try:
         bookmakers = match["bookmakers"]
+
         if not bookmakers:
             return None
 
@@ -65,7 +67,8 @@ def detectar_valor(match):
             for o in market["outcomes"]:
                 cuota = o["price"]
 
-                if 1.60 <= cuota <= 3.50:
+                # 🔥 MENOS ESTRICTO
+                if 1.40 <= cuota <= 4.50:
                     return {
                         "tipo": market["key"],
                         "pick": o["name"],
@@ -73,6 +76,7 @@ def detectar_valor(match):
                     }
 
         return None
+
     except:
         return None
 
@@ -104,7 +108,6 @@ def revisar_partidos():
         try:
             fecha_partido = match["date"]
 
-            # ❌ ignorar pasados
             if fecha_partido <= ahora:
                 continue
 
@@ -113,8 +116,8 @@ def revisar_partidos():
 
             print(match["home"], "vs", match["away"], fecha_partido)
 
-            # 🔔 DETECTAR (hasta 3 horas antes)
-            if timedelta(minutes=5) <= diferencia <= timedelta(hours=3):
+            # 🔔 DETECTA (5 min a 6 horas antes)
+            if timedelta(minutes=5) <= diferencia <= timedelta(hours=6):
                 if partido_id not in avisados:
                     enviar_telegram(
                         f"👀 Partido detectado\n\n"
@@ -123,8 +126,8 @@ def revisar_partidos():
                     )
                     avisados.add(partido_id)
 
-            # 🔥 PICK (0–5 min antes)
-            if 0 <= diferencia.total_seconds() <= 300:
+            # 🔥 PICK (0–10 min antes)
+            if 0 <= diferencia.total_seconds() <= 600:
                 if partido_id not in enviados:
 
                     pick = detectar_valor(match)
