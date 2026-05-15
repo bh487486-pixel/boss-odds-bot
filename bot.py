@@ -4,7 +4,6 @@ import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-# VARIABLES
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("API_KEY")
@@ -34,10 +33,8 @@ def obtener_partidos():
     partidos = []
 
     for fecha in fechas:
-        params = {"date": fecha}
-
         try:
-            res = requests.get(url, headers=headers, params=params)
+            res = requests.get(url, headers=headers, params={"date": fecha})
             data = res.json()
             partidos.extend(data.get("response", []))
         except:
@@ -56,24 +53,18 @@ def elegir_mejor_partido(partidos):
         "MLS"
     ]
 
-    mejor_partido = None
-
     for partido in partidos:
         liga = partido["league"]["name"]
+        estado = partido["fixture"]["status"]["short"]
 
-        if liga in ligas_buenas:
-            estado = partido["fixture"]["status"]["short"]
+        if liga in ligas_buenas and estado == "NS":
+            return partido
 
-            # Solo partidos que aún no empiezan
-            if estado == "NS":
-                mejor_partido = partido
-                break
-
-    return mejor_partido
+    return None
 
 def generar_pick(partido):
     if not partido:
-        return "❌ No hay partidos buenos disponibles"
+        return None  # 🔥 CLAVE: ya no manda texto basura
 
     home = partido["teams"]["home"]["name"]
     away = partido["teams"]["away"]["name"]
@@ -103,13 +94,17 @@ while True:
     if ahora.minute % 5 == 0:
         if ultimo_minuto != ahora.minute:
 
+            print(f"⏳ Revisando partidos... {ahora.strftime('%H:%M:%S')}")
+
             partidos = obtener_partidos()
             partido = elegir_mejor_partido(partidos)
             mensaje = generar_pick(partido)
 
-            enviar_mensaje(mensaje)
-
-            print("✅ Enviado:", ahora.strftime("%H:%M:%S"))
+            if mensaje:
+                enviar_mensaje(mensaje)
+                print("✅ PICK ENVIADO")
+            else:
+                print("❌ No hay picks buenos (NO se envía nada)")
 
             ultimo_minuto = ahora.minute
 
