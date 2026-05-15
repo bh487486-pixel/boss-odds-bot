@@ -150,11 +150,10 @@ def revisar_partidos():
                 continue
 
             diferencia = fecha_partido - ahora
-
             partido_id = f"{match['home']}-{match['away']}-{fecha_partido}"
 
-            # 🔔 AVISO DE PARTIDO DETECTADO (10–60 min antes)
-            if timedelta(minutes=10) <= diferencia <= timedelta(minutes=60):
+            # 🔔 DETECTA PARTIDO (10 min a 2 horas antes)
+            if timedelta(minutes=10) <= diferencia <= timedelta(hours=2):
                 if partido_id not in avisados:
                     enviar_telegram(
                         f"👀 Partido detectado\n\n"
@@ -163,7 +162,7 @@ def revisar_partidos():
                     )
                     avisados.add(partido_id)
 
-            # 🔥 ENVÍO DEL PICK (0–3 min antes)
+            # 🔥 ENVÍA PICK (0–3 min antes)
             if 0 <= diferencia.total_seconds() <= 180:
                 if partido_id not in enviados:
 
