@@ -12,12 +12,18 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
 LIGAS_TOP = [
     "soccer_mexico_ligamx", "soccer_epl", "soccer_uefa_champions_league",
-    "basketball_nba", "baseball_mlb", "soccer_spain_la_liga"
+    "basketball_nba", "baseball_mlb", "soccer_spain_la_liga",
+    "soccer_italy_serie_a", "soccer_germany_bundesliga"
 ]
 
+# Mercados: Ganador, Totales, Hándicap y Ambos Anotan
 MARKETS = "h2h,totals,spreads,btts"
 API_URL = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-UMBRAL_VALOR = 1.03 
+
+# --- AJUSTES DE PRUEBA (1% y 2 minutos) ---
+UMBRAL_VALOR = 1.01 
+TIEMPO_ESPERA = 120 
+
 TZ_MEXICO = pytz.timezone("America/Mexico_City")
 
 DIAS_SEMANA = {
@@ -27,12 +33,24 @@ DIAS_SEMANA = {
 
 historial_enviados = []
 
+def enviar_telegram_con_botones(mensaje, id_unico):
+    if not TELEGRAM_TOKEN: return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ Ganada", "callback_data": f"w_{id_unico}"}, {"text": "❌ Perdida", "callback_data": f"l_{id_unico}"}],
+            [{"text": "📊 Marcador", "url": "https://www.google.com/search?q=resultados+deportivos"}]
+        ]
+    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown", "reply_markup": keyboard}
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except: pass
+
 def buscar_mejor_pick():
     global historial_enviados
     oportunidades = []
-    
-    # Intentamos rastrear los créditos en los headers de la respuesta
-    creditos_restantes = "Desconocido"
+    creditos_restantes = "Consultando..."
 
     for liga in LIGAS_TOP:
         url = API_URL.format(sport=liga)
@@ -41,7 +59,7 @@ def buscar_mejor_pick():
         try:
             res = requests.get(url, params=params, timeout=12)
             
-            # --- MONITOR DE CRÉDITOS ---
+            # Extraer créditos de los headers
             if "x-requests-remaining" in res.headers:
                 creditos_restantes = res.headers["x-requests-remaining"]
 
@@ -49,6 +67,7 @@ def buscar_mejor_pick():
             
             for evento in res.json():
                 dt_utc = datetime.strptime(evento["commence_time"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
+                # Filtro de 36 horas para mantenerlo en hoy/mañana
                 if dt_utc < (datetime.now(pytz.UTC) + timedelta(minutes=5)) or dt_utc > (datetime.now(pytz.UTC) + timedelta(hours=36)):
                     continue
                 
@@ -77,30 +96,34 @@ def buscar_mejor_pick():
                                     "ventaja": ventaja,
                                     "id_unico": id_unico,
                                     "msg": (
-                                        "🎯 *PICK DETECTADO (3%+)* 🎯\n"
+                                        "⚡ *PRUEBA DE SISTEMA (1%+)* ⚡\n"
                                         "─────────────────────\n"
                                         f"🏟️ *Evento:* {evento['home_team']} vs {evento['away_team']}\n"
                                         f"📅 *Día:* {DIAS_SEMANA.get(dt_mx.strftime('%A'), dt_mx.strftime('%A'))}, {dt_mx.strftime('%d/%m/%Y')}\n"
                                         f"⏰ *Inicia:* {dt_mx.strftime('%H:%M')} (CDMX)\n\n"
                                         f"🎯 *Pick:* {nombre_pick}\n"
                                         f"📈 *Momio:* {out['price']} ({b['title']})\n"
-                                        f"✅ *Ventaja:* +{round((ventaja-1)*100, 1)}%"
+                                        f"✅ *Ventaja:* +{round((ventaja-1)*100, 1)}%\n"
+                                        "─────────────────────\n"
+                                        f"🕒 *Detección:* {datetime.now(TZ_MEXICO).strftime('%H:%M:%S')}"
                                     )
                                 })
         except: continue
 
-    # Reporte en la consola de Render
     print(f"--- Escaneo Terminado --- Créditos restantes: {creditos_restantes}")
 
     if oportunidades:
+        # Mandar el mejor de este ciclo
         mejor = max(oportunidades, key=lambda x: x["ventaja"])
-        # (Aquí va tu función enviar_telegram_con_botones habitual)
+        enviar_telegram_con_botones(mejor["msg"], mejor["id_unico"])
         historial_enviados.append(mejor["id_unico"])
+        if len(historial_enviados) > 100: historial_enviados.pop(0)
 
 def main():
+    print("Iniciando Bot de Prueba rápida...")
     while True:
         buscar_mejor_pick()
-        time.sleep(600)
+        time.sleep(TIEMPO_ESPERA)
 
 if __name__ == "__main__":
     main()
