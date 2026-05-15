@@ -16,10 +16,12 @@ LIGAS_TOP = [
     "soccer_italy_serie_a", "soccer_germany_bundesliga"
 ]
 
-# Mercados ampliados: Ganador, Totales, Hándicap y Ambos Anotan
 MARKETS = "h2h,totals,spreads,btts"
 API_URL = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-UMBRAL_VALOR = 1.05 
+
+# --- AJUSTE A 3% ---
+UMBRAL_VALOR = 1.03 
+
 TZ_MEXICO = pytz.timezone("America/Mexico_City")
 
 DIAS_SEMANA = {
@@ -27,7 +29,6 @@ DIAS_SEMANA = {
     "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo"
 }
 
-# --- MEMORIA ANTI-REPETICIÓN ---
 historial_enviados = []
 
 def enviar_telegram_con_botones(mensaje, id_unico):
@@ -57,9 +58,9 @@ def buscar_mejor_pick():
             if res.status_code != 200: continue
             
             for evento in res.json():
-                # --- FILTRO DE TIEMPO (PRÓXIMAS 36H) ---
                 dt_utc = datetime.strptime(evento["commence_time"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
-                if dt_utc < (datetime.now(pytz.UTC) + timedelta(minutes=10)) or dt_utc > (datetime.now(pytz.UTC) + timedelta(hours=36)):
+                # Sigue el filtro de HOY y MAÑANA (36 horas)
+                if dt_utc < (datetime.now(pytz.UTC) + timedelta(minutes=5)) or dt_utc > (datetime.now(pytz.UTC) + timedelta(hours=36)):
                     continue
                 
                 dt_mx = dt_utc.astimezone(TZ_MEXICO)
@@ -70,31 +71,28 @@ def buscar_mejor_pick():
                     casa = b["title"]
                     for m in b["markets"]:
                         for out in m["outcomes"]:
-                            # --- DETALLE DE MERCADO ---
-                            # Si es Over/Under, agregar el punto (ej: Over 2.5)
                             nombre_pick = out["name"]
                             if "point" in out:
                                 signo = "+" if out["point"] > 0 and m["key"] == "spreads" else ""
                                 nombre_pick = f"{out['name']} {signo}{out['point']}"
                             
-                            # ID único que incluye evento + pick + línea para evitar repetición exacta
                             id_unico = f"{evento['id']}_{m['key']}_{nombre_pick}"
-                            
                             if id_unico in historial_enviados: continue
 
-                            # Comparar con el promedio
                             precios = [o["price"] for bk in bookmakers for mk in bk["markets"] 
                                       if mk["key"] == m["key"] for o in mk["outcomes"] if o["name"] == out["name"]]
                             
+                            if len(precios) < 3: continue
                             promedio = sum(precios) / len(precios)
                             ventaja = out["price"] / promedio
 
+                            # AHORA BUSCA VENTAJAS DESDE EL 3%
                             if ventaja >= UMBRAL_VALOR:
                                 oportunidades.append({
                                     "ventaja": ventaja,
                                     "id_unico": id_unico,
                                     "msg": (
-                                        "💎 *PICK DE ALTO VALOR* 💎\n"
+                                        "🎯 *NUEVA OPORTUNIDAD (3%+)* 🎯\n"
                                         "─────────────────────\n"
                                         f"🏟️ *Evento:* {evento['home_team']} vs {evento['away_team']}\n"
                                         f"📅 *Día:* {dia_full}\n"
@@ -112,17 +110,17 @@ def buscar_mejor_pick():
         except: continue
 
     if oportunidades:
+        # Mandar el mejor pick del ciclo
         mejor = max(oportunidades, key=lambda x: x["ventaja"])
         enviar_telegram_con_botones(mejor["msg"], mejor["id_unico"])
         historial_enviados.append(mejor["id_unico"])
-        # Mantener historial corto para no saturar memoria
         if len(historial_enviados) > 200: historial_enviados.pop(0)
 
 def main():
-    logging.info("Bot Master v6: Multimercado + Anti-Repetición Pro.")
+    logging.info("Bot Master v7: Umbral 3% + Hoy/Mañana + Anti-Repetición.")
     while True:
         buscar_mejor_pick()
-        time.sleep(480) # 8 minutos entre escaneos
+        time.sleep(420) # 7 minutos entre escaneos
 
 if __name__ == "__main__":
     main()
