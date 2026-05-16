@@ -28,6 +28,9 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     todos_los_picks = []
     
+    # Obtener la hora actual exacta en UTC para comparar
+    ahora_utc = datetime.utcnow()
+    
     for sport in sports:
         log(f"🔍 Escaneando mercados para análisis premium: {sport}...")
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h"
@@ -45,20 +48,30 @@ def buscar_picks(api_key, bot_token, chat_id):
                 if partido_id in PARTIDOS_ENVIADOS:
                     continue
                     
+                commence_time_raw = partido.get("commence_time")
+                
+                # ---- FILTRO ANTI-PASADO Y EN VIVO ----
+                try:
+                    dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
+                    
+                    # Si el partido empieza en menos de 15 minutos, o ya empezó/terminó en el pasado, lo saltamos
+                    if dt_utc <= ahora_utc + timedelta(minutes=15):
+                        log(f"⏭️ Saltando partido por estar en vivo, terminado o muy próximo: {partido.get('home_team')}")
+                        continue
+                        
+                    # Si pasa el filtro, calculamos su horario en México
+                    dt_mexico = dt_utc - timedelta(hours=6)
+                    fecha_hora_partido = dt_mexico.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
+                except Exception as e:
+                    log(f"⚠️ Error procesando fecha: {e}")
+                    continue
+                
                 home_team = partido.get("home_team")
                 away_team = partido.get("away_team")
-                commence_time_raw = partido.get("commence_time")
                 bookmakers = partido.get("bookmakers", [])
                 
                 if len(bookmakers) < 5:
                     continue
-                
-                try:
-                    dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
-                    dt_mexico = dt_utc - timedelta(hours=6)
-                    fecha_hora_partido = dt_mexico.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
-                except:
-                    fecha_hora_partido = commence_time_raw
                 
                 odds_home = []
                 odds_away = []
@@ -80,12 +93,10 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 nombre_partido = f"{away_team} vs {home_team}"
                 
-                # ---- INTELIGENCIA ARTIFICIAL DE ARGUMENTACIÓN POR DEPORTE ----
-                # Si es fútbol (Liga MX)
+                # Inteligencia de argumentación
                 if "soccer" in sport:
                     argumento_local = f"El conjunto local llega con la obligación táctica de proponer. El mercado global está castigando el momio, pero este casino nos da una ventaja clara para cubrir el hándicap o la victoria directa protegiendo el capital."
                     argumento_visita = f"Escenario de alta presión para el visitante o escenario de contraataque perfecto si traen ventaja en el global. La línea presenta un desajuste crítico; este momio tiene un valor matemático tremendo para aprovechar la urgencia del rival."
-                # Si es béisbol (MLB / LMB)
                 else:
                     argumento_local = f"Tendencia favorable para el pitcheo abridor o rotación estimada. Este casino se quedó dormido con la línea de apertura y nos regala una cuota muy por encima del promedio de Las Vegas."
                     argumento_visita = f"Racha ofensiva o ventaja en el bullpen que el algoritmo del casino local no está detectando correctamente. Valor puro en la cuota para pegarle al favorito en la carretera."
@@ -141,7 +152,6 @@ def buscar_picks(api_key, bot_token, chat_id):
             p_id = candidato["partido_id"]
             
             if p_id not in PARTIDOS_ENVIADOS and p_id not in partidos_usados_en_este_ciclo:
-                # Mensaje formateado estilo canal VIP Premium
                 msg = (
                     f"🧠 *【 ANÁLISIS PROFESIONAL VIP 】* 🧠\n"
                     f"───────────────────────\n"
@@ -164,13 +174,13 @@ def buscar_picks(api_key, bot_token, chat_id):
                 picks_enviados_ciclo += 1
                 
         if picks_enviados_ciclo == 0:
-            log("💤 Sin novedades en este ciclo.")
+            log("💤 Sin novedades válidas en este ciclo.")
     else:
         log("📉 Todo normal en las cuotas.")
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: TIPSTER VIP CHAT ACTIVADO")
+    log("🚀 BOT MODE: TIPSTER VIP CON FILTRO DE TIEMPO")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -183,7 +193,7 @@ def main():
 
     while True:
         buscar_picks(api_key, bot_token, chat_id)
-        log("😴 Esperando 5 minutos para el siguiente reporte de valor...")
+        log("😴 Esperando 5 minutes para el siguiente reporte de valor...")
         time.sleep(300)
 
 if __name__ == "__main__":
