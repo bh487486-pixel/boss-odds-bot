@@ -14,7 +14,7 @@ def send_telegram(token, chat_id, text):
     try:
         res = requests.post(url, json=payload, timeout=10)
         if res.status_code == 200:
-            log("📱 [Telegram] ¡Análisis VIP Multi-Liga enviado!")
+            log("📱 [Telegram] ¡Análisis VIP Inteligente enviado al canal!")
         else:
             log(f"❌ [Telegram] Error al enviar: {res.status_code}")
     except Exception as e:
@@ -56,7 +56,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                     
                 commence_time_raw = partido.get("commence_time")
                 
-                # Filtro de tiempo mínimo (15 minutos en el futuro)
+                # ---- FILTRO ANTI-PASADO Y EN VIVO ----
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
                     if dt_utc <= ahora_utc + timedelta(minutes=15):
@@ -70,7 +70,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                 away_team = partido.get("away_team")
                 bookmakers = partido.get("bookmakers", [])
                 
-                if len(bookmakers) < 5:
+                # Mínimo 7 casinos analizando para asegurar estabilidad y evitar desajustes locos
+                if len(bookmakers) < 7:
                     continue
                 
                 nombre_partido = f"{away_team} vs {home_team}"
@@ -86,7 +87,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 o_price = outcome.get("price")
                                 o_point = outcome.get("point", None)
                                 
-                                # Traducción y formateo al español
+                                # ---- TRADUCCIÓN Y FORMATEO AL ESPAÑOL ----
                                 label_final = o_name
                                 if m_key == "h2h":
                                     if o_name.lower() == "draw":
@@ -126,15 +127,21 @@ def buscar_picks(api_key, bot_token, chat_id):
                         ventaja = (mejor_precio / avg_price) - 1
                         
                         if ventaja >= 0.04:
+                            # 🛑 CANDADO INTELIGENTE CONTRA SORPRESAS IMPOSIBLES
+                            # Si detecta valor en Ganador (h2h) pero el momio es mayor a 4.00, lo ignora.
+                            # Esto obliga al bot a buscar el valor en Totales o Hándicaps del mismo partido.
+                            if m_key == "h2h" and mejor_precio > 4.00:
+                                continue
+
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
-                                arg = "Desajuste directo en las probabilidades de victoria. Este casino se quedó atrás y nos ofrece una cuota inflada con excelente valor."
+                                arg = "Desajuste directo en las probabilidades de victoria. Este casino se quedó atrás y nos ofrece una cuota inflada con excelente valor dentro de los rangos lógicos."
                             elif m_key == "totals":
                                 tipo_m = "TOTALES (ALTAS/BAJAS)"
-                                arg = "La línea de puntos o goles propuesta por este casino está mal balanceada frente al promedio. Margen matemático óptimo para apostar."
+                                arg = "La línea de puntos o goles propuesta por este casino está mal balanceada frente al promedio. Las tendencias ofensivas y el mercado respaldan este ajuste."
                             else:
                                 tipo_m = "HÁNDICAP (VENTAJA)"
-                                arg = "La ventaja otorgada en este hándicap nos da un colchón de seguridad tremendo. Las cuotas del mercado general protegen esta línea."
+                                arg = "La ventaja otorgada en este hándicap nos da un colchón de seguridad tremendo. El mercado general se ha movido protegiendo esta línea y el casino local no ha corregido."
 
                             todos_los_picks.append({
                                 "partido_id": partido_id,
@@ -152,7 +159,7 @@ def buscar_picks(api_key, bot_token, chat_id):
         except Exception as e:
             log(f"❌ Error escaneando: {e}")
 
-    # ---- ENTRADA AL CANAL (MÁXIMO 7 PARTIDOS DIFERENTES) ----
+    # ---- ENTRADA AL CANAL (MÁXIMO 7 PARTIDOS DIFERENTES POR CICLO) ----
     if todos_los_picks:
         todos_los_picks.sort(key=lambda x: x["ventaja"], reverse=True)
         
@@ -160,7 +167,6 @@ def buscar_picks(api_key, bot_token, chat_id):
         partidos_usados_en_este_ciclo = set()
         
         for candidato in todos_los_picks:
-            # Límite actualizado a 7 picks por ciclo
             if picks_enviados_ciclo >= 7:
                 break
                 
@@ -196,7 +202,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: SUPER TIPSTER 7 PICKS ACTIVADO")
+    log("🚀 BOT MODE: TIPSTER VIP MULTI-MERCADO PRO")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -209,7 +215,7 @@ def main():
 
     while True:
         buscar_picks(api_key, bot_token, chat_id)
-        # 10 minutos de espera activos (600 segundos)
+        # Descanso exacto de 10 minutos (600 segundos)
         log("😴 Esperando 10 minutos para el siguiente reporte de valor...")
         time.sleep(600)
 
