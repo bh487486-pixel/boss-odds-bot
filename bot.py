@@ -35,10 +35,9 @@ def buscar_picks(api_key, bot_token, chat_id):
     ]
     
     todos_los_picks = []
-    # Corrección para limpiar el Warning de los logs de Render
     ahora_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     
-    # ---- NUEVA UBICACIÓN COHETE: VALIDACIÓN INICIAL DE CRÉDITOS ----
+    # ---- VALIDACIÓN INICIAL DE CRÉDITOS ----
     log("📊 [API] Verificando estado de la cuenta y créditos...")
     url_test = f"https://api.the-odds-api.com/v4/sports/{sports[0]}/odds/?apiKey={api_key}&regions=us&markets=h2h"
     try:
@@ -52,7 +51,6 @@ def buscar_picks(api_key, bot_token, chat_id):
             log(f"⚠️ No se pudieron leer las credenciales. Código API: {res_test.status_code}")
     except Exception as e:
         log(f"⚠️ Error de conexión al checar créditos: {e}")
-    # ─────────────────────────────────────────────────────────────
 
     for sport in sports:
         log(f"🔍 Escaneando mercados múltiples para: {sport}...")
@@ -141,17 +139,18 @@ def buscar_picks(api_key, bot_token, chat_id):
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         ventaja = (mejor_precio / avg_price) - 1
                         
-                        if ventaja >= 0.03:
+                        # ---- CALIBRACIÓN AL 2% DE VENTAJA MÍNIMA ----
+                        if ventaja >= 0.02:
                             if m_key == "h2h" and mejor_precio > 4.00:
                                 continue
 
-                            # ---- ASIGNACIÓN DE STAKE PROFESIONAL ----
-                            if ventaja >= 0.08:
-                                stake = 9 if mejor_precio < 2.50 else 8
-                            elif ventaja >= 0.05:
-                                stake = 7 if mejor_precio < 2.20 else 6
+                            # ---- ASIGNACIÓN DE STAKE CONSERVA_2% ----
+                            if ventaja >= 0.07:
+                                stake = 8 if mejor_precio < 2.50 else 7
+                            elif ventaja >= 0.04:
+                                stake = 6 if mejor_precio < 2.20 else 5
                             else:
-                                stake = 5 if mejor_precio < 2.00 else 4
+                                stake = 3 if mejor_precio < 2.00 else 2
 
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
@@ -263,7 +262,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: VIP CALIBRADO CON CRÉDITOS ASEGURADOS")
+    log("🚀 BOT MODE: VIP CON VENTAJAS DEL 2% ACTIVA")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
