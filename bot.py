@@ -14,7 +14,7 @@ def send_telegram(token, chat_id, text):
     try:
         res = requests.post(url, json=payload, timeout=10)
         if res.status_code == 200:
-            log("📱 [Telegram] ¡Análisis Multi-Mercado enviado!")
+            log("📱 [Telegram] ¡Análisis VIP en Español enviado!")
         else:
             log(f"❌ [Telegram] Error al enviar: {res.status_code}")
     except Exception as e:
@@ -31,7 +31,6 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     for sport in sports:
         log(f"🔍 Escaneando mercados múltiples para: {sport}...")
-        # Agregamos los mercados h2h (ganador), totals (over/under) y spreads (hándicap) en la URL
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h,totals,spreads"
         
         try:
@@ -49,7 +48,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                     
                 commence_time_raw = partido.get("commence_time")
                 
-                # Filtro de tiempo (mínimo 15 minutos en el futuro)
+                # Filtro de tiempo mínimo (15 minutos en el futuro)
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
                     if dt_utc <= ahora_utc + timedelta(minutes=15):
@@ -67,32 +66,49 @@ def buscar_picks(api_key, bot_token, chat_id):
                     continue
                 
                 nombre_partido = f"{away_team} vs {home_team}"
-                
-                # Diccionarios para agrupar cuotas por mercado
                 mercados_data = {"h2h": {}, "totals": {}, "spreads": {}}
                 
-                # Extraer y organizar las cuotas de todos los casinos disponibles
                 for bookie in bookmakers:
                     b_title = bookie.get("title")
                     for market in bookie.get("markets", []):
                         m_key = market.get("key")
                         if m_key in mercados_data:
                             for outcome in market.get("outcomes", []):
-                                # Creamos una llave única para promediar correctamente
                                 o_name = outcome.get("name")
                                 o_price = outcome.get("price")
-                                o_point = outcome.get("point", "") # Para el .point de Over/Under o Hándicap
+                                o_point = outcome.get("point", None)
                                 
-                                # Guardamos bajo la etiqueta exacta (ej: "Over 2.5" o "Gana Pachuca")
-                                full_label = f"{o_name} {o_point}".strip()
-                                if full_label not in mercados_data[m_key]:
-                                    mercados_data[m_key][full_label] = []
-                                mercados_data[m_key][full_label].append((b_title, o_price))
+                                # ---- TRADUCCIÓN Y FORMATEO AL ESPAÑOL ----
+                                label_final = o_name
+                                if m_key == "h2h":
+                                    if o_name.lower() == "draw":
+                                        label_final = "Empate"
+                                    elif o_name == home_team:
+                                        label_final = f"Gana {home_team} (Local)"
+                                    elif o_name == away_team:
+                                        label_final = f"Gana {away_team} (Visitante)"
+                                        
+                                elif m_key == "totals":
+                                    if o_name.lower() == "over":
+                                        label_final = f"Altas (Over) {o_point}"
+                                    elif o_name.lower() == "under":
+                                        label_final = f"Bajas (Under) {o_point}"
+                                        
+                                elif m_key == "spreads" and o_point is not None:
+                                    # Forzar el signo (+) o (-) visible en el hándicap
+                                    try:
+                                        num_point = float(o_point)
+                                        signo = "+" if num_point > 0 else ""
+                                        label_final = f"Hándicap {o_name} ({signo}{o_point})"
+                                    except:
+                                        label_final = f"Hándicap {o_name} ({o_point})"
+                                
+                                if label_final not in mercados_data[m_key]:
+                                    mercados_data[m_key][label_final] = []
+                                mercados_data[m_key][label_final].append((b_title, o_price))
                 
-                # Analizar cada mercado organizado
                 for m_key, opciones in mercados_data.items():
                     for label, lista_cuotas in opciones.items():
-                        # Necesitamos que al menos 4 casinos tengan este mercado específico para promediar
                         if len(lista_cuotas) < 4:
                             continue
                             
@@ -102,18 +118,16 @@ def buscar_picks(api_key, bot_token, chat_id):
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         ventaja = (mejor_precio / avg_price) - 1
                         
-                        # Si encontramos ventaja del 4% o más, se genera el pick
                         if ventaja >= 0.04:
-                            # Ajuste de argumentos automáticos estilo Tipster VIP
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
-                                arg = f"Desajuste directo en la victoria. Este casino está pagando una cuota desproporcionada comparada con el promedio global."
+                                arg = "Desajuste directo en las probabilidades de victoria. Este casino se quedó atrás y nos ofrece una cuota inflada con excelente valor."
                             elif m_key == "totals":
-                                tipo_m = "TOTALES (OVER/UNDER)"
-                                arg = f"La línea de puntos/goles en este casino está mal calculada. Las probabilidades matemáticas apuntan a que esta cuota de {label} está regalada."
+                                tipo_m = "TOTALES (ALTAS/BAJAS)"
+                                arg = "La línea de puntos o goles propuesta por este casino está mal balanceada frente al promedio. Margen matemático óptimo para apostar."
                             else:
-                                tipo_m = "HÁNDICAP / SPREAD"
-                                arg = f"La ventaja de puntos o carreras otorgada ({label}) tiene un colchón matemático óptimo. Cobertura perfecta para asegurar."
+                                tipo_m = "HÁNDICAP (VENTAJA)"
+                                arg = "La ventaja otorgada en este hándicap nos da un colchón de seguridad tremendo. Las cuotas del mercado general protegen esta línea."
 
                             todos_los_picks.append({
                                 "partido_id": partido_id,
@@ -131,7 +145,6 @@ def buscar_picks(api_key, bot_token, chat_id):
         except Exception as e:
             log(f"❌ Error escaneando: {e}")
 
-    # ---- ENTRADA DEL TIPSTER AL CANAL (MAX 6 PARTIDOS DIFERENTES) ----
     if todos_los_picks:
         todos_los_picks.sort(key=lambda x: x["ventaja"], reverse=True)
         
@@ -174,7 +187,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: SUPER TIPSTER MULTI-MERCADO ACTIVADO")
+    log("🚀 BOT MODE: SUPER TIPSTER ESPAÑOL PRO ACTIVADO")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
