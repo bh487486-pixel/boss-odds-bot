@@ -61,7 +61,7 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     # ---- VALIDACIÓN INICIAL DE CRÉDITOS ----
     log("📊 [API] Verificando estado de la cuenta y créditos...")
-    url_test = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey={api_key}&regions=us&markets=h2h&oddsFormat=decimal"
+    url_test = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey={api_key}&regions=us&markets=h2h&oddsFormat=american"
     try:
         res_test = requests.get(url_test, timeout=10)
         if res_test.status_code == 200:
@@ -77,13 +77,12 @@ def buscar_picks(api_key, bot_token, chat_id):
     for sport in sports:
         log(f"🔍 Escaneando mercados extendidos para: {sport}...")
         
-        # SOLUCIÓN: Separar llamadas según el deporte para no saturar ni confundir los endpoints de la API
         if "soccer" in sport:
             mercados_solicitados = "h2h,totals,spreads,btts"
         else:
             mercados_solicitados = "h2h,totals,spreads"
             
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets={mercados_solicitados}&oddsFormat=decimal"
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets={mercados_solicitados}&oddsFormat=american"
         
         try:
             res = requests.get(url, timeout=15)
@@ -104,7 +103,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                 except:
                     continue
                 
-                # Solo procesar partidos de HOY o MAÑANA
                 if fecha_partido != fecha_hoy_mx and fecha_partido != fecha_manana_mx:
                     continue
                 
@@ -118,8 +116,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 nombre_partido = f"{away_team} vs {home_team}"
                 
                 mercados_data = {
-                    "h2h": {}, "totals": {}, "spreads": {}, 
-                    "btts": {}, "soccer_corners": {}
+                    "h2h": {}, "totals": {}, "spreads": {}, "btts": {}
                 }
                 
                 for bookie in bookmakers:
@@ -129,13 +126,13 @@ def buscar_picks(api_key, bot_token, chat_id):
                         if m_key in mercados_data:
                             for outcome in market.get("outcomes", []):
                                 o_name = outcome.get("name")
-                                o_price = outcome.get("price")
+                                o_price = int(outcome.get("price"))
                                 o_point = outcome.get("point", None)
                                 
                                 label_final = o_name
                                 is_baseball = "baseball" in sport
                                 
-                                # 1. MERCADO GANADOR PRINCIPAL
+                                # 1. GANADOR
                                 if m_key == "h2h":
                                     if o_name.lower() == "draw":
                                         label_final = "Empate"
@@ -144,7 +141,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                                     elif o_name == away_team:
                                         label_final = f"Gana {away_team} (Visitante)"
                                         
-                                # 2. MERCADO TOTALES (Goles / Carreras)
+                                # 2. TOTALES
                                 elif m_key == "totals":
                                     tipo_unidad = "Carreras" if is_baseball else "Goles"
                                     if o_name.lower() == "over":
@@ -152,7 +149,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                                     elif o_name.lower() == "under":
                                         label_final = f"Bajas (Under) {o_point} {tipo_unidad}"
                                         
-                                # 3. MERCADO HÁNDICAP (Spread / Run Line)
+                                # 3. HÁNDICAP
                                 elif m_key == "spreads" and o_point is not None:
                                     tipo_unidad = "Carreras" if is_baseball else "Goles"
                                     try:
@@ -162,7 +159,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                                     except:
                                         label_final = f"Hándicap {o_name} ({o_point})"
                                         
-                                # 4. MERCADO AMBOS EQUIPOS ANOTAN
+                                # 4. AMBOS ANOTAN
                                 elif m_key == "btts":
                                     if o_name.lower() == "yes":
                                         label_final = "Ambos Equipos Anotan: SÍ"
@@ -177,29 +174,29 @@ def buscar_picks(api_key, bot_token, chat_id):
                     for label, lista_cuotas in opciones.items():
                         if len(lista_cuotas) < 1:
                             continue
-                            
+                        
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         
-                        # CALIBRACIÓN PREMIUM: Rango exacto de 1.40 a 2.50 (Decimal)
-                        if 1.40 <= mejor_precio <= 2.50:
+                        es_valido = False
+                        if mejor_precio < 0 and -250 <= mejor_precio <= -100:
+                            es_valido = True
+                        elif mejor_precio > 0 and 100 <= mejor_precio <= 150:
+                            es_valido = True
                             
+                        if es_valido:
                             llave_apuesta = f"{partido_id}_{label}"
                             
-                            # Si este mercado exacto ya se mandó en el fin de semana, se lo salta
                             if llave_apuesta in PICKS_ENVIADOS_REGISTRO:
                                 continue
                             
-                            # Asignación de Stake dinámico
-                            if mejor_precio < 1.70:
-                                stake = 8
-                            elif mejor_precio < 2.10:
-                                stake = 6
+                            if mejor_precio < 0:
+                                stake = 8 if mejor_precio <= -150 else 6
                             else:
                                 stake = 4
 
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
-                                arg = "Proyección directa para el encuentro. Esta casa presenta la cuota más competitiva en el mercado de ganador directo."
+                                arg = "Proyección directa para el encuentro. Esta casa presents la cuota más competitiva en el mercado de ganador directo."
                             elif m_key == "totals":
                                 tipo_m = "TOTALES (ALTAS/BAJAS)"
                                 arg = "Análisis matemático del mercado de anotaciones totales. Las condiciones del partido abren una ventana ideal para esta línea regularizada."
@@ -210,6 +207,13 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 tipo_m = "AMBOS EQUIPOS ANOTAN"
                                 arg = "Lectura ofensiva de las plantillas. El historial reciente y las necesidades de ambos clubes perfilan valor en este mercado."
 
+                            momio_texto = f"+{mejor_precio}" if mejor_precio > 0 else str(mejor_precio)
+
+                            if mejor_precio < 0:
+                                valor_decimal_interno = round((100 / abs(mejor_precio)) + 1, 2)
+                            else:
+                                valor_decimal_interno = round((mejor_precio / 100) + 1, 2)
+
                             todos_los_picks.append({
                                 "llave_apuesta": llave_apuesta,
                                 "partido_id": partido_id,
@@ -217,7 +221,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 "mercado": tipo_m,
                                 "apuesta": label,
                                 "casino": mejor_casino,
-                                "momio": mejor_precio,
+                                "momio": momio_texto,
+                                "momio_dec": valor_decimal_interno,
                                 "horario": fecha_hora_partido,
                                 "analisis": arg,
                                 "stake": stake
@@ -229,9 +234,6 @@ def buscar_picks(api_key, bot_token, chat_id):
     # ---- PROCESAMIENTO DE ENVÍOS EN VIVO ----
     if todos_los_picks:
         CICLOS_VACIOS_CONSECUTIVOS = 0
-        
-        # Ordenamos priorizando el punto dulce de 1.70
-        todos_los_picks.sort(key=lambda x: abs(x["momio"] - 1.70))
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
         
@@ -253,7 +255,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                     f"_{candidato['analisis']}_\n\n"
                     f"🎯 *PICK RECOMENDADO:* `{candidato['apuesta']}`\n"
                     f"🏛 *Casa de Apuestas:* {candidato['casino']}\n"
-                    f"📈 *Momio de Entrada:* {candidato['momio']}\n"
+                    f"📈 *Momio de Entrada:* `{candidato['momio']}` 🇺🇸\n"
                     f"🔥 *STAKE RECOMENDADO:* `Stake {candidato['stake']}/10` 🛡️\n"
                     f"───────────────────────\n"
                     f"🔥 _¡Entrar con responsabilidad, cuota base validada!_"
@@ -268,34 +270,50 @@ def buscar_picks(api_key, bot_token, chat_id):
         num_picks = len(picks_enviados_en_este_ciclo)
         if num_picks >= 1:
             time.sleep(3)
+            
+            parley_armado = False
+            
             if num_picks >= 3:
-                picks_ordenados_stake = sorted(picks_enviados_en_este_ciclo, key=lambda x: x["stake"], reverse=True)
-                p1 = picks_ordenados_stake[0]
-                p2 = picks_ordenados_stake[1]
-                momio_parlay = round(p1["momio"] * p2["momio"], 2)
+                picks_ordenados_confianza = sorted(picks_enviados_en_este_ciclo, key=lambda x: x["stake"], reverse=True)
+                p1 = picks_ordenados_confianza[0]
+                p2 = picks_ordenados_confianza[1]
                 
-                msg_veredicto = (
-                    f"🧬 *【 VEREDICTO FINAL: PARLEY DETECTADO 】* 🧬\n"
-                    f"───────────────────────\n"
-                    f"El algoritmo armó la mejor combinación del ciclo para tus jugadas recomendadas:\n\n"
-                    f"1️⃣ *{p1['partido']}*\n"
-                    f"   ↳ *Pick:* `{p1['apuesta']}` (Momio: {p1['momio']})\n\n"
-                    f"2️⃣ *{p2['partido']}*\n"
-                    f"   ↳ *Pick:* `{p2['apuesta']}` (Momio: {p2['momio']})\n\n"
-                    f"🏛 *Momio Sugerido Combinado:* ~`{momio_parlay}`\n"
-                    f"🛡️ *STAKE PARA EL PARLEY:* `Stake 2/10` 💰\n"
-                    f"───────────────────────\n"
-                    f"⚡ _¡Vamos por las verdes con todo hoy!_"
-                )
-            else:
+                momio_combinado_dec = p1["momio_dec"] * p2["momio_dec"]
+                
+                if momio_combinado_dec >= 2.00:
+                    ame_val = int((momio_combinado_dec - 1) * 100)
+                    momio_parlay_texto = f"+{ame_val}"
+                else:
+                    ame_val = int(-100 / (momio_combinado_dec - 1))
+                    momio_parlay_texto = str(ame_val)
+                
+                if p1["stake"] >= 6 and p2["stake"] >= 6 and (2.20 <= momio_combinado_dec <= 4.50):
+                    msg_veredicto = (
+                        f"🧬 *【 VEREDICTO FINAL: PARLEY DETECTADO 】* 🧬\n"
+                        f"───────────────────────\n"
+                        f"El algoritmo detectó alta probabilidad combinada en este ciclo. Armamos un parlay premium de seguridad:\n\n"
+                        f"1️⃣ *{p1['partido']}*\n"
+                        f"   ↳ *Pick:* `{p1['apuesta']}` (Momio: {p1['momio']})\n\n"
+                        f"2️⃣ *{p2['partido']}*\n"
+                        f"   ↳ *Pick:* `{p2['apuesta']}` (Momio: {p2['momio']})\n\n"
+                        f"🏛 *Momio Sugerido Combinado:* ~`{momio_parlay_texto}` 🇺🇸\n"
+                        f"🛡️ *STAKE PARA EL PARLEY:* `Stake 2/10` 💰\n"
+                        f"───────────────────────\n"
+                        f"⚡ _¡Vamos por las verdes con esta combinación premium hoy!_"
+                    )
+                    parley_armado = True
+            
+            if not parley_armado:
                 msg_veredicto = (
                     f"🎯 *【 VEREDICTO FINAL: JUGAR DIRECTO 】* 🎯\n"
                     f"───────────────────────\n"
                     f"El software recomienda ingresar las jugadas de este bloque de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
+                    f"📊 Las condiciones actuales del mercado sugieren proteger capital. No se detectan combinaciones con la estabilidad necesaria para un Parley.\n"
                     f"⚠️ Respeta el Stake asignado a cada selección para mantener un control sano de tu banca.\n"
                     f"───────────────────────\n"
-                    f"🍀 _¡Mucho éxito en tus jugadas de hoy!_"
+                    f"🍀 _¡Mucho éxito en tus jugadas directas de hoy!_"
                 )
+                
             send_telegram(bot_token, chat_id, msg_veredicto)
     else:
         log("📉 No se encontraron eventos activos en este momento.")
@@ -315,7 +333,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("--------------------------------------------------")
-    log("🚀 BOT MODE: FIN DE SEMANA CON MERCADOS EXTENDIDOS")
+    log("🚀 BOT MODE: TEMPORIZADOR DE PRECISIÓN DINÁMICA")
     log("--------------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -326,10 +344,28 @@ def main():
         log("❌ ERROR CRÍTICO: Variables ausentes.")
         return
 
+    intervalo_objetivo = 600  # 10 minutos exactos en segundos
+
     while True:
+        # 🕒 Guardamos la marca de tiempo exacta del inicio del ciclo
+        tiempo_inicio = time.time()
+        
         buscar_picks(api_key, bot_token, chat_id)
-        log("😴 Esperando 10 minutos para el siguiente reporte de acción...")
-        time.sleep(600)
+        
+        # ⏳ Calculamos cuánto tiempo real tardó el bot en trabajar en este ciclo
+        tiempo_transcurrido = time.time() - tiempo_inicio
+        
+        # 🎯 Restamos el tiempo de trabajo para calcular la espera exacta sobrante
+        tiempo_espera_final = intervalo_objetivo - tiempo_transcurrido
+        
+        # Validación de seguridad por si las peticiones tardaron más de 10 minutos (caso extremo)
+        if tiempo_espera_final < 1:
+            tiempo_espera_final = 1
+            
+        log(f"⏱️ Ciclo completado en {round(tiempo_transcurrido, 2)} segundos.")
+        log(f"😴 Esperando {round(tiempo_espera_final, 2)} segundos exactos para clavar los 10 minutos...")
+        
+        time.sleep(tiempo_espera_final)
 
 if __name__ == "__main__":
     main()
