@@ -21,10 +21,32 @@ def send_telegram(token, chat_id, text):
         log(f"❌ [Telegram] Error de conexión: {e}")
 
 PARTIDOS_ENVIADOS = set()
+ULTIMA_FECHA_SALUDO = "" # Guarda el día del último saludo enviado
+CICLOS_VACIOS_CONSECUTIVOS = 0 # Contador para saber cuánto tiempo lleva sin mandar picks
+AVISO_ESPERA_ENVIADO = False # Asegura que el mensaje de "no se desesperen" se mande una sola vez
 
 def buscar_picks(api_key, bot_token, chat_id):
-    global PARTIDOS_ENVIADOS
+    global PARTIDOS_ENVIADOS, ULTIMA_FECHA_SALUDO, CICLOS_VACIOS_CONSECUTIVOS, AVISO_ESPERA_ENVIADO
     
+    # 🕒 OBTENER HORA ACTUAL DEL ESTADO DE MÉXICO (UTC-6)
+    dt_mexico = datetime.now(timezone.utc) - timedelta(hours=6)
+    fecha_hoy_mx = dt_mexico.strftime("%Y-%m-%d")
+    hora_hoy_mx = dt_mexico.hour
+    
+    # ---- 🌅 CONTROL DEL MENSAJE DE BUENOS DÍAS AUTOMÁTICO (8:00 AM) ----
+    if hora_hoy_mx >= 8 and ULTIMA_FECHA_SALUDO != fecha_hoy_mx:
+        msg_buenos_dias = (
+            "☀️ *【 BUENOS DÍAS FAMILIA 】* ☀️\n"
+            "───────────────────────\n"
+            "¡Ya estamos de pie! Arrancamos con toda la actitud una nueva jornada de picks automatizados. 🚀\n\n"
+            "El software ya está procesando las mejores variables y cuotas del mercado. Hoy es un excelente día para meter buena lectura y ¡pintarnos por completo de verde! 💸💚\n\n"
+            "🍀 _¡Mucho éxito en tus jugadas de hoy y mantengan las alertas encendidas!_"
+        )
+        log("🌅 [Bot] Disparando saludo diario automático de buenos días...")
+        send_telegram(bot_token, chat_id, msg_buenos_dias)
+        ULTIMA_FECHA_SALUDO = fecha_hoy_mx 
+        time.sleep(2)
+
     # TRIDENTE GANADOR: MLB, LMB y Liga MX
     sports = [
         "baseball_mlb",
@@ -62,16 +84,14 @@ def buscar_picks(api_key, bot_token, chat_id):
             
             for partido in partidos:
                 partido_id = partido.get("id")
-                
                 if partido_id in PARTIDOS_ENVIADOS:
                     continue
                     
                 commence_time_raw = partido.get("commence_time")
-                
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
-                    dt_mexico = dt_utc - timedelta(hours=6)
-                    fecha_hora_partido = dt_mexico.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
+                    dt_mexico_partido = dt_utc - timedelta(hours=6)
+                    fecha_hora_partido = dt_mexico_partido.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
                 except:
                     continue
                 
@@ -129,15 +149,14 @@ def buscar_picks(api_key, bot_token, chat_id):
                             
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         
-                        # Cuota base forzada calibrada
-                        if 1.45 <= mejor_precio <= 3.40:
-                            
-                            if mejor_precio < 1.85:
-                                stake = 7
-                            elif mejor_precio < 2.30:
-                                stake = 5
+                        # CALIBRACIÓN: Rango efectivo de 1.40 a 2.50
+                        if 1.40 <= mejor_precio <= 2.50:
+                            if mejor_precio < 1.70:
+                                stake = 8
+                            elif mejor_precio < 2.10:
+                                stake = 6
                             else:
-                                stake = 3
+                                stake = 4
 
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
@@ -166,15 +185,16 @@ def buscar_picks(api_key, bot_token, chat_id):
 
     # ---- PROCESAMIENTO DE ENVÍOS EN VIVO ----
     if todos_los_picks:
-        todos_los_picks.sort(key=lambda x: abs(x["momio"] - 1.95))
+        # Si hay picks, se reinicia el contador de ciclos vacíos
+        CICLOS_VACIOS_CONSECUTIVOS = 0
         
+        todos_los_picks.sort(key=lambda x: abs(x["momio"] - 1.70))
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
         
         for candidato in todos_los_picks:
             if len(picks_enviados_en_este_ciclo) >= 7:
                 break
-                
             p_id = candidato["partido_id"]
             
             if p_id not in PARTIDOS_ENVIADOS and p_id not in partidos_usados_en_este_ciclo:
@@ -234,10 +254,24 @@ def buscar_picks(api_key, bot_token, chat_id):
             send_telegram(bot_token, chat_id, msg_veredicto)
     else:
         log("📉 No se encontraron eventos activos en este momento.")
+        CICLOS_VACIOS_CONSECUTIVOS += 1
+        
+        # AVISO INTELIGENTE: Si lleva 2 ciclos en blanco seguidos (20 min) y no se ha avisado en esta sesión:
+        if CICLOS_VACIOS_CONSECUTIVOS >= 2 and not AVISO_ESPERA_ENVIADO:
+            msg_espera = (
+                "🧠 *【 ALERTAS EN VIVO: MENSAJE DE CONTROL 】* 🧠\n"
+                "───────────────────────\n"
+                "Gente, estamos buscando los picks ideales para ustedes. No se desesperen, que estamos analizando e investigando a fondo los movimientos de las líneas.\n\n"
+                "📊 El mercado está muy cerrado en este momento, pero seguimos monitoreando **MLB, LMB y Liga MX**.\n"
+                "🛡️ En cuanto se abra el valor, el software lo soltará de golpe. ¡Mantengan notificaciones activas!"
+            )
+            log("📱 [Telegram] El bot se está tardando en hallar picks. Lanzando aviso de tranquilidad...")
+            send_telegram(bot_token, chat_id, msg_espera)
+            AVISO_ESPERA_ENVIADO = True # Bloqueado para que solo se mande una vez
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: MLB, LMB Y LIGA MX EN ACCIÓN TOTAL")
+    log("🚀 BOT MODE: MLB, LMB Y LIGA MX INTELIGENTE V3")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -248,18 +282,6 @@ def main():
         log("❌ ERROR CRÍTICO: Variables ausentes.")
         return
 
-    # ---- 🚀 MENSAJE DE TRANSPARENCIA (SE ENVÍA UNA SOLA VEZ AL ARRANCAR) 🚀 ----
-    msg_inicial = (
-        "🧠 *【 COMUNICADO VIP: SISTEMA DE ANÁLISIS EN VIVO 】* 🧠\n"
-        "───────────────────────\n"
-        "Gente, estamos buscando los picks ideales para ustedes. No se desesperen, que estamos analizando e investigando a fondo los movimientos de las líneas.\n\n"
-        "📊 *Ligas activas en el radar de hoy:* MLB ⚾, LMB 🇲🇽 y Liga MX ⚽.\n"
-        "🔔 _¡Mantengan las notificaciones encendidas, el software está operando!_"
-    )
-    log("📱 [Telegram] Enviando mensaje único de aviso al canal...")
-    send_telegram(bot_token, chat_id, msg_inicial)
-
-    # El bucle repetitivo solo busca cuotas, el aviso quedó afuera para siempre
     while True:
         buscar_picks(api_key, bot_token, chat_id)
         log("😴 Esperando 10 minutos para el siguiente reporte de acción...")
