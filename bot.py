@@ -2,7 +2,7 @@ import os
 import time
 import requests
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 def log(msg):
     print(msg)
@@ -35,24 +35,31 @@ def buscar_picks(api_key, bot_token, chat_id):
     ]
     
     todos_los_picks = []
-    ahora_utc = datetime.utcnow()
-    mostrar_creditos = True # Bandera para mostrar créditos una sola vez por ciclo
+    # Corrección para limpiar el Warning de los logs de Render
+    ahora_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     
+    # ---- NUEVA UBICACIÓN COHETE: VALIDACIÓN INICIAL DE CRÉDITOS ----
+    log("📊 [API] Verificando estado de la cuenta y créditos...")
+    url_test = f"https://api.the-odds-api.com/v4/sports/{sports[0]}/odds/?apiKey={api_key}&regions=us&markets=h2h"
+    try:
+        res_test = requests.get(url_test, timeout=10)
+        if res_test.status_code == 200:
+            restantes = res_test.headers.get("x-requests-remaining")
+            usados = res_test.headers.get("x-requests-used")
+            if restantes is not None and usados is not None:
+                log(f"📊 [CRÉDITOS API] Usados este mes: {usados} | Restantes disponibles: {restantes}")
+        else:
+            log(f"⚠️ No se pudieron leer las credenciales. Código API: {res_test.status_code}")
+    except Exception as e:
+        log(f"⚠️ Error de conexión al checar créditos: {e}")
+    # ─────────────────────────────────────────────────────────────
+
     for sport in sports:
         log(f"🔍 Escaneando mercados múltiples para: {sport}...")
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h,totals,spreads,spreads_asian"
         
         try:
             res = requests.get(url, timeout=15)
-            
-            # ---- TELEMETRÍA DE CRÉDITOS EN LOS LOGS DE RENDER ----
-            if res.status_code == 200 and mostrar_creditos:
-                restantes = res.headers.get("x-requests-remaining")
-                usados = res.headers.get("x-requests-used")
-                if restantes is not None and usados is not None:
-                    log(f"📊 [CRÉDITOS API] Usados este mes: {usados} | Restantes disponibles: {restantes}")
-                mostrar_creditos = False # Lo apagamos para las siguientes ligas del mismo ciclo
-                
             if res.status_code != 200:
                 continue
             
@@ -256,7 +263,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: VIP CALIBRADO CON CRÉDITOS")
+    log("🚀 BOT MODE: VIP CALIBRADO CON CRÉDITOS ASEGURADOS")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
