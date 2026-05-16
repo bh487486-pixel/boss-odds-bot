@@ -61,7 +61,7 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     # ---- VALIDACIÓN INICIAL DE CRÉDITOS ----
     log("📊 [API] Verificando estado de la cuenta y créditos...")
-    url_test = f"https://api.the-odds-api.com/v4/sports/{sports[0]}/odds/?apiKey={api_key}&regions=us&markets=h2h"
+    url_test = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey={api_key}&regions=us&markets=h2h&oddsFormat=decimal"
     try:
         res_test = requests.get(url_test, timeout=10)
         if res_test.status_code == 200:
@@ -69,15 +69,21 @@ def buscar_picks(api_key, bot_token, chat_id):
             usados = res_test.headers.get("x-requests-used")
             if restantes is not None and usados is not None:
                 log(f"📊 [CRÉDITOS API] Usados este mes: {usados} | Restantes disponibles: {restantes}")
+        else:
+            log(f"⚠️ No se pudieron leer las credenciales. Código API: {res_test.status_code}")
     except Exception as e:
         log(f"⚠️ Error de conexión al checar créditos: {e}")
 
     for sport in sports:
         log(f"🔍 Escaneando mercados extendidos para: {sport}...")
         
-        # 🔥 INTEGRACIÓN TOTAL DE MERCADOS SOLICITADOS (Córners, Ambos Anotan, Totales, Spreads)
-        mercados_solicitados = "h2h,totals,spreads,btts,soccer_corners"
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets={mercados_solicitados}"
+        # SOLUCIÓN: Separar llamadas según el deporte para no saturar ni confundir los endpoints de la API
+        if "soccer" in sport:
+            mercados_solicitados = "h2h,totals,spreads,btts"
+        else:
+            mercados_solicitados = "h2h,totals,spreads"
+            
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets={mercados_solicitados}&oddsFormat=decimal"
         
         try:
             res = requests.get(url, timeout=15)
@@ -111,7 +117,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 nombre_partido = f"{away_team} vs {home_team}"
                 
-                # Almacén estructurado para procesar las cuotas por mercado
                 mercados_data = {
                     "h2h": {}, "totals": {}, "spreads": {}, 
                     "btts": {}, "soccer_corners": {}
@@ -139,7 +144,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                                     elif o_name == away_team:
                                         label_final = f"Gana {away_team} (Visitante)"
                                         
-                                # 2. MERCADO TOTALES (Goles / Carreras / Córners)
+                                # 2. MERCADO TOTALES (Goles / Carreras)
                                 elif m_key == "totals":
                                     tipo_unidad = "Carreras" if is_baseball else "Goles"
                                     if o_name.lower() == "over":
@@ -163,13 +168,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                                         label_final = "Ambos Equipos Anotan: SÍ"
                                     elif o_name.lower() == "no":
                                         label_final = "Ambos Equipos Anotan: NO"
-                                        
-                                # 5. MERCADO TIROS DE ESQUINA (CÓRNERS)
-                                elif m_key == "soccer_corners":
-                                    if o_name.lower() == "over":
-                                        label_final = f"Altas Córners (Over) {o_point}"
-                                    elif o_name.lower() == "under":
-                                        label_final = f"Bajas Córners (Under) {o_point}"
                                 
                                 if label_final not in mercados_data[m_key]:
                                     mercados_data[m_key][label_final] = []
@@ -182,7 +180,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                             
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         
-                        # CALIBRACIÓN PREMIUM: Rango exacto de 1.40 a 2.50
+                        # CALIBRACIÓN PREMIUM: Rango exacto de 1.40 a 2.50 (Decimal)
                         if 1.40 <= mejor_precio <= 2.50:
                             
                             llave_apuesta = f"{partido_id}_{label}"
@@ -199,7 +197,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                             else:
                                 stake = 4
 
-                            # Redacción de argumentos profesionales automáticos
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
                                 arg = "Proyección directa para el encuentro. Esta casa presenta la cuota más competitiva en el mercado de ganador directo."
@@ -212,9 +209,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                             elif m_key == "btts":
                                 tipo_m = "AMBOS EQUIPOS ANOTAN"
                                 arg = "Lectura ofensiva de las plantillas. El historial reciente y las necesidades de ambos clubes perfilan valor en este mercado."
-                            elif m_key == "soccer_corners":
-                                tipo_m = "TIROS DE ESQUINA (CÓRNERS)"
-                                arg = "Tendencias tácticas de ataque por las bandas. El volumen de juego estimado supera los promedios defensivos estipulados."
 
                             todos_los_picks.append({
                                 "llave_apuesta": llave_apuesta,
