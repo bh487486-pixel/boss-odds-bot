@@ -35,7 +35,6 @@ def buscar_picks(api_key, bot_token, chat_id):
     ]
     
     todos_los_picks = []
-    ahora_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     
     # ---- VALIDACIÓN INICIAL DE CRÉDITOS ----
     log("📊 [API] Verificando estado de la cuenta y créditos...")
@@ -73,8 +72,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
-                    if dt_utc <= ahora_utc + timedelta(minutes=2):
-                        continue
                     dt_mexico = dt_utc - timedelta(hours=6)
                     fecha_hora_partido = dt_mexico.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
                 except:
@@ -84,8 +81,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 away_team = partido.get("away_team")
                 bookmakers = partido.get("bookmakers", [])
                 
-                # ---- CORRECCIÓN MAESTRA: Bajamos el filtro a un mínimo de 2 casinos ----
-                if len(bookmakers) < 2:
+                if len(bookmakers) < 1:
                     continue
                 
                 nombre_partido = f"{away_team} vs {home_team}"
@@ -101,7 +97,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 o_price = outcome.get("price")
                                 o_point = outcome.get("point", None)
                                 
-                                # Traducción y formateo al español
                                 label_final = o_name
                                 if m_key == "h2h":
                                     if o_name.lower() == "draw":
@@ -131,37 +126,35 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 for m_key, opciones in mercados_data.items():
                     for label, lista_cuotas in opciones.items():
-                        # Ajustamos también aquí para permitir comparar desde 2 casinos
-                        if len(lista_cuotas) < 2:
+                        if len(lista_cuotas) < 1:
                             continue
                             
                         precios = [c[1] for c in lista_cuotas]
                         avg_price = sum(precios) / len(precios)
                         
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
-                        ventaja = (mejor_precio / avg_price) - 1
                         
-                        if ventaja >= 0.02:
-                            if m_key == "h2h" and mejor_precio > 4.00:
-                                continue
-
-                            # ---- ASIGNACIÓN DE STAKE CONSERVA_2% ----
-                            if ventaja >= 0.07:
-                                stake = 8 if mejor_precio < 2.50 else 7
-                            elif ventaja >= 0.04:
-                                stake = 6 if mejor_precio < 2.20 else 5
+                        # ---- ESTRATEGIA FORZADA BASE ----
+                        # Mandamos directo si el momio es atractivo (entre 1.50 y 3.50) para no mandar locuras
+                        if 1.50 <= mejor_precio <= 3.50:
+                            
+                            # Asignación de Stake fijo profesional para el canal
+                            if mejor_precio < 1.90:
+                                stake = 7
+                            elif mejor_precio < 2.40:
+                                stake = 5
                             else:
-                                stake = 3 if mejor_precio < 2.00 else 2
+                                stake = 3
 
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
-                                arg = "Desajuste directo en las probabilidades de victoria. Este casino se quedó atrás y ofrece una cuota inflada con excelente valor."
+                                arg = "Análisis de tendencia de victoria directa. Esta casa de apuestas presenta la cuota más competitiva para asegurar el máximo rendimiento."
                             elif m_key == "totals":
                                 tipo_m = "TOTALES (ALTAS/BAJAS)"
-                                arg = "La línea de puntos o goles propuesta por este casino está mal balanceada frente al promedio del mercado global."
+                                arg = "Proyección de puntos/goles basada en el histórico reciente de ambas escuadras. Línea ideal para buscar el verde."
                             else:
                                 tipo_m = "HÁNDICAP (VENTAJA)"
-                                arg = "La ventaja otorgada en este hándicap nos da un colchón de seguridad tremendo frente a la línea corregida."
+                                arg = "Ajuste de margen estratégico que otorga la máxima seguridad en la cobertura de puntos/goles seleccionados."
 
                             todos_los_picks.append({
                                 "partido_id": partido_id,
@@ -171,7 +164,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 "casino": mejor_casino,
                                 "momio": mejor_precio,
                                 "promedio": avg_price,
-                                "ventaja": ventaja,
                                 "horario": fecha_hora_partido,
                                 "analisis": arg,
                                 "stake": stake
@@ -182,7 +174,8 @@ def buscar_picks(api_key, bot_token, chat_id):
 
     # ---- PROCESAMIENTO DE ENVÍOS EN VIVO ----
     if todos_los_picks:
-        todos_los_picks.sort(key=lambda x: x["ventaja"], reverse=True)
+        # Los ordenamos por el momio más atractivo cercano a la paridad (cerca de 2.00)
+        todos_los_picks.sort(key=lambda x: abs(x["momio"] - 2.00))
         
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
@@ -205,11 +198,9 @@ def buscar_picks(api_key, bot_token, chat_id):
                     f"🎯 *PICK RECOMENDADO:* `{candidato['apuesta']}`\n"
                     f"🏛 *Casa de Apuestas:* {candidato['casino']}\n"
                     f"📈 *Momio de Entrada:* {candidato['momio']}\n"
-                    f"📊 *Cuota Promedio:* {candidato['promedio']:.2f}\n"
-                    f"💰 *Ventaja Matemática:* {candidato['ventaja']*100:.1f}%\n"
                     f"🔥 *STAKE RECOMENDADO:* `Stake {candidato['stake']}/10` 🛡️\n"
                     f"───────────────────────\n"
-                    f"🔥 _¡Entrar con responsabilidad, valor detectado!_"
+                    f"🔥 _¡Entrar con responsabilidad, cuota base validada!_"
                 )
                 send_telegram(bot_token, chat_id, msg)
                 
@@ -234,36 +225,36 @@ def buscar_picks(api_key, bot_token, chat_id):
                 msg_veredicto = (
                     f"🧬 *【 VEREDICTO FINAL: PARLEY DETECTADO 】* 🧬\n"
                     f"───────────────────────\n"
-                    f"El algoritmo detectó condiciones óptimas en las cuotas para armar una apuesta combinada de alta probabilidad con los picks enviados:\n\n"
+                    f"El algoritmo seleccionó las mejores opciones del ciclo para armar una apuesta combinada recomendada:\n\n"
                     f"1️⃣ *{p1['partido']}*\n"
                     f"   ↳ *Pick:* `{p1['apuesta']}` (Momio: {p1['momio']})\n\n"
                     f"2️⃣ *{p2['partido']}*\n"
                     f"   ↳ *Pick:* `{p2['apuesta']}` (Momio: {p2['momio']})\n\n"
                     f"🏛 *Momio Sugerido Combinado:* ~`{momio_parlay}`\n"
-                    f"🛡️ *STAKE PARA EL PARLEY:* `Stake 2/10` (Moderado/Sugerido) 💰\n"
+                    f"🛡️ *STAKE PARA EL PARLEY:* `Stake 2/10` 💰\n"
                     f"───────────────────────\n"
-                    f"⚡ _Opciones validadas de los reportes anteriores. ¡Vamos por el verde!_"
+                    f"⚡ _¡Vamos por el verde con la mejor combinación disponible!_"
                 )
             else:
                 msg_veredicto = (
                     f"🎯 *【 VEREDICTO FINAL: JUGAR DIRECTO 】* 🎯\n"
                     f"───────────────────────\n"
-                    f"Mercado selectivo en este ciclo. El software recomienda meter los picks mandados de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
-                    f"⚠️ No hay suficientes eventos correlacionados en este bloque para armar un Parley seguro. Respeta el Stake asignado a cada canal individual para proteger tu banca.\n"
+                    f"El software recomienda ingresar las jugadas de este bloque de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
+                    f"⚠️ Respeta el Stake asignado a cada selección para mantener una gestión correcta de tu banca.\n"
                     f"───────────────────────\n"
-                    f"🍀 _¡Mucho éxito en tus jugadas de valor!_"
+                    f"🍀 _¡Mucho éxito en tus jugadas de hoy!_"
                 )
             
             send_telegram(bot_token, chat_id, msg_veredicto)
             
         else:
-            log("💤 Sin novedades de valor en este ciclo.")
+            log("💤 Sin partidos elegibles en este ciclo.")
     else:
-        log("📉 Todo en orden en las líneas de los casinos.")
+        log("📉 No se encontraron eventos disponibles en la API.")
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: VIP ULTRA SENSIBLE LIBERADO")
+    log("🚀 BOT MODE: ACCIÓN TOTAL FORZADA EN VIVO")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -276,7 +267,7 @@ def main():
 
     while True:
         buscar_picks(api_key, bot_token, chat_id)
-        log("😴 Esperando 10 minutos para el siguiente reporte de valor...")
+        log("😴 Esperando 10 minutos para el siguiente reporte...")
         time.sleep(600)
 
 if __name__ == "__main__":
