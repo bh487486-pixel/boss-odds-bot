@@ -36,23 +36,22 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     todos_los_picks = []
     ahora_utc = datetime.utcnow()
-    mostrar_creditos = True
+    mostrar_creditos = True # Bandera para mostrar créditos una sola vez por ciclo
     
     for sport in sports:
         log(f"🔍 Escaneando mercados múltiples para: {sport}...")
-        # Solicitamos tanto spreads tradicionales como spreads asiáticos para cubrir fútbol y béisbol
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h,totals,spreads,spreads_asian"
         
         try:
             res = requests.get(url, timeout=15)
             
-            # Monitoreo de créditos en Render
+            # ---- TELEMETRÍA DE CRÉDITOS EN LOS LOGS DE RENDER ----
             if res.status_code == 200 and mostrar_creditos:
                 restantes = res.headers.get("x-requests-remaining")
                 usados = res.headers.get("x-requests-used")
                 if restantes is not None and usados is not None:
                     log(f"📊 [CRÉDITOS API] Usados este mes: {usados} | Restantes disponibles: {restantes}")
-                mostrar_creditos = False
+                mostrar_creditos = False # Lo apagamos para las siguientes ligas del mismo ciclo
                 
             if res.status_code != 200:
                 continue
@@ -80,12 +79,10 @@ def buscar_picks(api_key, bot_token, chat_id):
                 away_team = partido.get("away_team")
                 bookmakers = partido.get("bookmakers", [])
                 
-                # Calibración a mínimo 5 casinos para asegurar flujo constante en fin de semana
                 if len(bookmakers) < 5:
                     continue
                 
                 nombre_partido = f"{away_team} vs {home_team}"
-                # Agregamos soporte explícito en el diccionario para spreads_asian
                 mercados_data = {"h2h": {}, "totals": {}, "spreads": {}, "spreads_asian": {}}
                 
                 for bookie in bookmakers:
@@ -128,7 +125,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 for m_key, opciones in mercados_data.items():
                     for label, lista_cuotas in opciones.items():
-                        if len(lista_cuotas) < 3: # Mínimo 3 cuotas diferentes encontradas para comparar
+                        if len(lista_cuotas) < 3:
                             continue
                             
                         precios = [c[1] for c in lista_cuotas]
@@ -137,9 +134,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         ventaja = (mejor_precio / avg_price) - 1
                         
-                        # Calibración a ventaja del 3% (0.03) para capturar el valor real del fin de semana
                         if ventaja >= 0.03:
-                            # Filtro anti-sorpresas imposibles (Tope momio 4.00)
                             if m_key == "h2h" and mejor_precio > 4.00:
                                 continue
 
@@ -261,7 +256,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: VIP CALIBRADO MULTI-MERCADO")
+    log("🚀 BOT MODE: VIP CALIBRADO CON CRÉDITOS")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
