@@ -248,6 +248,18 @@ def main():
         log("❌ ERROR CRÍTICO: Variables ausentes.")
         return
 
+    # ---- 🚀 MENSAJE DE TRANSPARENCIA (SE ENVÍA UNA SOLA VEZ AL ARRANCAR) 🚀 ----
+    msg_inicial = (
+        "🧠 *【 COMUNICADO VIP: SISTEMA DE ANÁLISIS EN VIVO 】* 🧠\n"
+        "───────────────────────\n"
+        "Gente, estamos buscando los picks ideales para ustedes. No se desesperen, que estamos analizando e investigando a fondo los movimientos de las líneas.\n\n"
+        "📊 *Ligas activas en el radar de hoy:* MLB ⚾, LMB 🇲🇽 y Liga MX ⚽.\n"
+        "🔔 _¡Mantengan las notificaciones encendidas, el software está operando!_"
+    )
+    log("📱 [Telegram] Enviando mensaje único de aviso al canal...")
+    send_telegram(bot_token, chat_id, msg_inicial)
+
+    # El bucle repetitivo solo busca cuotas, el aviso quedó afuera para siempre
     while True:
         buscar_picks(api_key, bot_token, chat_id)
         log("😴 Esperando 10 minutos para el siguiente reporte de acción...")
