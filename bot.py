@@ -20,7 +20,7 @@ def send_telegram(token, chat_id, text):
     except Exception as e:
         log(f"❌ [Telegram] Error de conexión: {e}")
 
-# Cambiamos el set simple por un diccionario para controlar el tiempo de expiración
+# Diccionario global para controlar el tiempo de expiración de los partidos
 PARTIDOS_ENVIADOS = {}
 
 def buscar_picks(api_key, bot_token, chat_id):
@@ -81,10 +81,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
                     
                     # ---- FILTRO DE TIEMPO OPTIMIZADO ----
-                    # Saltamos si falta menos de 2 minutos para empezar (filtro cohete)
                     if dt_utc <= ahora_utc + timedelta(minutes=2):
                         continue
-                    # NUEVO: Saltamos partidos lejanos (más de 36 horas en el futuro) para no bloquearlos antes de tiempo
                     if dt_utc > ahora_utc + timedelta(hours=36):
                         continue
                         
@@ -149,6 +147,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                         precios = [c[1] for c in lista_cuotas]
                         avg_price = sum(precios) / len(precios)
                         
+                        # CORREGIDO: Buscamos la cuota máxima usando la posición correcta de la tupla x[1]
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         ventaja = (mejor_precio / avg_price) - 1
                         
@@ -174,7 +173,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 tipo_m = "HÁNDICAP (VENTAJA)"
                                 arg = "La ventaja otorgada en este hándicap nos da un colchón de seguridad tremendo frente a la línea corregida."
 
-                            # COMPLETADO: Guardamos la estructura del pick y añadimos la fecha UTC para control de expiración
                             todos_los_picks.append({
                                 "partido_id": partido_id,
                                 "partido": nombre_partido,
@@ -198,7 +196,6 @@ def buscar_picks(api_key, bot_token, chat_id):
     else:
         log(f"🔥 ¡Se encontraron {len(todos_los_picks)} picks con valor!")
         for pick in todos_los_picks:
-            # Construcción del mensaje en Markdown para Telegram
             mensaje = (
                 f"🚨 *¡ALERTA DE VALOR DETECTADA!* 🚨\n\n"
                 f"⚽ *Partido:* {pick['partido']}\n"
@@ -211,8 +208,5 @@ def buscar_picks(api_key, bot_token, chat_id):
                 f"📝 *Análisis:* {pick['argumento']}"
             )
             
-            # Envío a Telegram
             send_telegram(bot_token, chat_id, mensaje)
-            
-            # Añadimos el partido al registro histórico junto con su hora de inicio UTC
             PARTIDOS_ENVIADOS[pick['partido_id']] = pick['dt_utc']
