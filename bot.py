@@ -14,7 +14,7 @@ def send_telegram(token, chat_id, text):
     try:
         res = requests.post(url, json=payload, timeout=10)
         if res.status_code == 200:
-            log("📱 [Telegram] ¡Análisis VIP en Español enviado!")
+            log("📱 [Telegram] ¡Análisis VIP Multi-Liga enviado!")
         else:
             log(f"❌ [Telegram] Error al enviar: {res.status_code}")
     except Exception as e:
@@ -24,7 +24,15 @@ PARTIDOS_ENVIADOS = set()
 
 def buscar_picks(api_key, bot_token, chat_id):
     global PARTIDOS_ENVIADOS
-    sports = ["baseball_mlb", "soccer_mexico_ligamx"]
+    
+    # MLB, Liga MX, Premier League, LaLiga y Bundesliga
+    sports = [
+        "baseball_mlb", 
+        "soccer_mexico_ligamx",
+        "soccer_epl", 
+        "soccer_spain_la_liga", 
+        "soccer_germany_bundesliga"
+    ]
     
     todos_los_picks = []
     ahora_utc = datetime.utcnow()
@@ -78,7 +86,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 o_price = outcome.get("price")
                                 o_point = outcome.get("point", None)
                                 
-                                # ---- TRADUCCIÓN Y FORMATEO AL ESPAÑOL ----
+                                # Traducción y formateo al español
                                 label_final = o_name
                                 if m_key == "h2h":
                                     if o_name.lower() == "draw":
@@ -95,7 +103,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                                         label_final = f"Bajas (Under) {o_point}"
                                         
                                 elif m_key == "spreads" and o_point is not None:
-                                    # Forzar el signo (+) o (-) visible en el hándicap
                                     try:
                                         num_point = float(o_point)
                                         signo = "+" if num_point > 0 else ""
@@ -145,6 +152,7 @@ def buscar_picks(api_key, bot_token, chat_id):
         except Exception as e:
             log(f"❌ Error escaneando: {e}")
 
+    # ---- ENTRADA AL CANAL (MÁXIMO 7 PARTIDOS DIFERENTES) ----
     if todos_los_picks:
         todos_los_picks.sort(key=lambda x: x["ventaja"], reverse=True)
         
@@ -152,7 +160,8 @@ def buscar_picks(api_key, bot_token, chat_id):
         partidos_usados_en_este_ciclo = set()
         
         for candidato in todos_los_picks:
-            if picks_enviados_ciclo >= 6:
+            # Límite actualizado a 7 picks por ciclo
+            if picks_enviados_ciclo >= 7:
                 break
                 
             p_id = candidato["partido_id"]
@@ -187,7 +196,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: SUPER TIPSTER ESPAÑOL PRO ACTIVADO")
+    log("🚀 BOT MODE: SUPER TIPSTER 7 PICKS ACTIVADO")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -200,8 +209,9 @@ def main():
 
     while True:
         buscar_picks(api_key, bot_token, chat_id)
-        log("😴 Esperando 5 minutos para el siguiente reporte de valor...")
-        time.sleep(300)
+        # 10 minutos de espera activos (600 segundos)
+        log("😴 Esperando 10 minutos para el siguiente reporte de valor...")
+        time.sleep(600)
 
 if __name__ == "__main__":
     main()
