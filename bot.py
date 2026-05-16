@@ -106,6 +106,13 @@ def buscar_picks(api_key, bot_token, chat_id):
                 if fecha_partido != fecha_hoy_mx and fecha_partido != fecha_manana_mx:
                     continue
                 
+                # 🎯 FILTRO RADAR DE PRIORIDAD: Ignorar partidos en vivo y priorizar los que van a empezar
+                # Exigimos que falten al menos 2 minutos (120 segundos) para el playball/silbatazo inicial
+                diferencia_tiempo = (dt_mexico_partido - dt_mexico).total_seconds()
+                if diferencia_tiempo < 120:
+                    log(f"⏭️ Descartando {partido.get('away_team')} vs {partido.get('home_team')} por estar en vivo o a punto de iniciar.")
+                    continue
+                
                 home_team = partido.get("home_team")
                 away_team = partido.get("away_team")
                 bookmakers = partido.get("bookmakers", [])
@@ -196,7 +203,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
-                                arg = "Proyección directa para el encuentro. Esta casa presents la cuota más competitiva en el mercado de ganador directo."
+                                arg = "Proyección directa para el encuentro. Esta casa presenta la cuota más competitiva en el mercado de ganador directo."
                             elif m_key == "totals":
                                 tipo_m = "TOTALES (ALTAS/BAJAS)"
                                 arg = "Análisis matemático del mercado de anotaciones totales. Las condiciones del partido abren una ventana ideal para esta línea regularizada."
@@ -225,7 +232,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 "momio_dec": valor_decimal_interno,
                                 "horario": fecha_hora_partido,
                                 "analisis": arg,
-                                "stake": stake
+                                "stake": stake,
+                                "tiempo_restante": diferencia_tiempo # Guardamos para ordenar por cercanía
                             })
                             
         except Exception as e:
@@ -236,6 +244,9 @@ def buscar_picks(api_key, bot_token, chat_id):
         CICLOS_VACIOS_CONSECUTIVOS = 0
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
+        
+        # 🔥 ORDENAR POR PROXIMIDAD: Los que van a empezar más pronto van primero en la fila
+        todos_los_picks = sorted(todos_los_picks, key=lambda x: x["tiempo_restante"])
         
         for candidato in todos_los_picks:
             if len(picks_enviados_en_este_ciclo) >= 7:
@@ -333,7 +344,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("--------------------------------------------------")
-    log("🚀 BOT MODE: TEMPORIZADOR DE PRECISIÓN DINÁMICA")
+    log("🚀 BOT MODE: PRIORIDAD FUTURA Y RELOJ SIN DESFASE")
     log("--------------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -347,18 +358,13 @@ def main():
     intervalo_objetivo = 600  # 10 minutos exactos en segundos
 
     while True:
-        # 🕒 Guardamos la marca de tiempo exacta del inicio del ciclo
         tiempo_inicio = time.time()
         
         buscar_picks(api_key, bot_token, chat_id)
         
-        # ⏳ Calculamos cuánto tiempo real tardó el bot en trabajar en este ciclo
         tiempo_transcurrido = time.time() - tiempo_inicio
-        
-        # 🎯 Restamos el tiempo de trabajo para calcular la espera exacta sobrante
         tiempo_espera_final = intervalo_objetivo - tiempo_transcurrido
         
-        # Validación de seguridad por si las peticiones tardaron más de 10 minutos (caso extremo)
         if tiempo_espera_final < 1:
             tiempo_espera_final = 1
             
