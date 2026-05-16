@@ -40,7 +40,8 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     for sport in sports:
         log(f"🔍 Escaneando mercados múltiples para: {sport}...")
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h,totals,spreads"
+        # Solicitamos tanto spreads tradicionales como spreads asiáticos para cubrir fútbol y béisbol
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h,totals,spreads,spreads_asian"
         
         try:
             res = requests.get(url, timeout=15)
@@ -79,11 +80,13 @@ def buscar_picks(api_key, bot_token, chat_id):
                 away_team = partido.get("away_team")
                 bookmakers = partido.get("bookmakers", [])
                 
-                if len(bookmakers) < 7:
+                # Calibración a mínimo 5 casinos para asegurar flujo constante en fin de semana
+                if len(bookmakers) < 5:
                     continue
                 
                 nombre_partido = f"{away_team} vs {home_team}"
-                mercados_data = {"h2h": {}, "totals": {}, "spreads": {}}
+                # Agregamos soporte explícito en el diccionario para spreads_asian
+                mercados_data = {"h2h": {}, "totals": {}, "spreads": {}, "spreads_asian": {}}
                 
                 for bookie in bookmakers:
                     b_title = bookie.get("title")
@@ -111,7 +114,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                                     elif o_name.lower() == "under":
                                         label_final = f"Bajas (Under) {o_point}"
                                         
-                                elif m_key == "spreads" and o_point is not None:
+                                elif (m_key == "spreads" or m_key == "spreads_asian") and o_point is not None:
                                     try:
                                         num_point = float(o_point)
                                         signo = "+" if num_point > 0 else ""
@@ -125,7 +128,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 for m_key, opciones in mercados_data.items():
                     for label, lista_cuotas in opciones.items():
-                        if len(lista_cuotas) < 4:
+                        if len(lista_cuotas) < 3: # Mínimo 3 cuotas diferentes encontradas para comparar
                             continue
                             
                         precios = [c[1] for c in lista_cuotas]
@@ -134,20 +137,19 @@ def buscar_picks(api_key, bot_token, chat_id):
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         ventaja = (mejor_precio / avg_price) - 1
                         
-                        if ventaja >= 0.04:
+                        # Calibración a ventaja del 3% (0.03) para capturar el valor real del fin de semana
+                        if ventaja >= 0.03:
                             # Filtro anti-sorpresas imposibles (Tope momio 4.00)
                             if m_key == "h2h" and mejor_precio > 4.00:
                                 continue
 
-                            # ---- ASIGNACIÓN DE STAKE PROFESIONAL (1 al 10) ----
-                            if ventaja >= 0.10:
-                                stake = 10
-                            elif ventaja >= 0.08:
-                                stake = 8 if mejor_precio < 2.50 else 7
-                            elif ventaja >= 0.06:
-                                stake = 6 if mejor_precio < 2.20 else 5
+                            # ---- ASIGNACIÓN DE STAKE PROFESIONAL ----
+                            if ventaja >= 0.08:
+                                stake = 9 if mejor_precio < 2.50 else 8
+                            elif ventaja >= 0.05:
+                                stake = 7 if mejor_precio < 2.20 else 6
                             else:
-                                stake = 4 if mejor_precio < 2.00 else 3
+                                stake = 5 if mejor_precio < 2.00 else 4
 
                             if m_key == "h2h":
                                 tipo_m = "LÍNEA DE DINERO (GANADOR)"
@@ -183,7 +185,6 @@ def buscar_picks(api_key, bot_token, chat_id):
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
         
-        # Enviar máximo 7 individuales primero
         for candidato in todos_los_picks:
             if len(picks_enviados_en_este_ciclo) >= 7:
                 break
@@ -213,16 +214,15 @@ def buscar_picks(api_key, bot_token, chat_id):
                 PARTIDOS_ENVIADOS.add(p_id)
                 partidos_usados_en_este_ciclo.add(p_id)
                 picks_enviados_en_este_ciclo.append(candidato)
-                time.sleep(2) # Respiro para evitar bloqueos de Telegram
+                time.sleep(2)
 
         # 🧬 ---- SECCIÓN DE VEREDICTO FINAL DEL CICLO ---- 🧬
         num_picks = len(picks_enviados_en_este_ciclo)
         
         if num_picks >= 1:
-            time.sleep(3) # Pausa estratégica para que el veredicto caiga al último de la ráfaga
+            time.sleep(3)
             
             if num_picks >= 3:
-                # El bot arma el parlay estrictamente con los 2 de mayor stake que SÍ se mandaron arriba
                 picks_ordenados_stake = sorted(picks_enviados_en_este_ciclo, key=lambda x: x["stake"], reverse=True)
                 p1 = picks_ordenados_stake[0]
                 p2 = picks_ordenados_stake[1]
@@ -243,7 +243,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                     f"⚡ _Opciones validadas de los reportes anteriores. ¡Vamos por el verde!_"
                 )
             else:
-                # Si solo hay 1 o 2 picks en total, les dice que vayan en directo
                 msg_veredicto = (
                     f"🎯 *【 VEREDICTO FINAL: JUGAR DIRECTO 】* 🎯\n"
                     f"───────────────────────\n"
@@ -262,7 +261,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: VIP CON STAKE Y VEREDICTO PARLEY")
+    log("🚀 BOT MODE: VIP CALIBRADO MULTI-MERCADO")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
