@@ -29,7 +29,10 @@ def buscar_picks(api_key, bot_token, chat_id):
     global PICKS_ENVIADOS_REGISTRO, ULTIMA_FECHA_SALUDO, CICLOS_VACIOS_CONSECUTIVOS, AVISO_ESPERA_ENVIADO
     
     # 🕒 HORA ACTUAL DEL ESTADO DE MÉXICO (UTC-6)
-    dt_mexico = datetime.now(timezone.utc) - timedelta(hours=6)
+    dt_mexico_raw = datetime.now(timezone.utc) - timedelta(hours=6)
+    # Limpiamos la zona horaria para evitar el error de offset-aware vs offset-naive
+    dt_mexico = dt_mexico_raw.replace(tzinfo=None)
+    
     fecha_hoy_mx = dt_mexico.strftime("%Y-%m-%d")
     hora_hoy_mx = dt_mexico.hour
     
@@ -50,7 +53,7 @@ def buscar_picks(api_key, bot_token, chat_id):
         ULTIMA_FECHA_SALUDO = fecha_hoy_mx 
         time.sleep(2)
 
-    # TRIDENTE: MLB, LMB y Liga MX
+    # TRIDENTE COMPLETO: MLB, LMB y Liga MX
     sports = [
         "baseball_mlb",
         "baseball_mexican_lmb",
@@ -97,7 +100,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
-                    dt_mexico_partido = dt_utc - timedelta(hours=6)
+                    dt_mexico_partido = (dt_utc - timedelta(hours=6)).replace(tzinfo=None) # Limpiamos zona horaria aquí también
                     fecha_partido = dt_mexico_partido.strftime("%Y-%m-%d")
                     fecha_hora_partido = dt_mexico_partido.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
                 except:
@@ -106,8 +109,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                 if fecha_partido != fecha_hoy_mx and fecha_partido != fecha_manana_mx:
                     continue
                 
-                # 🎯 FILTRO RADAR DE PRIORIDAD: Ignorar partidos en vivo y priorizar los que van a empezar
-                # Exigimos que falten al menos 2 minutos (120 segundos) para el playball/silbatazo inicial
+                # 🎯 FILTRO RADAR DE PRIORIDAD: Ignorar en vivo y priorizar los que van a empezar
+                # Exigimos que falten al menos 2 minutos (120 segundos) para iniciar
                 diferencia_tiempo = (dt_mexico_partido - dt_mexico).total_seconds()
                 if diferencia_tiempo < 120:
                     log(f"⏭️ Descartando {partido.get('away_team')} vs {partido.get('home_team')} por estar en vivo o a punto de iniciar.")
@@ -233,7 +236,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 "horario": fecha_hora_partido,
                                 "analisis": arg,
                                 "stake": stake,
-                                "tiempo_restante": diferencia_tiempo # Guardamos para ordenar por cercanía
+                                "tiempo_restante": diferencia_tiempo
                             })
                             
         except Exception as e:
@@ -245,7 +248,7 @@ def buscar_picks(api_key, bot_token, chat_id):
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
         
-        # 🔥 ORDENAR POR PROXIMIDAD: Los que van a empezar más pronto van primero en la fila
+        # Ordenamos por proximidad para poner los que van a empezar primero en la fila
         todos_los_picks = sorted(todos_los_picks, key=lambda x: x["tiempo_restante"])
         
         for candidato in todos_los_picks:
@@ -318,7 +321,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 msg_veredicto = (
                     f"🎯 *【 VEREDICTO FINAL: JUGAR DIRECTO 】* 🎯\n"
                     f"───────────────────────\n"
-                    f"El software recomienda ingresar las jugadas de este bloque de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
+                    f"El software recommends ingresar las jugadas de este bloque de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
                     f"📊 Las condiciones actuales del mercado sugieren proteger capital. No se detectan combinaciones con la estabilidad necesaria para un Parley.\n"
                     f"⚠️ Respeta el Stake asignado a cada selección para mantener un control sano de tu banca.\n"
                     f"───────────────────────\n"
@@ -344,7 +347,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("--------------------------------------------------")
-    log("🚀 BOT MODE: PRIORIDAD FUTURA Y RELOJ SIN DESFASE")
+    log("🚀 BOT MODE: REESTRUCTURACIÓN DE COMPATIBILIDAD DE HORA")
     log("--------------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -355,7 +358,7 @@ def main():
         log("❌ ERROR CRÍTICO: Variables ausentes.")
         return
 
-    intervalo_objetivo = 600  # 10 minutos exactos en segundos
+    intervalo_objetivo = 600
 
     while True:
         tiempo_inicio = time.time()
