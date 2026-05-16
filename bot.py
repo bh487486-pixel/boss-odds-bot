@@ -73,7 +73,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
-                    if dt_utc <= ahora_utc + timedelta(minutes=15):
+                    # ---- AJUSTE COHETE: Filtro de seguridad bajado a 2 minutos ----
+                    if dt_utc <= ahora_utc + timedelta(minutes=2):
                         continue
                     dt_mexico = dt_utc - timedelta(hours=6)
                     fecha_hora_partido = dt_mexico.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
@@ -139,7 +140,6 @@ def buscar_picks(api_key, bot_token, chat_id):
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         ventaja = (mejor_precio / avg_price) - 1
                         
-                        # ---- CALIBRACIÓN AL 2% DE VENTAJA MÍNIMA ----
                         if ventaja >= 0.02:
                             if m_key == "h2h" and mejor_precio > 4.00:
                                 continue
@@ -262,7 +262,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("------------------------------------------")
-    log("🚀 BOT MODE: VIP CON VENTAJAS DEL 2% ACTIVA")
+    log("🚀 BOT MODE: VIP CALIBRADO MARGEN 2 MINUTOS")
     log("------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
