@@ -9,7 +9,7 @@ def log(msg):
     sys.stdout.flush()
 
 def send_telegram(token, chat_id, text):
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    url = f"https://telegram.org{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     try:
         res = requests.post(url, json=payload, timeout=10)
@@ -20,7 +20,8 @@ def send_telegram(token, chat_id, text):
     except Exception as e:
         log(f"❌ [Telegram] Error de conexión: {e}")
 
-PARTIDOS_ENVIADOS = set()
+# Cambiamos el set simple por un diccionario para controlar el tiempo de expiración
+PARTIDOS_ENVIADOS = {}
 
 def buscar_picks(api_key, bot_token, chat_id):
     global PARTIDOS_ENVIADOS
@@ -37,9 +38,13 @@ def buscar_picks(api_key, bot_token, chat_id):
     todos_los_picks = []
     ahora_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     
+    # ---- LIMPIEZA AUTOMÁTICA DE MEMORIA ----
+    # Eliminamos partidos guardados cuya hora de inicio ya pasó hace más de 3 horas
+    PARTIDOS_ENVIADOS = {pid: exp_time for pid, exp_time in PARTIDOS_ENVIADOS.items() if exp_time > ahora_utc - timedelta(hours=3)}
+    
     # ---- VALIDACIÓN INICIAL DE CRÉDITOS ----
     log("📊 [API] Verificando estado de la cuenta y créditos...")
-    url_test = f"https://api.the-odds-api.com/v4/sports/{sports[0]}/odds/?apiKey={api_key}&regions=us&markets=h2h"
+    url_test = f"https://the-odds-api.com{sports[0]}/odds/?apiKey={api_key}&regions=us&markets=h2h"
     try:
         res_test = requests.get(url_test, timeout=10)
         if res_test.status_code == 200:
@@ -54,7 +59,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
     for sport in sports:
         log(f"🔍 Escaneando mercados múltiples para: {sport}...")
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h,totals,spreads,spreads_asian"
+        url = f"https://the-odds-api.com{sport}/odds/?apiKey={api_key}&regions=us,eu&markets=h2h,totals,spreads,spreads_asian"
         
         try:
             res = requests.get(url, timeout=15)
@@ -66,6 +71,7 @@ def buscar_picks(api_key, bot_token, chat_id):
             for partido in partidos:
                 partido_id = partido.get("id")
                 
+                # Si el partido ya fue procesado y enviado, lo saltamos
                 if partido_id in PARTIDOS_ENVIADOS:
                     continue
                     
@@ -73,9 +79,15 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
-                    # ---- AJUSTE COHETE: Filtro de seguridad bajado a 2 minutos ----
+                    
+                    # ---- FILTRO DE TIEMPO OPTIMIZADO ----
+                    # Saltamos si falta menos de 2 minutos para empezar (filtro cohete)
                     if dt_utc <= ahora_utc + timedelta(minutes=2):
                         continue
+                    # NUEVO: Saltamos partidos lejanos (más de 36 horas en el futuro) para no bloquearlos antes de tiempo
+                    if dt_utc > ahora_utc + timedelta(hours=36):
+                        continue
+                        
                     dt_mexico = dt_utc - timedelta(hours=6)
                     fecha_hora_partido = dt_mexico.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
                 except:
@@ -162,121 +174,45 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 tipo_m = "HÁNDICAP (VENTAJA)"
                                 arg = "La ventaja otorgada en este hándicap nos da un colchón de seguridad tremendo frente a la línea corregida."
 
+                            # COMPLETADO: Guardamos la estructura del pick y añadimos la fecha UTC para control de expiración
                             todos_los_picks.append({
                                 "partido_id": partido_id,
                                 "partido": nombre_partido,
                                 "mercado": tipo_m,
                                 "apuesta": label,
                                 "casino": mejor_casino,
-                                "momio": mejor_precio,
-                                "promedio": avg_price,
+                                "cuota": mejor_precio,
                                 "ventaja": ventaja,
-                                "horario": fecha_hora_partido,
-                                "analisis": arg,
-                                "stake": stake
+                                "stake": stake,
+                                "fecha": fecha_hora_partido,
+                                "dt_utc": dt_utc,
+                                "argumento": arg
                             })
-                            
         except Exception as e:
-            log(f"❌ Error escaneando: {e}")
+            log(f"⚠️ Error al procesar deportes en {sport}: {e}")
+            continue
 
-    # ---- PROCESAMIENTO DE ENVÍOS EN VIVO ----
-    if todos_los_picks:
-        todos_los_picks.sort(key=lambda x: x["ventaja"], reverse=True)
-        
-        picks_enviados_en_este_ciclo = []
-        partidos_usados_en_este_ciclo = set()
-        
-        for candidato in todos_los_picks:
-            if len(picks_enviados_en_este_ciclo) >= 7:
-                break
-                
-            p_id = candidato["partido_id"]
-            
-            if p_id not in PARTIDOS_ENVIADOS and p_id not in partidos_usados_en_este_ciclo:
-                msg = (
-                    f"🧠 *【 ANÁLISIS PROFESIONAL VIP 】* 🧠\n"
-                    f"───────────────────────\n"
-                    f"📅 *Evento:* {candidato['horario']}\n"
-                    f"⚔️ *Encuentro:* {candidato['partido']}\n"
-                    f"📊 *Mercado:* `{candidato['mercado']}`\n\n"
-                    f"📝 *LECTURA DEL ENCUENTRO:*\n"
-                    f"_{candidato['analisis']}_\n\n"
-                    f"🎯 *PICK RECOMENDADO:* `{candidato['apuesta']}`\n"
-                    f"🏛 *Casa de Apuestas:* {candidato['casino']}\n"
-                    f"📈 *Momio de Entrada:* {candidato['momio']}\n"
-                    f"📊 *Cuota Promedio:* {candidato['promedio']:.2f}\n"
-                    f"💰 *Ventaja Matemática:* {candidato['ventaja']*100:.1f}%\n"
-                    f"🔥 *STAKE RECOMENDADO:* `Stake {candidato['stake']}/10` 🛡️\n"
-                    f"───────────────────────\n"
-                    f"🔥 _¡Entrar con responsabilidad, valor detectado!_"
-                )
-                send_telegram(bot_token, chat_id, msg)
-                
-                PARTIDOS_ENVIADOS.add(p_id)
-                partidos_usados_en_este_ciclo.add(p_id)
-                picks_enviados_en_este_ciclo.append(candidato)
-                time.sleep(2)
-
-        # 🧬 ---- SECCIÓN DE VEREDICTO FINAL DEL CICLO ---- 🧬
-        num_picks = len(picks_enviados_en_este_ciclo)
-        
-        if num_picks >= 1:
-            time.sleep(3)
-            
-            if num_picks >= 3:
-                picks_ordenados_stake = sorted(picks_enviados_en_este_ciclo, key=lambda x: x["stake"], reverse=True)
-                p1 = picks_ordenados_stake[0]
-                p2 = picks_ordenados_stake[1]
-                
-                momio_parlay = round(p1["momio"] * p2["momio"], 2)
-                
-                msg_veredicto = (
-                    f"🧬 *【 VEREDICTO FINAL: PARLEY DETECTADO 】* 🧬\n"
-                    f"───────────────────────\n"
-                    f"El algoritmo detectó condiciones óptimas en las cuotas para armar una apuesta combinada de alta probabilidad con los picks enviados:\n\n"
-                    f"1️⃣ *{p1['partido']}*\n"
-                    f"   ↳ *Pick:* `{p1['apuesta']}` (Momio: {p1['momio']})\n\n"
-                    f"2️⃣ *{p2['partido']}*\n"
-                    f"   ↳ *Pick:* `{p2['apuesta']}` (Momio: {p2['momio']})\n\n"
-                    f"🏛 *Momio Sugerido Combinado:* ~`{momio_parlay}`\n"
-                    f"🛡️ *STAKE PARA EL PARLEY:* `Stake 2/10` (Moderado/Sugerido) 💰\n"
-                    f"───────────────────────\n"
-                    f"⚡ _Opciones validadas de los reportes anteriores. ¡Vamos por el verde!_"
-                )
-            else:
-                msg_veredicto = (
-                    f"🎯 *【 VEREDICTO FINAL: JUGAR DIRECTO 】* 🎯\n"
-                    f"───────────────────────\n"
-                    f"Mercado selectivo en este ciclo. El software recomienda meter los picks mandados de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
-                    f"⚠️ No hay suficientes eventos correlacionados en este bloque para armar un Parley seguro. Respeta el Stake asignado a cada canal individual para proteger tu banca.\n"
-                    f"───────────────────────\n"
-                    f"🍀 _¡Mucho éxito en tus jugadas de valor!_"
-                )
-            
-            send_telegram(bot_token, chat_id, msg_veredicto)
-            
-        else:
-            log("💤 Sin novedades de valor en este ciclo.")
+    # ---- PROCESAMIENTO Y ENVÍO DE ALERTAS FINALES ----
+    if not todos_los_picks:
+        log("📋 Todo en orden en las líneas de los casinos. No hay desajustes de valor.")
     else:
-        log("📉 Todo en orden en las líneas de los casinos.")
-
-def main():
-    log("------------------------------------------")
-    log("🚀 BOT MODE: VIP CALIBRADO MARGEN 2 MINUTOS")
-    log("------------------------------------------")
-    
-    api_key = os.getenv("ODDS_API_KEY")
-    bot_token = os.getenv("BOT_TOKEN")
-    chat_id = os.getenv("CHAT_ID")
-    
-    if not api_key or not bot_token or not chat_id:
-        log("❌ ERROR CRÍTICO: Variables ausentes.")
-        return
-
-    while True:
-        buscar_picks(api_key, bot_token, chat_id)
-        log("😴 Esperando 10 minutos para el siguiente reporte de valor...")
-        time.sleep(600)
-
-if __name__ == "__main__":
-    main()
+        log(f"🔥 ¡Se encontraron {len(todos_los_picks)} picks con valor!")
+        for pick in todos_los_picks:
+            # Construcción del mensaje en Markdown para Telegram
+            mensaje = (
+                f"🚨 *¡ALERTA DE VALOR DETECTADA!* 🚨\n\n"
+                f"⚽ *Partido:* {pick['partido']}\n"
+                f"📅 *Horario:* {pick['fecha']}\n"
+                f"🎯 *Mercado:* {pick['mercado']}\n"
+                f"✅ *Selección:* {pick['apuesta']}\n"
+                f"💰 *Casino:* {pick['casino']} | *Cuota:* {pick['cuota']}\n"
+                f"📊 *Ventaja detectada:* {pick['ventaja']*100:.2f}%\n"
+                f"💪 *Stake Recomendado:* {pick['stake']}/10\n\n"
+                f"📝 *Análisis:* {pick['argumento']}"
+            )
+            
+            # Envío a Telegram
+            send_telegram(bot_token, chat_id, mensaje)
+            
+            # Añadimos el partido al registro histórico junto con su hora de inicio UTC
+            PARTIDOS_ENVIADOS[pick['partido_id']] = pick['dt_utc']
