@@ -30,7 +30,6 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     # 🕒 HORA ACTUAL DEL ESTADO DE MÉXICO (UTC-6)
     dt_mexico_raw = datetime.now(timezone.utc) - timedelta(hours=6)
-    # Limpiamos la zona horaria para evitar el error de offset-aware vs offset-naive
     dt_mexico = dt_mexico_raw.replace(tzinfo=None)
     
     fecha_hoy_mx = dt_mexico.strftime("%Y-%m-%d")
@@ -100,7 +99,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
-                    dt_mexico_partido = (dt_utc - timedelta(hours=6)).replace(tzinfo=None) # Limpiamos zona horaria aquí también
+                    dt_mexico_partido = (dt_utc - timedelta(hours=6)).replace(tzinfo=None)
                     fecha_partido = dt_mexico_partido.strftime("%Y-%m-%d")
                     fecha_hora_partido = dt_mexico_partido.strftime("%Y-%m-%d a las %H:%M MX 🇲🇽")
                 except:
@@ -109,8 +108,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 if fecha_partido != fecha_hoy_mx and fecha_partido != fecha_manana_mx:
                     continue
                 
-                # 🎯 FILTRO RADAR DE PRIORIDAD: Ignorar en vivo y priorizar los que van a empezar
-                # Exigimos que falten al menos 2 minutos (120 segundos) para iniciar
+                # 🎯 FILTRO RADAR DE PRIORIDAD: Ignorar en vivo y exigir mínimo 2 minutos futuros
                 diferencia_tiempo = (dt_mexico_partido - dt_mexico).total_seconds()
                 if diferencia_tiempo < 120:
                     log(f"⏭️ Descartando {partido.get('away_team')} vs {partido.get('home_team')} por estar en vivo o a punto de iniciar.")
@@ -242,13 +240,13 @@ def buscar_picks(api_key, bot_token, chat_id):
         except Exception as e:
             log(f"❌ Error escaneando: {e}")
 
-    # ---- PROCESAMIENTO DE ENVÍOS EN VIVO ----
+    # ---- PROCESAMIENTO DE ENVÍOS ----
     if todos_los_picks:
         CICLOS_VACIOS_CONSECUTIVOS = 0
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
         
-        # Ordenamos por proximidad para poner los que van a empezar primero en la fila
+        # Ordenamos por proximidad de horario
         todos_los_picks = sorted(todos_los_picks, key=lambda x: x["tiempo_restante"])
         
         for candidato in todos_los_picks:
@@ -287,7 +285,9 @@ def buscar_picks(api_key, bot_token, chat_id):
             
             parley_armado = False
             
-            if num_picks >= 3:
+            # 🧬 FILTRO INTELIGENTE PARA DECIDIR VEREDICTO DE PARLEY O DIRECTO
+            if num_picks >= 2:
+                # Ordenamos por nivel de Stake enviado
                 picks_ordenados_confianza = sorted(picks_enviados_en_este_ciclo, key=lambda x: x["stake"], reverse=True)
                 p1 = picks_ordenados_confianza[0]
                 p2 = picks_ordenados_confianza[1]
@@ -301,31 +301,33 @@ def buscar_picks(api_key, bot_token, chat_id):
                     ame_val = int(-100 / (momio_combinado_dec - 1))
                     momio_parlay_texto = str(ame_val)
                 
-                if p1["stake"] >= 6 and p2["stake"] >= 6 and (2.20 <= momio_combinado_dec <= 4.50):
+                # SÓLO arma parlay si AMBOS son de alta confianza y el momio no es una locura incomprobable
+                if p1["stake"] >= 6 and p2["stake"] >= 6 and (2.00 <= momio_combinado_dec <= 5.00):
                     msg_veredicto = (
-                        f"🧬 *【 VEREDICTO FINAL: PARLEY DETECTADO 】* 🧬\n"
+                        f"🧬 *【 VEREDICTO SUGERIDO: PARLAY PRESTABLECIDO 】* 🧬\n"
                         f"───────────────────────\n"
-                        f"El algoritmo detectó alta probabilidad combinada en este ciclo. Armamos un parlay premium de seguridad:\n\n"
+                        f"El algoritmo detectó compatibilidad óptima para armar una combinada premium de confianza alta:\n\n"
                         f"1️⃣ *{p1['partido']}*\n"
                         f"   ↳ *Pick:* `{p1['apuesta']}` (Momio: {p1['momio']})\n\n"
                         f"2️⃣ *{p2['partido']}*\n"
                         f"   ↳ *Pick:* `{p2['apuesta']}` (Momio: {p2['momio']})\n\n"
                         f"🏛 *Momio Sugerido Combinado:* ~`{momio_parlay_texto}` 🇺🇸\n"
-                        f"🛡️ *STAKE PARA EL PARLEY:* `Stake 2/10` 💰\n"
+                        f"🛡️ *STAKE GENERAL:* `Stake 2/10` 💰\n"
                         f"───────────────────────\n"
-                        f"⚡ _¡Vamos por las verdes con esta combinación premium hoy!_"
+                        f"💡 *CONSEJO DEL SOFTWARE:* Si deseas mitigar riesgos, recuerda que tienes total libertad de meter estas dos jugadas de forma *INDIVIDUAL (Picks Únicos)* respetando su stake de origen. ¡La última palabra la tienes tú!"
                     )
                     parley_armado = True
             
+            # Si no califica para parlay seguro, se va obligatorio a sugerencia Individual
             if not parley_armado:
                 msg_veredicto = (
-                    f"🎯 *【 VEREDICTO FINAL: JUGAR DIRECTO 】* 🎯\n"
+                    f"🎯 *【 VEREDICTO SUGERIDO: JUGAR EN DIRECTO 】* 🎯\n"
                     f"───────────────────────\n"
-                    f"El software recommends ingresar las jugadas de este bloque de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
-                    f"📊 Las condiciones actuales del mercado sugieren proteger capital. No se detectan combinaciones con la estabilidad necesaria para un Parley.\n"
-                    f"⚠️ Respeta el Stake asignado a cada selección para mantener un control sano de tu banca.\n"
+                    f"El software recomienda ingresar las jugadas enviadas en este bloque de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
+                    f"📊 Las variaciones de las cuotas sugieren proteger el capital plano. No se detecta una combinación con la estabilidad necesaria para arriesgar un Parley.\n\n"
+                    f"💡 *OPCIÓN DEL SUSCRIPTOR:* Si te agrada el riesgo y decides combinarlas en un boleto por tu cuenta, utiliza un **Stake bajo (1/10 o 2/10)** para cuidar tu banca.\n"
                     f"───────────────────────\n"
-                    f"🍀 _¡Mucho éxito en tus jugadas directas de hoy!_"
+                    f"🍀 _¡Mucho éxito en la jornada de hoy!_"
                 )
                 
             send_telegram(bot_token, chat_id, msg_veredicto)
@@ -347,7 +349,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("--------------------------------------------------")
-    log("🚀 BOT MODE: REESTRUCTURACIÓN DE COMPATIBILIDAD DE HORA")
+    log("🚀 BOT MODE: CALIBRACIÓN DE VEREDICTOS FLEXIBLES")
     log("--------------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -362,9 +364,7 @@ def main():
 
     while True:
         tiempo_inicio = time.time()
-        
         buscar_picks(api_key, bot_token, chat_id)
-        
         tiempo_transcurrido = time.time() - tiempo_inicio
         tiempo_espera_final = intervalo_objetivo - tiempo_transcurrido
         
@@ -373,7 +373,6 @@ def main():
             
         log(f"⏱️ Ciclo completado en {round(tiempo_transcurrido, 2)} segundos.")
         log(f"😴 Esperando {round(tiempo_espera_final, 2)} segundos exactos para clavar los 10 minutos...")
-        
         time.sleep(tiempo_espera_final)
 
 if __name__ == "__main__":
