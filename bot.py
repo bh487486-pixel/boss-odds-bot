@@ -226,6 +226,11 @@ def buscar_picks(api_key, bot_token, chat_id):
                 diferencia_tiempo = (dt_mexico_partido - dt_mexico).total_seconds()
                 es_en_vivo = diferencia_tiempo <= 0
                 
+                # CANDADO DE TIEMPO EXTRA CRÍTICO: Si el partido empezó hace más de 4 horas, se ignora.
+                if es_en_vivo and diferencia_tiempo < -14400:
+                    log(f"⚠️ [Filtro] Partido {partido.get('home_team')} ignorado porque empezó hace más de 4 horas.")
+                    continue
+                
                 home_team = partido.get("home_team")
                 away_team = partido.get("away_team")
                 bookmakers = partido.get("bookmakers", [])
@@ -324,7 +329,7 @@ def buscar_picks(api_key, bot_token, chat_id):
         # 1. Prioriza los En Vivo primero, luego ordena por cercanía de tiempo
         todos_los_picks = sorted(todos_los_picks, key=lambda x: (not x["es_en_vivo"], x["tiempo_restante"]))
         
-        # 🎯 2. FILTRO ABSOLUTO DE DUPLICADOS CONTRA-APUESTAS (Solo una propuesta por juego por vuelta)
+        # 2. FILTRO ABSOLUTO DE DUPLICADOS (Solo una propuesta por juego por vuelta)
         picks_filtrados_unicos = []
         partidos_ya_agregados_pre_envio = set()
         
@@ -333,9 +338,9 @@ def buscar_picks(api_key, bot_token, chat_id):
                 picks_filtrados_unicos.append(p)
                 partidos_ya_agregados_pre_envio.add(p["partido_id"])
         
-        # 3. Ciclo de envío a Telegram (Máximo 7 selecciones por ciclo / 4 partidos en parley mixto)
+        # 🛡️ 3. Ciclo de envío a Telegram (MÁXIMO 4 SELECCIONES POR VUELTA)
         for candidato in picks_filtrados_unicos:
-            if len(picks_enviados_en_este_ciclo) >= 7: break 
+            if len(picks_enviados_en_este_ciclo) >= 4: break 
             
             p_id = candidato["partido_id"]
             llave = candidato["llave_apuesta"]
