@@ -51,7 +51,6 @@ def evaluar_resultado(mercado, apuesta, home_team, away_team, home_score, away_s
         
     total_puntos = hs + as_core
     
-    # 1. GANADOR (Línea de dinero)
     if mercado == "LÍNEA DE DINERO (GANADOR)":
         if "Gana" in apuesta:
             if home_team in apuesta and hs > as_core: return "GANADO"
@@ -60,7 +59,6 @@ def evaluar_resultado(mercado, apuesta, home_team, away_team, home_score, away_s
         if "Empate" in apuesta and hs == as_core: return "GANADO"
         return "PERDIDO"
         
-    # 2. TOTALES (Altas / Bajas)
     elif "TOTALES" in mercado:
         try:
             partes = apuesta.split()
@@ -71,14 +69,12 @@ def evaluar_resultado(mercado, apuesta, home_team, away_team, home_score, away_s
                 return "GANADO" if total_puntos < nodo_numero else "PERDIDO"
         except: pass
 
-    # 3. AMBOS EQUIPOS ANOTAN (Fútbol)
     elif "AMBOS EQUIPOS" in mercado:
         anotan_ambos = (hs > 0 and as_core > 0)
         if "SÍ" in apuesta and anotan_ambos: return "GANADO"
         if "NO" in apuesta and not anotan_ambos: return "GANADO"
         return "PERDIDO"
         
-    # 4. HÁNDICAP
     elif "HÁNDICAP" in mercado:
         try:
             import re
@@ -111,27 +107,21 @@ def verificar_marcadores_api(api_key):
                     p_id = partido.get("id")
                     home_team = partido.get("home_team")
                     away_team = partido.get("away_team")
-                    
                     scores = partido.get("scores")
                     if not scores or len(scores) < 2: continue
                     
                     h_score = next((s["score"] for s in scores if s["name"] == home_team), None)
                     a_score = next((s["score"] for s in scores if s["name"] == away_team), None)
-                    
                     if h_score is None or a_score is None: continue
                     
                     for llave, v in db.items():
                         if v.get("partido_id") == p_id and v.get("estado") == "PENDIENTE":
-                            nuevo_estado = evaluar_resultado(
-                                v["mercado"], v["apuesta"], home_team, away_team, h_score, a_score
-                            )
+                            nuevo_estado = evaluar_resultado(v["mercado"], v["apuesta"], home_team, away_team, h_score, a_score)
                             if nuevo_estado != "PENDIENTE":
                                 db[llave]["estado"] = nuevo_estado
                                 db[llave]["marcador"] = f"{a_score}-{h_score}"
                                 cambio = True
-                                log(f"🤖 [Auto-Resultados] {v['partido']} evaluado como {nuevo_estado} ({a_score}-{h_score})")
-        except Exception as e:
-            log(f"❌ Error revisando marcadores para {sport}: {e}")
+        except: pass
             
     if cambio:
         guardar_db(db)
@@ -141,12 +131,9 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     dt_mexico_raw = datetime.now(timezone.utc) - timedelta(hours=6)
     dt_mexico = dt_mexico_raw.replace(tzinfo=None)
-    
     fecha_hoy_mx = dt_mexico.strftime("%Y-%m-%d")
     hora_hoy_mx = dt_mexico.hour
-    
-    dt_manana_mx = dt_mexico + timedelta(days=1)
-    fecha_manana_mx = dt_manana_mx.strftime("%Y-%m-%d")
+    fecha_manana_mx = (dt_mexico + timedelta(days=1)).strftime("%Y-%m-%d")
     
     # ---- 🌅 BUENOS DÍAS AUTOMÁTICO (8:00 AM) ----
     if hora_hoy_mx >= 8 and ULTIMA_FECHA_SALUDO != fecha_hoy_mx:
@@ -154,8 +141,7 @@ def buscar_picks(api_key, bot_token, chat_id):
             "☀️ *【 BUENOS DÍAS FAMILIA 】* ☀️\n"
             "───────────────────────\n"
             "¡Ya estamos de pie! Arrancamos con toda la actitud una nueva jornada de picks automatizados. 🚀\n\n"
-            "El software ya está procesando las mejores variables y cuotas del mercado. Hoy es un excelente día para meter buena lectura y ¡pintarnos por completo de verde! 💸💚\n\n"
-            "🍀 _¡Mucho éxito en tus jugadas de hoy y mantengan las alertas encendidas!_"
+            "El software ya está procesando pre-partidos y monitoreando las alertas en vivo. 💸💚"
         )
         send_telegram(bot_token, chat_id, msg_buenos_dias)
         ULTIMA_FECHA_SALUDO = fecha_hoy_mx 
@@ -167,34 +153,23 @@ def buscar_picks(api_key, bot_token, chat_id):
         if db:
             ganados, perdidos, unidades_netas, total_hoy = 0, 0, 0.0, 0
             texto_reporte = f"📊 *【 RECAP Y PROFIT DIARIO ({fecha_hoy_mx}) 】* 📊\n───────────────────────\n"
-            
             for k, v in db.items():
                 if v.get("fecha_registro") == fecha_hoy_mx:
                     total_hoy += 1
                     est = v.get("estado", "PENDIENTE")
                     icon = "⏳"
                     if est == "GANADO":
-                        icon = "🟢"
-                        ganados += 1
+                        icon = "🟢"; ganados += 1
                         unidades_netas += round(v["stake"] * (v["momio_dec"] - 1), 2)
                     elif est == "PERDIDO":
-                        icon = "🔴"
-                        perdidos += 1
+                        icon = "🔴"; perdidos += 1
                         unidades_netas -= v["stake"]
-                    
                     marcador_txt = f" [{v['marcador']}]" if "marcador" in v else ""
-                    texto_reporte += f"{icon} *{v['partido']}*\n   ↳ `{v['apuesta']}` | Cuota: {v['momio_txt']} | (Stake {v['stake']})\n\n"
+                    texto_reporte += f"{icon} *{v['partido']}*{marcador_txt}\n   ↳ `{v['apuesta']}` | Cuota: {v['momio_txt']} | (Stake {v['stake']})\n\n"
             
             if total_hoy > 0:
                 signo = "+" if unidades_netas >= 0 else ""
-                texto_reporte += (
-                    "───────────────────────\n"
-                    f"📈 *Picks Auditados:* `{total_hoy}`\n"
-                    f"🟢 *Ganados:* `{ganados}` | 🔴 *Perdidos:* `{perdidos}`\n"
-                    f"💰 *PROFIT NETO:* `{signo}{round(unidades_netas, 2)} Unidades` 🔥\n"
-                    "───────────────────────\n"
-                    "⚡ _¡Monitoreo automático completado! Seguimos firmes en las verdes._"
-                )
+                texto_reporte += f"───────────────────────\n📈 *Picks Auditados:* `{total_hoy}`\n🟢 *G:* `{ganados}` | 🔴 *P:* `{perdidos}`\n💰 *PROFIT NETO:* `{signo}{round(unidades_netas, 2)} Unidades` 🔥"
                 send_telegram(bot_token, chat_id, texto_reporte)
                 ULTIMA_FECHA_REPORTE = fecha_hoy_mx
                 time.sleep(2)
@@ -204,8 +179,37 @@ def buscar_picks(api_key, bot_token, chat_id):
     
     for sport in sports:
         mercados_solicitados = "h2h,totals,spreads,btts" if "soccer" in sport else "h2h,totals,spreads"
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets={mercados_solicitados}&oddsFormat=american"
         
+        # 1. Jalar estados actuales en vivo (Marcador y Periodo) para filtrar
+        diccionario_periodos = {}
+        url_scores = f"https://api.the-odds-api.com/v4/sports/{sport}/scores/?apiKey={api_key}&daysFrom=1"
+        try:
+            res_sc = requests.get(url_scores, timeout=10)
+            if res_sc.status_code == 200:
+                for p_sc in res_sc.json():
+                    p_id = p_sc.get("id")
+                    # Intentar rescatar la entrada de béisbol o periodos del fútbol si vienen en la API
+                    # Si no viene detallado el sub-periodo, medimos por la cantidad de scores registrados
+                    scores_lista = p_sc.get("scores", [])
+                    completado = p_sc.get("completed", False)
+                    
+                    ignorar_por_terminar = False
+                    txt_marcador = "0-0"
+                    
+                    if scores_lista and len(scores_lista) >= 2:
+                        txt_marcador = f"{scores_lista[1].get('score')}-{scores_lista[0].get('score')}"
+                        # Estimación estricta de filtros de cierre:
+                        if "baseball" in sport:
+                            # Si reporta más de 7 periodos o ya terminó, fuera
+                            if completado: ignorar_por_terminar = True
+                        if "soccer" in sport:
+                            if completado: ignorar_por_terminar = True
+                            
+                    diccionario_periodos[p_id] = {"ignorar": ignorar_por_terminar, "marcador": txt_marcador}
+        except: pass
+
+        # 2. Jalar Cuotas (Pre-partidos Y En Vivo combinados en la API)
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets={mercados_solicitados}&oddsFormat=american"
         try:
             res = requests.get(url, timeout=15)
             if res.status_code != 200: continue
@@ -213,8 +217,12 @@ def buscar_picks(api_key, bot_token, chat_id):
             
             for partido in partidos:
                 partido_id = partido.get("id")
-                commence_time_raw = partido.get("commence_time")
                 
+                # FILTRO EXCLUSIVO: Si detectamos que está en la recta final por el live scores, se ignora
+                if partido_id in diccionario_periodos and diccionario_periodos[partido_id]["ignorar"]:
+                    continue
+                    
+                commence_time_raw = partido.get("commence_time")
                 try:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
                     dt_mexico_partido = (dt_utc - timedelta(hours=6)).replace(tzinfo=None)
@@ -225,7 +233,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 if fecha_partido != fecha_hoy_mx and fecha_partido != fecha_manana_mx: continue
                 
                 diferencia_tiempo = (dt_mexico_partido - dt_mexico).total_seconds()
-                if diferencia_tiempo < 120: continue 
+                es_en_vivo = diferencia_tiempo <= 0  # Si el tiempo ya pasó, está corriendo EN VIVO
                 
                 home_team = partido.get("home_team")
                 away_team = partido.get("away_team")
@@ -273,7 +281,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                         if len(lista_cuotas) < 1: continue
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         
-                        # 🔥 FILTRO MODIFICADO: AHORA ENTRA HASTA +250 PARA JALAR MOMIOS MÁS ALTOS
+                        # Filtro de momios estables (+250)
                         es_valido = (mejor_precio < 0 and -250 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 250)
                             
                         if es_valido:
@@ -290,6 +298,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                             momio_texto = f"+{mejor_precio}" if mejor_precio > 0 else str(mejor_precio)
                             valor_decimal_interno = round((100 / abs(mejor_precio)) + 1, 2) if mejor_precio < 0 else round((mejor_precio / 100) + 1, 2)
 
+                            marcador_actual_str = diccionario_periodos.get(partido_id, {}).get("marcador", "0-0")
+
                             todos_los_picks.append({
                                 "llave_apuesta": llave_apuesta,
                                 "partido_id": partido_id,
@@ -301,6 +311,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                                 "momio_dec": valor_decimal_interno,
                                 "horario": fecha_hora_partido,
                                 "stake": stake,
+                                "es_en_vivo": es_en_vivo,
+                                "marcador_live": marcador_actual_str,
                                 "tiempo_restante": diferencia_tiempo
                             })
         except: continue
@@ -310,7 +322,8 @@ def buscar_picks(api_key, bot_token, chat_id):
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
         
-        todos_los_picks = sorted(todos_los_picks, key=lambda x: x["tiempo_restante"])
+        # PRIORIZACIÓN: Ponemos primero los que están En Vivo, luego los que faltan menos para empezar
+        todos_los_picks = sorted(todos_los_picks, key=lambda x: (not x["es_en_vivo"], x["tiempo_restante"]))
         db = cargar_db()
         
         for candidato in todos_los_picks:
@@ -320,18 +333,23 @@ def buscar_picks(api_key, bot_token, chat_id):
             llave = candidato["llave_apuesta"]
             
             if p_id not in partidos_usados_en_este_ciclo:
+                # Cambiar dinámicamente el título si el partido ya está en vivo
+                titulo_bloque = "🔥 *【 EN VIVO: JOYAS DEL RADAR 】* 🔥" if candidato["es_en_vivo"] else "🧠 *【 ANÁLISIS PROFESIONAL VIP 】* 🧠"
+                linea_marcador = f"📊 *Marcador Actual:* `{candidato['marcador_live']}`\n" if candidato["es_en_vivo"] else ""
+                
                 msg = (
-                    f"🧠 *【 ANÁLISIS PROFESIONAL VIP 】* 🧠\n"
+                    f"{titulo_bloque}\n"
                     f"───────────────────────\n"
                     f"📅 *Evento:* {candidato['horario']}\n"
                     f"⚔️ *Encuentro:* {candidato['partido']}\n"
+                    f"{linea_marcador}"
                     f"📊 *Mercado:* `{candidato['mercado']}`\n\n"
                     f"🎯 *PICK RECOMENDADO:* `{candidato['apuesta']}`\n"
                     f"🏛 *Casa de Apuestas:* {candidato['casino']}\n"
                     f"📈 *Momio de Entrada:* `{candidato['momio']}` 🇺🇸\n"
                     f"🔥 *STAKE RECOMENDADO:* `Stake {candidato['stake']}/10` 🛡️\n"
                     f"───────────────────────\n"
-                    f"🔥 _¡Entrar con responsabilidad, cuota base validada!_"
+                    f"🔥 _¡Entrar con responsabilidad, cuota validada en tiempo real!_"
                 )
                 send_telegram(bot_token, chat_id, msg)
                 
@@ -364,22 +382,19 @@ def buscar_picks(api_key, bot_token, chat_id):
                 p1 = picks_ordenados_confianza[0]
                 p2 = picks_ordenados_confianza[1]
                 momio_combinado_dec = p1["momio_dec"] * p2["momio_dec"]
-                
                 momio_parlay_texto = f"+{int((momio_combinado_dec - 1) * 100)}" if momio_combinado_dec >= 2.00 else str(int(-100 / (momio_combinado_dec - 1)))
                 
                 if p1["stake"] >= 6 and p2["stake"] >= 6 and (2.00 <= momio_combinado_dec <= 5.00):
                     msg_veredicto = (
-                        f"🧬 *【 VEREDICTO SUGERIDO: PARLEY PRESTABLECIDO 】* 🧬\n"
+                        f"🧬 *【 VEREDICTO SUGERIDO: PARLEY MIXTO 】* 🧬\n"
                         f"───────────────────────\n"
-                        f"El algoritmo detectó compatibilidad óptima para armar una combinada premium de confianza alta:\n\n"
-                        f"1️⃣ *{p1['partido']}*\n"
-                        f"   ↳ *Pick:* `{p1['apuesta']}` (Momio: {p1['momio']})\n\n"
-                        f"2️⃣ *{p2['partido']}*\n"
-                        f"   ↳ *Pick:* `{p2['apuesta']}` (Momio: {p2['momio']})\n\n"
-                        f"🏛 *Momio Sugerido Combinado:* ~`{momio_parlay_texto}` 🇺🇸\n"
+                        f"El algoritmo armó compatibilidad cruzando oportunidades de alto valor:\n\n"
+                        f"1️⃣ *{p1['partido']}*\n   ↳ *Pick:* `{p1['apuesta']}`\n\n"
+                        f"2️⃣ *{p2['partido']}*\n   ↳ *Pick:* `{p2['apuesta']}`\n\n"
+                        f"🏛 *Momio Combinado:* ~`{momio_parlay_texto}` 🇺🇸\n"
                         f"🛡️ *STAKE GENERAL:* `Stake 2/10` 💰\n"
                         f"───────────────────────\n"
-                        f"💡 *CONSEJO DEL SOFTWARE:* Si deseas mitigar riesgos, recuerda que tienes total libertad de meter estas dos jugadas de forma *INDIVIDUAL (Picks Únicos)*. ¡La última palabra la tienes tú!"
+                        f"💡 Tienes total libertad de jugarlos de forma individual para cuidar tu banca."
                     )
                     send_telegram(bot_token, chat_id, msg_veredicto)
                     parley_armado = True
@@ -388,11 +403,9 @@ def buscar_picks(api_key, bot_token, chat_id):
                 msg_veredicto = (
                     f"🎯 *【 VEREDICTO SUGERIDO: JUGAR EN DIRECTO 】* 🎯\n"
                     f"───────────────────────\n"
-                    f"El software recomienda ingresar las jugadas enviadas en este bloque de forma **INDIVIDUAL (Picks Únicos)**.\n\n"
-                    f"📊 Las condiciones actuales del mercado sugieren proteger el capital plano.\n"
-                    f"💡 *OPCIÓN DEL SUSCRIPTOR:* Si te agrada el riesgo y decides combinarlas en un boleto por tu cuenta, utiliza un **Stake bajo (1/10 o 2/10)**.\n"
+                    f"El software recomienda ingresar las jugadas enviadas de forma **INDIVIDUAL (Picks Únicos)**.\n"
                     f"───────────────────────\n"
-                    f"🍀 _¡Mucho éxito en la jornada de hoy!_"
+                    f"🍀 _¡Mucho éxito en la jornada!_"
                 )
                 send_telegram(bot_token, chat_id, msg_veredicto)
     else:
@@ -401,15 +414,15 @@ def buscar_picks(api_key, bot_token, chat_id):
             msg_espera = (
                 "🧠 *【 ALERTAS EN VIVO: MENSAJE DE CONTROL 】* 🧠\n"
                 "───────────────────────\n"
-                "Gente, estamos buscando los picks ideales para ustedes...\n"
-                "📊 Seguimos monitoreando **MLB, LMB y Liga MX**."
+                "Monitoreando la cartelera activa y partidos en vivo...\n"
+                "📊 Filtros aplicados para descartar cierres de juego."
             )
             send_telegram(bot_token, chat_id, msg_espera)
             AVISO_ESPERA_ENVIADO = True
 
 def main():
     log("--------------------------------------------------")
-    log("🚀 BOT MODE: AUTO-CERRADO TOTAL (HASTA +250 ACTIVADO)")
+    log("🚀 BOT MODE: RADAR EN VIVO + PRE-PARTIDO INTEGRADAS")
     log("--------------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -421,10 +434,10 @@ def main():
         return
 
     while True:
-        log("🔄 [Auto-Resultados] Buscando marcadores finales en la API...")
+        log("🔄 [Radar] Buscando y actualizando cuotas en vivo...")
         verificar_marcadores_api(api_key)
         buscar_picks(api_key, bot_token, chat_id)
-        log("😴 Esperando 10 minutos exactos para el siguiente ciclo...")
+        log("😴 Esperando 10 minutos para escanear el radar de nuevo...")
         time.sleep(600)
 
 if __name__ == "__main__":
