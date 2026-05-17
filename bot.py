@@ -261,13 +261,7 @@ class ProfessionalTipsterBot:
         self.auditar_resultados()
 
         if hora_actual >= 8 and not self.db.chequeo_sistema(f"SALUDO_{fecha_hoy}"):
-            saludo = (
-                "📈 *【 SNIPER PREMIUM: GESTIÓN DE CAPITAL 】* 📈\n"
-                "────────────────────────\n"
-                "¡Buen día inversionistas! Los algoritmos profesionales se encuentran corriendo.\n\n"
-                "📊 *Regla del Tipster Profesional:* Hoy buscaremos un *MÁXIMO DE 4 PICKS* con alto valor. No forzamos jugadas, esperamos pacientemente el error del casino.\n\n"
-                "🔋 _Monitoreando: MLB, Liga MX y las 3 grandes de Europa._ ¡Mucho éxito!"
-            )
+            saludo = "🟢 SNIPER BOT: Escaner activo para hoy. Monitoreando MLB, Liga MX y Europa."
             if self.tg.enviar(saludo):
                 self.db.marcar_sistema(f"SALUDO_{fecha_hoy}", {"enviado": True})
 
@@ -285,23 +279,21 @@ class ProfessionalTipsterBot:
             candidatos = sorted(candidatos, key=lambda x: x["prioridad"], reverse=True)
             pick_ganador = candidatos[0]
 
-            tipo_alerta = "🔥 *【 SNIPER LIVE PREMIUM 】* 🔥" if pick_ganador["es_live"] else "🧠 *【 ANALISIS PRE-PARTIDO 】* 🧠"
-            linea_live = f"📊 *Marcador Live:* `{pick_ganador['marcador_live']}`\n" if pick_ganador["es_live"] else ""
+            tipo_alerta = "🔥 SNIPER LIVE PREMIUM 🔥" if pick_ganador["es_live"] else "🧠 ANALISIS PRE-PARTIDO 🧠"
+            linea_live = f"Marcador Live: {pick_ganador['marcador_live']}\n" if pick_ganador["es_live"] else ""
 
             mensaje_pick = (
                 f"{tipo_alerta}\n"
-                f"🏆 *Liga:* {pick_ganador['liga']}\n"
-                f"────────────────────────\n"
-                f"⚔️ *Partido:* {pick_ganador['partido']}\n"
-                f"📅 *Horario:* {pick_ganador['horario']}\n"
+                f"Liga: {pick_ganador['liga']}\n"
+                f"Partido: {pick_ganador['partido']}\n"
+                f"Horario: {pick_ganador['horario']}\n"
                 f"{linea_live}"
-                f"💎 *Mercado:* `{pick_ganador['mercado']}`\n\n"
-                f"🎯 *PICK RECOMENDADO:* `{pick_ganador['apuesta']}`\n"
-                f"🏛 *Casa de Apuestas:* {pick_ganador['casino']}\n"
-                f"📈 *Cuota/Momio:* `{pick_ganador['momio']}` 🇺🇸\n"
-                f"🛡️ *GESTIÓN DE RIESGO:* `Stake {pick_ganador['stake']}/10`\n"
-                f"────────────────────────\n"
-                f"🤖 _Filtro de valor algorítmico verificado._"
+                f"Mercado: {pick_ganador['mercado']}\n\n"
+                f"PICK RECOMENDADO: {pick_ganador['apuesta']}\n"
+                f"Casa de Apuestas: {pick_ganador['casino']}\n"
+                f"Cuota/Momio: {pick_ganador['momio']} US\n"
+                f"🛡️ Stake: {pick_ganador['stake']}/10\n"
+                f"Filtro de valor verificado."
             )
 
             if self.tg.enviar(mensaje_pick):
