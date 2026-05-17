@@ -183,7 +183,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                         unidades_netas -= v["stake"]
                     
                     marcador_txt = f" [{v['marcador']}]" if "marcador" in v else ""
-                    texto_reporte += f"{icon} *{v['partido']}*{marcador_txt}\n   ↳ `{v['apuesta']}` | Cuota: {v['momio_txt']} | (Stake {v['stake']})\n\n"
+                    texto_reporte += f"{icon} *{v['partido']}*\n   ↳ `{v['apuesta']}` | Cuota: {v['momio_txt']} | (Stake {v['stake']})\n\n"
             
             if total_hoy > 0:
                 signo = "+" if unidades_netas >= 0 else ""
@@ -273,7 +273,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                         if len(lista_cuotas) < 1: continue
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         
-                        es_valido = (mejor_precio < 0 and -250 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 150)
+                        # 🔥 FILTRO MODIFICADO: AHORA ENTRA HASTA +250 PARA JALAR MOMIOS MÁS ALTOS
+                        es_valido = (mejor_precio < 0 and -250 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 250)
                             
                         if es_valido:
                             llave_apuesta = f"{partido_id}_{label}"
@@ -408,7 +409,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("--------------------------------------------------")
-    log("🚀 BOT MODE: AUTO-CERRADO TOTAL (4 PICKS MÁXIMO)")
+    log("🚀 BOT MODE: AUTO-CERRADO TOTAL (HASTA +250 ACTIVADO)")
     log("--------------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
