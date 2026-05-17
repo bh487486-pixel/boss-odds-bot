@@ -180,7 +180,7 @@ def buscar_picks(api_key, bot_token, chat_id):
     for sport in sports:
         mercados_solicitados = "h2h,totals,spreads,btts" if "soccer" in sport else "h2h,totals,spreads"
         
-        # 1. Jalar estados actuales en vivo (Marcador y Periodo) para filtrar
+        # 1. Jalar estados actuales en vivo para saber si ya terminaron
         diccionario_periodos = {}
         url_scores = f"https://api.the-odds-api.com/v4/sports/{sport}/scores/?apiKey={api_key}&daysFrom=1"
         try:
@@ -188,27 +188,19 @@ def buscar_picks(api_key, bot_token, chat_id):
             if res_sc.status_code == 200:
                 for p_sc in res_sc.json():
                     p_id = p_sc.get("id")
-                    # Intentar rescatar la entrada de béisbol o periodos del fútbol si vienen en la API
-                    # Si no viene detallado el sub-periodo, medimos por la cantidad de scores registrados
                     scores_lista = p_sc.get("scores", [])
                     completado = p_sc.get("completed", False)
-                    
                     ignorar_por_terminar = False
                     txt_marcador = "0-0"
                     
                     if scores_lista and len(scores_lista) >= 2:
                         txt_marcador = f"{scores_lista[1].get('score')}-{scores_lista[0].get('score')}"
-                        # Estimación estricta de filtros de cierre:
-                        if "baseball" in sport:
-                            # Si reporta más de 7 periodos o ya terminó, fuera
-                            if completado: ignorar_por_terminar = True
-                        if "soccer" in sport:
-                            if completado: ignorar_por_terminar = True
+                        if completado: ignorar_por_terminar = True
                             
                     diccionario_periodos[p_id] = {"ignorar": ignorar_por_terminar, "marcador": txt_marcador}
         except: pass
 
-        # 2. Jalar Cuotas (Pre-partidos Y En Vivo combinados en la API)
+        # 2. Jalar Cuotas
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets={mercados_solicitados}&oddsFormat=american"
         try:
             res = requests.get(url, timeout=15)
@@ -218,7 +210,6 @@ def buscar_picks(api_key, bot_token, chat_id):
             for partido in partidos:
                 partido_id = partido.get("id")
                 
-                # FILTRO EXCLUSIVO: Si detectamos que está en la recta final por el live scores, se ignora
                 if partido_id in diccionario_periodos and diccionario_periodos[partido_id]["ignorar"]:
                     continue
                     
@@ -233,7 +224,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                 if fecha_partido != fecha_hoy_mx and fecha_partido != fecha_manana_mx: continue
                 
                 diferencia_tiempo = (dt_mexico_partido - dt_mexico).total_seconds()
-                es_en_vivo = diferencia_tiempo <= 0  # Si el tiempo ya pasó, está corriendo EN VIVO
+                es_en_vivo = diferencia_tiempo <= 0
                 
                 home_team = partido.get("home_team")
                 away_team = partido.get("away_team")
@@ -281,8 +272,11 @@ def buscar_picks(api_key, bot_token, chat_id):
                         if len(lista_cuotas) < 1: continue
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         
-                        # Filtro de momios estables (+250)
-                        es_valido = (mejor_precio < 0 and -250 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 250)
+                        # 🔥 FILTRO INTELIGENTE CON TOPE +500 EN VIVO EXCLUSIVO SOLICITADO
+                        if es_en_vivo:
+                            es_valido = (mejor_precio < 0 and -300 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 500)
+                        else:
+                            es_valido = (mejor_precio < 0 and -250 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 250)
                             
                         if es_valido:
                             llave_apuesta = f"{partido_id}_{label}"
@@ -322,7 +316,7 @@ def buscar_picks(api_key, bot_token, chat_id):
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
         
-        # PRIORIZACIÓN: Ponemos primero los que están En Vivo, luego los que faltan menos para empezar
+        # Prioriza los En Vivo primero, luego ordena por cercanía de tiempo
         todos_los_picks = sorted(todos_los_picks, key=lambda x: (not x["es_en_vivo"], x["tiempo_restante"]))
         db = cargar_db()
         
@@ -333,7 +327,6 @@ def buscar_picks(api_key, bot_token, chat_id):
             llave = candidato["llave_apuesta"]
             
             if p_id not in partidos_usados_en_este_ciclo:
-                # Cambiar dinámicamente el título si el partido ya está en vivo
                 titulo_bloque = "🔥 *【 EN VIVO: JOYAS DEL RADAR 】* 🔥" if candidato["es_en_vivo"] else "🧠 *【 ANÁLISIS PROFESIONAL VIP 】* 🧠"
                 linea_marcador = f"📊 *Marcador Actual:* `{candidato['marcador_live']}`\n" if candidato["es_en_vivo"] else ""
                 
@@ -392,9 +385,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                         f"1️⃣ *{p1['partido']}*\n   ↳ *Pick:* `{p1['apuesta']}`\n\n"
                         f"2️⃣ *{p2['partido']}*\n   ↳ *Pick:* `{p2['apuesta']}`\n\n"
                         f"🏛 *Momio Combinado:* ~`{momio_parlay_texto}` 🇺🇸\n"
-                        f"🛡️ *STAKE GENERAL:* `Stake 2/10` 💰\n"
-                        f"───────────────────────\n"
-                        f"💡 Tienes total libertad de jugarlos de forma individual para cuidar tu banca."
+                        f"🛡️ *STAKE GENERAL:* `Stake 2/10` 💰"
                     )
                     send_telegram(bot_token, chat_id, msg_veredicto)
                     parley_armado = True
@@ -422,7 +413,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("--------------------------------------------------")
-    log("🚀 BOT MODE: RADAR EN VIVO + PRE-PARTIDO INTEGRADAS")
+    log("🚀 BOT MODE: RADAR LIVE TOPE +500 INTEGRADO")
     log("--------------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
