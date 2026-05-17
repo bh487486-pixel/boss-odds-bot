@@ -279,7 +279,12 @@ def buscar_picks(api_key, bot_token, chat_id):
                             es_valido = (mejor_precio < 0 and -250 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 250)
                             
                         if es_valido:
-                            llave_apuesta = f"{partido_id}_{label}"
+                            # 🛠️ AJUSTE DE LLAVE INTELIGENTE: Si está en vivo genera un ID especial para saltarse el candado pre-partido
+                            if es_en_vivo:
+                                llave_apuesta = f"{partido_id}_{label}_LIVE"
+                            else:
+                                llave_apuesta = f"{partido_id}_{label}_PRE"
+
                             if llave_apuesta in PICKS_ENVIADOS_REGISTRO: continue
                             
                             stake = 8 if (mejor_precio < 0 and mejor_precio <= -150) else (6 if mejor_precio < 0 else 4)
@@ -326,7 +331,8 @@ def buscar_picks(api_key, bot_token, chat_id):
             p_id = candidato["partido_id"]
             llave = candidato["llave_apuesta"]
             
-            if p_id not in partidos_usados_en_este_ciclo:
+            # El candado por ciclo solo frena si es el mismo TIPO de pick en la misma vuelta
+            if llave not in PICKS_ENVIADOS_REGISTRO:
                 titulo_bloque = "🔥 *【 EN VIVO: JOYAS DEL RADAR 】* 🔥" if candidato["es_en_vivo"] else "🧠 *【 ANÁLISIS PROFESIONAL VIP 】* 🧠"
                 linea_marcador = f"📊 *Marcador Actual:* `{candidato['marcador_live']}`\n" if candidato["es_en_vivo"] else ""
                 
@@ -388,7 +394,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                         f"🛡️ *STAKE GENERAL:* `Stake 2/10` 💰"
                     )
                     send_telegram(bot_token, chat_id, msg_veredicto)
-                    parley_armado = True
+                    parley_parmed = True
             
             if not parley_armado:
                 msg_veredicto = (
