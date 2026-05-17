@@ -3,6 +3,7 @@ import time
 import requests
 import sys
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 def log(msg):
@@ -35,28 +36,36 @@ def guardar_db(data):
         with open(DB_FILE, "w") as f: json.dump(data, f, indent=4)
     except Exception as e: log(f"❌ Error DB: {e}")
 
+# ---- 🛡️ MEMORIA ANTI-DUPLICADOS RESISTENTE A REINICIOS ----
 PICKS_ENVIADOS_REGISTRO = set()
 ULTIMA_FECHA_SALUDO = "" 
 ULTIMA_FECHA_REPORTE = ""
 CICLOS_VACIOS_CONSECUTIVOS = 0 
 AVISO_ESPERA_ENVIADO = False 
 
+def inicializar_registro_desde_db():
+    global PICKS_ENVIADOS_REGISTRO
+    db = cargar_db()
+    for llave in db.keys():
+        PICKS_ENVIADOS_REGISTRO.add(llave)
+    log(f"📦 [Memoria] Historial sincronizado. {len(PICKS_ENVIADOS_REGISTRO)} picks cargados para evitar spam por reinicio.")
+
 # ---- 🧠 CEREBRO EVALUADOR AUTOMÁTICO DE MARCADORES ----
 def evaluar_resultado(mercado, apuesta, home_team, away_team, home_score, away_score):
     try:
         hs = int(home_score)
-        as_core = int(away_score)
+        as_val = int(away_score)
     except:
         return "PENDIENTE"
         
-    total_puntos = hs + as_core
+    total_puntos = hs + as_val
     
     if mercado == "LÍNEA DE DINERO (GANADOR)":
         if "Gana" in apuesta:
-            if home_team in apuesta and hs > as_core: return "GANADO"
-            if away_team in apuesta and as_core > hs: return "GANADO"
+            if home_team in apuesta and hs > as_val: return "GANADO"
+            if away_team in apuesta and as_val > hs: return "GANADO"
             return "PERDIDO"
-        if "Empate" in apuesta and hs == as_core: return "GANADO"
+        if "Empate" in apuesta and hs == as_val: return "GANADO"
         return "PERDIDO"
         
     elif "TOTALES" in mercado:
@@ -70,21 +79,20 @@ def evaluar_resultado(mercado, apuesta, home_team, away_team, home_score, away_s
         except: pass
 
     elif "AMBOS EQUIPOS" in mercado:
-        anotan_ambos = (hs > 0 and as_core > 0)
+        anotan_ambos = (hs > 0 and as_val > 0)
         if "SÍ" in apuesta and anotan_ambos: return "GANADO"
         if "NO" in apuesta and not anotan_ambos: return "GANADO"
         return "PERDIDO"
         
     elif "HÁNDICAP" in mercado:
         try:
-            import re
             match = re.search(r'\(([-+]\d+\.?\d*)\)', apuesta)
             if match:
                 handicap_val = float(match.group(1))
                 if home_team in apuesta:
-                    return "GANADO" if (hs + handicap_val) > as_core else "PERDIDO"
+                    return "GANADO" if (hs + handicap_val) > as_val else "PERDIDO"
                 if away_team in apuesta:
-                    return "GANADO" if (as_core + handicap_val) > hs else "PERDIDO"
+                    return "GANADO" if (as_val + handicap_val) > hs else "PERDIDO"
         except: pass
 
     return "PENDIENTE"
@@ -92,7 +100,7 @@ def evaluar_resultado(mercado, apuesta, home_team, away_team, home_score, away_s
 # ---- 🔄 REVISOR AUTOMÁTICO DE MARCADORES (API SCORES) ----
 def verificar_marcadores_api(api_key):
     db = cargar_db()
-    sports = ["baseball_mlb", "baseball_mexican_lmb", "soccer_mexico_ligamx"]
+    sports = ["baseball_mlb", "baseball_mexican_lmb", "soccer_mexico_ligamx", "soccer_epl", "soccer_spain_la_liga", "soccer_germany_bundesliga"]
     cambio = False
     
     for sport in sports:
@@ -160,7 +168,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                     icon = "⏳"
                     if est == "GANADO":
                         icon = "🟢"; ganados += 1
-                        unidades_netas += round(v["stake"] * (v["momio_dec"] - 1), 2)
+                        unidades_netas += v["stake"] * (v["momio_dec"] - 1)
                     elif est == "PERDIDO":
                         icon = "🔴"; perdidos += 1
                         unidades_netas -= v["stake"]
@@ -174,13 +182,27 @@ def buscar_picks(api_key, bot_token, chat_id):
                 ULTIMA_FECHA_REPORTE = fecha_hoy_mx
                 time.sleep(2)
 
-    sports = ["baseball_mlb", "baseball_mexican_lmb", "soccer_mexico_ligamx"]
+    # 📋 CARTELERA PROFESIONAL EXCLUSIVA
+    sports = [
+        "baseball_mlb", 
+        "baseball_mexican_lmb", 
+        "soccer_mexico_ligamx",
+        "soccer_epl",            
+        "soccer_spain_la_liga",  
+        "soccer_germany_bundesliga"
+    ]
     todos_los_picks = []
     
     for sport in sports:
+        # 📝 LOGS DE MONITOREO SOLICITADOS EN RENDER:
+        if "mlb" in sport: log("🔍 [Radar] Analizando partidos de las Grandes Ligas (MLB)...")
+        elif "mexican_lmb" in sport: log("🔍 [Radar] Analizando cartelera de la Liga Mexicana de Béisbol (LMB)...")
+        elif "ligamx" in sport: log("🔍 [Radar] Analizando jornada activa de la Liga MX...")
+        elif "soccer_" in sport: log(f"🔍 [Radar] Analizando cuotas en vivo de Fútbol Europeo ({sport})...")
+
         mercados_solicitados = "h2h,totals,spreads,btts" if "soccer" in sport else "h2h,totals,spreads"
         
-        # 1. Jalar estados actuales en vivo para saber si ya terminaron
+        # 1. Monitorear estados reales
         diccionario_periodos = {}
         url_scores = f"https://api.the-odds-api.com/v4/sports/{sport}/scores/?apiKey={api_key}&daysFrom=1"
         try:
@@ -200,18 +222,23 @@ def buscar_picks(api_key, bot_token, chat_id):
                     diccionario_periodos[p_id] = {"ignorar": ignorar_por_terminar, "marcador": txt_marcador}
         except: pass
 
-        # 2. Jalar Cuotas
+        # 2. Escaneo y Filtrado de Momios Profesional
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={api_key}&regions=us,eu&markets={mercados_solicitados}&oddsFormat=american"
         try:
             res = requests.get(url, timeout=15)
+            
+            # 💳 IMPRESIÓN DE CRÉDITOS EN RENDER
+            remanente = res.headers.get("x-requests-remaining")
+            usados = res.headers.get("x-requests-used")
+            if remanente:
+                log(f"💳 [Créditos API] Restantes: {remanente} | Mensuales Usados: {usados}")
+                
             if res.status_code != 200: continue
             partidos = res.json()
             
             for partido in partidos:
                 partido_id = partido.get("id")
-                
-                if partido_id in diccionario_periodos and diccionario_periodos[partido_id]["ignorar"]:
-                    continue
+                if partido_id in diccionario_periodos and diccionario_periodos[partido_id]["ignorar"]: continue
                     
                 commence_time_raw = partido.get("commence_time")
                 try:
@@ -226,10 +253,8 @@ def buscar_picks(api_key, bot_token, chat_id):
                 diferencia_tiempo = (dt_mexico_partido - dt_mexico).total_seconds()
                 es_en_vivo = diferencia_tiempo <= 0
                 
-                # CANDADO DE TIEMPO EXTRA CRÍTICO: Si el partido empezó hace más de 4 horas, se ignora.
-                if es_en_vivo and diferencia_tiempo < -14400:
-                    log(f"⚠️ [Filtro] Partido {partido.get('home_team')} ignorado porque empezó hace más de 4 horas.")
-                    continue
+                # 🛑 CANDADO DE SEGURIDAD MÁXIMA: Más de 4 horas de haber iniciado se descarta por completo.
+                if es_en_vivo and diferencia_tiempo < -14400: continue
                 
                 home_team = partido.get("home_team")
                 away_team = partido.get("away_team")
@@ -277,20 +302,16 @@ def buscar_picks(api_key, bot_token, chat_id):
                         if len(lista_cuotas) < 1: continue
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         
-                        # FILTRO DE CUOTAS (Tope +500 en directo activo)
                         if es_en_vivo:
                             es_valido = (mejor_precio < 0 and -300 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 500)
                         else:
                             es_valido = (mejor_precio < 0 and -250 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 250)
                             
                         if es_valido:
-                            if es_en_vivo:
-                                llave_apuesta = f"{partido_id}_{label}_LIVE"
-                            else:
-                                llave_apuesta = f"{partido_id}_{label}_PRE"
-
+                            llave_apuesta = f"{partido_id}_{label}_LIVE" if es_en_vivo else f"{partido_id}_{label}_PRE"
                             if llave_apuesta in PICKS_ENVIADOS_REGISTRO: continue
                             
+                            # 🛡️ GESTIÓN DE STAKE INTELIGENTE (1-10)
                             stake = 8 if (mejor_precio < 0 and mejor_precio <= -150) else (6 if mejor_precio < 0 else 4)
                             
                             if m_key == "h2h": tipo_m = "LÍNEA DE DINERO (GANADOR)"
@@ -300,7 +321,6 @@ def buscar_picks(api_key, bot_token, chat_id):
 
                             momio_texto = f"+{mejor_precio}" if mejor_precio > 0 else str(mejor_precio)
                             valor_decimal_interno = round((100 / abs(mejor_precio)) + 1, 2) if mejor_precio < 0 else round((mejor_precio / 100) + 1, 2)
-
                             marcador_actual_str = diccionario_periodos.get(partido_id, {}).get("marcador", "0-0")
 
                             todos_los_picks.append({
@@ -326,19 +346,17 @@ def buscar_picks(api_key, bot_token, chat_id):
         partidos_usados_en_este_ciclo = set()
         db = cargar_db()
         
-        # 1. Prioriza los En Vivo primero, luego ordena por cercanía de tiempo
         todos_los_picks = sorted(todos_los_picks, key=lambda x: (not x["es_en_vivo"], x["tiempo_restante"]))
         
-        # 2. FILTRO ABSOLUTO DE DUPLICADOS (Solo una propuesta por juego por vuelta)
+        # Filtro estricto contra-apuestas
         picks_filtrados_unicos = []
         partidos_ya_agregados_pre_envio = set()
-        
         for p in todos_los_picks:
             if p["partido_id"] not in partidos_ya_agregados_pre_envio:
                 picks_filtrados_unicos.append(p)
                 partidos_ya_agregados_pre_envio.add(p["partido_id"])
         
-        # 🛡️ 3. Ciclo de envío a Telegram (MÁXIMO 4 SELECCIONES POR VUELTA)
+        # 🎯 CONTROL DE FLUJO ESTRICTO: MAX 4 PICKS POR VUELTA
         for candidato in picks_filtrados_unicos:
             if len(picks_enviados_en_este_ciclo) >= 4: break 
             
@@ -432,7 +450,7 @@ def buscar_picks(api_key, bot_token, chat_id):
 
 def main():
     log("--------------------------------------------------")
-    log("🚀 BOT MODE: RADAR LIVE TOPE +500 INTEGRADO")
+    log("🚀 BOT MODE: PRODUCCIÓN PROFESIONAL VIP ACTIVO")
     log("--------------------------------------------------")
     
     api_key = os.getenv("ODDS_API_KEY")
@@ -440,14 +458,18 @@ def main():
     chat_id = os.getenv("CHAT_ID")
     
     if not api_key or not bot_token or not chat_id:
-        log("❌ ERROR CRÍTICO: Variables de entorno ausentes.")
+        log("❌ ERROR CRÍTICO: Falta configurar variables de entorno.")
         return
 
+    # Sincronizar memoria con base de datos JSON
+    inicializar_registro_desde_db()
+
     while True:
-        log("🔄 [Radar] Buscando y actualizando cuotas en vivo...")
+        log("\n🔄 ================= INICIO DE CICLO ================= 🔄")
         verificar_marcadores_api(api_key)
         buscar_picks(api_key, bot_token, chat_id)
-        log("😴 Esperando 10 minutos para escanear el radar de nuevo...")
+        log("😴 Escaneo finalizado con éxito. Durmiendo por 10 minutos...")
+        log("🔄 ================== FIN DE CICLO ================== 🔄\n")
         time.sleep(600)
 
 if __name__ == "__main__":
