@@ -113,24 +113,16 @@ class ProfessionalBot:
         else:
             return 3 if momio <= 150 else 2
 
-    # --- NUEVA FUNCIÓN: CALCULADORA DE COMBINADAS PROFESIONAL ---
     def _calcular_momio_combinado(self, momio1: int, momio2: int) -> tuple:
-        # 1. Pasar momio 1 a decimal
         dec1 = (100 / abs(momio1)) + 1 if momio1 < 0 else (momio1 / 100) + 1
-        # 2. Pasar momio 2 a decimal
         dec2 = (100 / abs(momio2)) + 1 if momio2 < 0 else (momio2 / 100) + 1
-        
-        # 3. Multiplicar cuotas decimales
         dec_final = dec1 * dec2
-        
-        # 4. Traducir de vuelta a americano
         if dec_final >= 2.0:
             am_final = int((dec_final - 1) * 100)
             txt_final = f"+{am_final}"
         else:
             am_final = int(-100 / (dec_final - 1))
             txt_final = str(am_final)
-            
         return am_final, txt_final
 
     def enviar_reporte_profit(self, fecha_hoy: str, picks_hoy: list):
@@ -176,6 +168,9 @@ class ProfessionalBot:
             self.db.marcar_sistema(f"PROFIT_{fecha_hoy}", {"enviado": True, "profit": unidades_netas})
 
     def escanear_mercados(self, fecha_hoy: str):
+        partidos_procesados_este_ciclo = set()
+        dt_actual_mx = self._get_hora_mexico()
+
         for sport, tag in self.ligas.items():
             url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={self.api_key}&regions=us&markets=h2h,totals&oddsFormat=american"
             try:
@@ -188,6 +183,7 @@ class ProfessionalBot:
             for p in partidos:
                 p_id = p.get("id")
                 
+                if p_id in partidos_procesados_este_ciclo: continue
                 if self.db.ya_existe_partido(p_id, fecha_hoy): continue
 
                 home = p.get("home_team")
@@ -200,15 +196,21 @@ class ProfessionalBot:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
                     dt_mx = dt_utc - timedelta(hours=6)
                     
+                    # AJUSTE LÁSER EXACTO: Filtro de 10 minutos de ventaja mínima pre-partido
+                    tiempo_restante = dt_mx - dt_actual_mx.replace(tzinfo=None)
+                    if tiempo_restante < timedelta(minutes=10):
+                        Logger.log(f"⏰ Partido omitido (Faltan menos de 10 minutos para iniciar): {away} vs {home}")
+                        continue
+                    
                     dia_semana_en = dt_mx.strftime("%A")
                     dia_semana_es = self.dias_es.get(dia_semana_en, dia_semana_en)
-                    
                     mes_en = dt_mx.strftime("%b")
                     mes_es = self.meses_es.get(mes_en, mes_en)
                     
                     hora_ampm = dt_mx.strftime("%I:%M %p")
                     horario_juego_texto = f"{dia_semana_es}, {dt_mx.strftime('%d')} de {mes_es} - {hora_ampm} MX"
-                except:
+                except Exception as e:
+                    Logger.log(f"⚠️ Error procesando horario de juego: {e}")
                     horario_juego_texto = "Por confirmar"
 
                 mercado_h2h = None
@@ -247,14 +249,13 @@ class ProfessionalBot:
                 if label_apuesta == home: label_apuesta = f"Gana {home} (Local)"
                 elif label_apuesta == away: label_apuesta = f"Gana {away} (Visitante)"
 
-                # Decisión inteligente si se requiere armar la SGP
                 es_combinada_conveniente = (momio <= -150)
                 momio_para_guardar = momio
 
-                if es_combinada_conveniente and mercado_totals and mercado_totals.get("outcomes"):
+                if es_combinada_conveniente and (mercado_totals and mercado_totals.get("outcomes")):
                     out_total = mercado_totals.get("outcomes")[0]
                     puntos = out_total.get("point")
-                    momio_total = int(out_total.get("price", -110)) # Si no hay momio, asume la línea estándar de -110
+                    momio_total = int(out_total.get("price", -110))
                     
                     if "baseball" in sport:
                         label_pick_final = f"{label_apuesta} + Más de {puntos} Carreras"
@@ -262,8 +263,6 @@ class ProfessionalBot:
                         label_pick_final = f"{label_apuesta} + Más de {puntos} Goles"
                     
                     titulo_analisis = "🧠 *【 COMBINADA DE VALOR OPTIMIZADO 】* 🧠"
-                    
-                    # CORRECCIÓN AQUÍ: Se calcula el verdadero momio final combinado multiplicando las cuotas decimales
                     momio_para_guardar, momio_final_txt = self._calcular_momio_combinado(momio, momio_total)
                 else:
                     label_pick_final = label_apuesta
@@ -289,14 +288,16 @@ class ProfessionalBot:
                         "partido_id": p_id,
                         "partido": f"{away} vs {home}",
                         "apuesta": label_pick_final,
-                        "momio_num": momio_para_guardar, # Se guarda el momio combinado real para calcular el profit exacto en la noche
+                        "momio_num": momio_para_guardar,
                         "stake": stake,
                         "fecha_registro": fecha_hoy,
                         "estado": "PENDIENTE"
                     }
                     self.db.registrar_pick(f"PICK_{p_id}", info_pick)
                     Logger.log(f"🚀 Pick procesado con éxito: {label_pick_final} ({momio_final_txt})")
-                    break 
+                    
+                    partidos_procesados_este_ciclo.add(p_id)
+                    return 
 
     def ejecutar(self):
         while True:
