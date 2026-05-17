@@ -144,7 +144,7 @@ class ProfessionalBot:
             f"🏁 *【 CIERRE DE JORNADA INTERNO 】* 🏁\n"
             f"────────────────────────\n"
             f"📅 *Fecha:* `{fecha_hoy}`\n"
-            f"🎯 *Picks Enviados Hoy:* `{len(picks_hoy)}/4`\n\n"
+            f"🎯 *Picks Enviados Hoy:* `{len(picks_hoy)}/5`\n\n"
             f"🟢 *Ganados:* `{verdes}`\n"
             f"🔴 *Perdidos:* `{rojos}`\n"
             f"📊 *Balance Neto:* `{signo}{unidades_netas:.2f} Unidades` {emoji_balance}\n"
@@ -186,7 +186,9 @@ class ProfessionalBot:
                     mes_en = dt_mx.strftime("%b")
                     mes_es = self.meses_es.get(mes_en, mes_en)
                     
-                    horario_juego_texto = f"{dia_semana_es}, {dt_mx.strftime('%d')} de {mes_es} - {dt_mx.strftime('%H:%M')} MX"
+                    # CORRECCIÓN AQUÍ: Se cambió %H:%M por %I:%M %p para forzar el formato AM/PM (Ej: 10:30 PM)
+                    hora_ampm = dt_mx.strftime("%I:%M %p")
+                    horario_juego_texto = f"{dia_semana_es}, {dt_mx.strftime('%d')} de {mes_es} - {hora_ampm} MX"
                 except:
                     horario_juego_texto = "Por confirmar"
 
@@ -197,9 +199,10 @@ class ProfessionalBot:
                     stake = self.calcular_stake(momio)
                     if stake == 0: continue
 
+                    # CORRECCIÓN AQUÍ: Ajustado el tope máximo estricto a 5 picks por día
                     picks_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
-                    if len(picks_hoy) >= 4:
-                        Logger.log("🔒 Límite de 4 picks alcanzado por hoy. Deteniendo envíos.")
+                    if len(picks_hoy) >= 5:
+                        Logger.log("🔒 Límite de 5 picks alcanzado por hoy. Deteniendo envíos.")
                         return
 
                     momio_txt = f"+{momio}" if momio > 0 else str(momio)
@@ -274,15 +277,15 @@ class ProfessionalBot:
                         if self.tg.enviar(msg_dias):
                             self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
 
-                if len(picks_hoy) >= 4:
-                    Logger.log("🔒 Meta diaria completada (4/4). No se buscarán más picks por hoy.")
+                # CORRECCIÓN AQUÍ: Ajustado a 5 en la verificación visual del ciclo
+                if len(picks_hoy) >= 5:
+                    Logger.log("🔒 Meta diaria completada (5/5). No se buscarán más picks por hoy.")
                 else:
                     self.escanear_mercados(fecha_hoy)
                     
             except Exception as e:
                 Logger.log(f"💥 Error en el controlador principal: {e}")
             
-            # --- MODIFICACIÓN ÚNICA: Esperar 30 minutos (1800 segundos) para ahorrar créditos ---
             Logger.log("💤 Esperando 30 minutos para la siguiente revisión...")
             time.sleep(1800)
 
