@@ -37,12 +37,12 @@ class DatabaseManager:
         self.data[pick_id] = info
         self.save()
 
-    def obtener_picks_del_dia(self, fecha_hoy: str) -> list:
-        return [v for k, v in self.data.items() if not k.startswith("SYS_") and v.get("fecha_registro") == fecha_hoy]
+    # 🔥 FILTRO CORREGIDO: Filtra los partidos por el día en que se JUEGAN, no cuando se mandan
+    def obtener_picks_jugados_el_dia(self, fecha_busqueda: str) -> list:
+        return [v for k, v in self.data.items() if not k.startswith("SYS_") and v.get("fecha_juego") == fecha_busqueda]
 
-    def ya_existe_partido(self, partido_id: str, fecha_hoy: str) -> bool:
-        picks_hoy = self.obtener_picks_del_dia(fecha_hoy)
-        return any(p.get("partido_id") == partido_id for p in picks_hoy)
+    def ya_existe_partido(self, partido_id: str) -> bool:
+        return f"PICK_{partido_id}" in self.data
 
     def marcar_sistema(self, clave: str, datos: dict):
         self.data[f"SYS_{clave}"] = datos
@@ -113,7 +113,6 @@ class ProfessionalBot:
         else:
             return 3 if momio <= 140 else 2
 
-    # 🔥 NUEVA FUNCIÓN: Calcula la probabilidad real basada en el momio + la ventaja del algoritmo
     def calcular_probabilidad_dinamica(self, momio: int) -> int:
         try:
             if momio < 0:
@@ -121,10 +120,7 @@ class ProfessionalBot:
             else:
                 prob_implicita = (100 / (momio + 100)) * 100
             
-            # Le sumamos nuestro "Edge" de ventaja analítica (entre 12% y 15% de efectividad extra por el filtro)
             prob_final = int(prob_implicita + 14)
-            
-            # Topes de seguridad para mantener la cordura del canal
             if prob_final > 88: prob_final = 88
             if prob_final < 55: prob_final = 55
             return prob_final
@@ -140,28 +136,19 @@ class ProfessionalBot:
             return True
         return False
 
-    def _calcular_momio_combinado(self, momio1: int, momio2: int) -> tuple:
-        dec1 = (100 / abs(momio1)) + 1 if momio1 < 0 else (momio1 / 100) + 1
-        dec2 = (100 / abs(momio2)) + 1 if momio2 < 0 else (momio2 / 100) + 1
-        dec_final = dec1 * dec2
-        if dec_final >= 2.0:
-            am_final = int((dec_final - 1) * 100)
-            txt_final = f"+{am_final}"
-        else:
-            am_final = int(-100 / (dec_final - 1))
-            txt_final = str(am_final)
-        return am_final, txt_final
-
-    def enviar_reporte_profit_y_despedida(self, fecha_hoy: str, picks_hoy: list):
+    def enviar_reporte_profit_y_despedida(self, fecha_hoy: str):
         if self.db.chequeo_sistema(f"CIERRE_CANAL_{fecha_hoy}"):
             return
 
-        Logger.log("📊 Son las 11:00 PM. Generando balance de cierre y despedida...")
+        # 🔥 OBTENEMOS EXCLUSIVAMENTE LOS JUEGOS DISPUTADOS HOY
+        picks_disputados_hoy = self.db.obtener_picks_jugados_el_dia(fecha_hoy)
+
+        Logger.log(f"📊 Generando balance para juegos del día {fecha_hoy}. Encontrados: {len(picks_disputados_hoy)}")
         verdes = 0
         rojos = 0
         unidades_netas = 0.0
 
-        for p in picks_hoy:
+        for p in picks_disputados_hoy:
             stake = int(p.get("stake", 1))
             momio = int(p.get("momio_num", 100))
             estado = p.get("estado", "PENDIENTE")
@@ -182,13 +169,13 @@ class ProfessionalBot:
         mensaje_profit = (
             f"🏁 *【 CIERRE DE JORNADA INTERNO 】* 🏁\n"
             f"────────────────────────\n"
-            f"📅 *Fecha:* `{fecha_hoy}`\n"
-            f"🎯 *Picks Enviados Hoy:* `{len(picks_hoy)}/6`\n\n"
+            f"📅 *Picks Disputados Hoy:* `{fecha_hoy}`\n"
+            f"🎯 *Total Evaluados:* `{len(picks_disputados_hoy)}`\n\n"
             f"🟢 *Ganados:* `{verdes}`\n"
             f"🔴 *Perdidos:* `{rojos}`\n"
             f"📊 *Balance Neto:* `{signo}{unidades_netas:.2f} Unidades` {emoji_balance}\n"
             f"────────────────────────\n"
-            f"🤖 _Reporte programado enviado automáticamente._"
+            f"🤖 _Resultados calculados basados en los juegos concluidos de hoy._"
         )
         
         mensaje_noches = (
@@ -207,6 +194,11 @@ class ProfessionalBot:
     def escanear_mercados(self, fecha_hoy: str):
         dt_actual_mx = self._get_hora_mexico()
 
+        # Evitar buscar si ya mandamos 6 picks jugados hoy (Tope diario)
+        picks_hoy = self.db.obtener_picks_jugados_el_dia(fecha_hoy)
+        if len(picks_hoy) >= 6:
+            return
+
         for sport, tag in self.ligas.items():
             mercados_solicitados = "h2h,totals,spreads"
             url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={self.api_key}&regions=us&markets={mercados_solicitados}&oddsFormat=american"
@@ -220,7 +212,7 @@ class ProfessionalBot:
 
             for p in partidos:
                 p_id = p.get("id")
-                if self.db.ya_existe_partido(p_id, fecha_hoy): continue
+                if self.db.ya_existe_partido(p_id): continue
 
                 home = p.get("home_team")
                 away = p.get("away_team")
@@ -232,8 +224,16 @@ class ProfessionalBot:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
                     dt_mx = dt_utc - timedelta(hours=6)
                     
+                    # Identificar la fecha real en la que se disputará el juego
+                    fecha_real_juego = dt_mx.strftime("%Y-%m-%d")
+                    
                     tiempo_restante = dt_mx - dt_actual_mx.replace(tzinfo=None)
-                    if tiempo_restante < timedelta(minutes=10) or tiempo_restante > timedelta(hours=24):
+                    if tiempo_restante < timedelta(minutes=10):
+                        continue
+                    
+                    # 🔥 CANDADO DE ANTICIPACIÓN: En el día no analiza juegos a más de 15 horas
+                    # para evitar encasquetar partidos de mañana lunes en el flujo pesado de hoy
+                    if tiempo_restante > timedelta(hours=15):
                         continue
 
                     dia_semana_en = dt_mx.strftime("%A")
@@ -244,8 +244,8 @@ class ProfessionalBot:
                     hora_ampm = dt_mx.strftime("%I:%M %p")
                     horario_juego_texto = f"{dia_semana_es}, {dt_mx.strftime('%d')} de {mes_es} - {hora_ampm} MX"
                 except Exception as e:
-                    Logger.log(f"⚠️ Error procesando horario de juego: {e}")
-                    horario_juego_texto = "Por confirmar"
+                    Logger.log(f"⚠️ Error procesando horario: {e}")
+                    continue
 
                 opcion_elegida = None
                 mercado_origen = None
@@ -270,14 +270,9 @@ class ProfessionalBot:
 
                 if not opcion_elegida or not mercado_origen: continue
 
-                picks_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
-                if len(picks_hoy) >= 6: return
-
                 momio = int(opcion_elegida.get("price"))
                 momio_txt = f"+{momio}" if momio > 0 else str(momio)
                 stake = self.calcular_stake(momio)
-                
-                # 🔥 AQUÍ CORREGIMOS EL ERROR: Calculamos el porcentaje real para este momio específico
                 porcentaje_real = self.calcular_probabilidad_dinamica(momio)
 
                 label_pick_final = opcion_elegida.get("name")
@@ -287,11 +282,9 @@ class ProfessionalBot:
                     tipo = "Más de" if opcion_elegida.get("name").lower() in ["over", "más"] else "Menos de"
                     unidad = "Carreras" if "baseball" in sport else "Goles"
                     label_pick_final = f"{tipo} {point} {unidad}"
-                    
                 elif mercado_origen == "spreads":
                     signo = "+" if float(point) > 0 else ""
                     label_pick_final = f"Hándicap {opcion_elegida.get('name')} {signo}{point}"
-                    
                 elif mercado_origen == "h2h":
                     if label_pick_final == home: label_pick_final = f"Gana {home} (Local)"
                     elif label_pick_final == away: label_pick_final = f"Gana {away} (Visitante)"
@@ -305,7 +298,7 @@ class ProfessionalBot:
                     f"🎯 *PICK:* `{label_pick_final}`\n"
                     f"🏛️ *Casa:* {bookmakers[0].get('title')}\n"
                     f"📈 *Cuota/Momio:* `{momio_txt}`\n"
-                    f"🛡️ *Seguridad:* `Stake {stake}/10 ({porcentaje_real}% Probabilidad)`\n"
+                    f"🛡️ *Seguridad:* `Stake {stake}/10 (Porcentaje: {porcentaje_real}%)`\n"
                     f"────────────────────────\n"
                     f"🤖 _Filtro de valor calculado dinámicamente._"
                 )
@@ -318,10 +311,11 @@ class ProfessionalBot:
                         "momio_num": momio,
                         "stake": stake,
                         "fecha_registro": fecha_hoy,
+                        "fecha_juego": fecha_real_juego,  # 🔥 SE GUARDA LA FECHA DE DISPUTA REAL
                         "estado": "PENDIENTE"
                     }
                     self.db.registrar_pick(f"PICK_{p_id}", info_pick)
-                    Logger.log(f"🚀 Multimercado enviado: {label_pick_final} con {porcentaje_real}% de probabilidad.")
+                    Logger.log(f"🚀 Pick enviado para jugarse el {fecha_real_juego}: {label_pick_final}.")
                     return 
 
     def ejecutar(self):
@@ -332,13 +326,12 @@ class ProfessionalBot:
                 fecha_hoy = dt_mex.strftime("%Y-%m-%d")
                 hora_actual = dt_mex.hour
 
-                Logger.log(f"--- Ciclo de Monitoreo Probabilidad Real (Hora MX: {dt_mex.strftime('%H:%M')}) ---")
-                
-                picks_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
+                Logger.log(f"--- Ciclo de Monitoreo de Fecha Real (Hora MX: {dt_mex.strftime('%H:%M')}) ---")
 
                 if hora_actual >= 23 or hora_actual < 5:
                     if hora_actual >= 23:
-                        self.enviar_reporte_profit_y_despedida(fecha_hoy, picks_hoy)
+                        # 🔥 Envía solo los resultados correspondientes al día de hoy
+                        self.enviar_reporte_profit_y_despedida(fecha_hoy)
                     
                     Logger.log("😴 Modo Nocturno. Servidor pausado por 6 horas...")
                     tiempo_espera_segundos = 21600
@@ -351,15 +344,12 @@ class ProfessionalBot:
                             msg_dias = (
                                 "☀️ *【 BUENOS DÍAS 】* ☀️\n"
                                 "────────────────────────\n"
-                                "¡Ya estamos activos, equipo! 🚀 El escáner multimercado se encuentra activo buscando las líneas más seguras del día. ¡A asegurar las ganancias! 📈💰"
+                                "¡Ya estamos activos, equipo! 🚀 El escáner se encuentra buscando las líneas más seguras para los partidos de hoy. ¡A ganar! 📈💰"
                             )
                             if self.tg.enviar(msg_dias):
                                 self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
 
-                    if len(picks_hoy) >= 6:
-                        Logger.log("🔒 Meta diaria completada (6/6).")
-                    else:
-                        self.escanear_mercados(fecha_hoy)
+                    self.escanear_mercados(fecha_hoy)
                     
             except Exception as e:
                 Logger.log(f"💥 Error en el controlador principal: {e}")
