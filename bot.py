@@ -85,11 +85,21 @@ class ProfessionalBot:
         self.session = requests.Session()
 
         self.ligas = {
-            "baseball_mlb": "MLB 🇺🇸",
-            "soccer_mexico_ligamx": "Liga MX 🇲🇽",
-            "soccer_epl": "Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿",
-            "soccer_spain_la_liga": "LaLiga 🇪🇸",
-            "soccer_germany_bundesliga": "Bundesliga 🇩🇪"
+            "baseball_mlb": "MLB USA",
+            "soccer_mexico_ligamx": "Liga MX",
+            "soccer_epl": "Premier League",
+            "soccer_spain_la_liga": "LaLiga",
+            "soccer_germany_bundesliga": "Bundesliga"
+        }
+
+        self.dias_es = {
+            "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
+            "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo"
+        }
+        self.meses_es = {
+            "Jan": "Enero", "Feb": "Febrero", "Mar": "Marzo", "Apr": "Abril",
+            "May": "Mayo", "Jun": "Junio", "Jul": "Julio", "Aug": "Agosto",
+            "Sep": "Septiembre", "Oct": "Octubre", "Nov": "Noviembre", "Dec": "Diciembre"
         }
 
     def _get_hora_mexico(self):
@@ -104,7 +114,6 @@ class ProfessionalBot:
             return 3 if momio <= 150 else 2
 
     def enviar_reporte_profit(self, fecha_hoy: str, picks_hoy: list):
-        # Candado para que solo se mande una vez por noche
         if self.db.chequeo_sistema(f"PROFIT_{fecha_hoy}"):
             return
 
@@ -166,6 +175,21 @@ class ProfessionalBot:
                 bookmakers = p.get("bookmakers", [])
                 if not bookmakers: continue
 
+                try:
+                    commence_time_raw = p.get("commence_time")
+                    dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
+                    dt_mx = dt_utc - timedelta(hours=6)
+                    
+                    dia_semana_en = dt_mx.strftime("%A")
+                    dia_semana_es = self.dias_es.get(dia_semana_en, dia_semana_en)
+                    
+                    mes_en = dt_mx.strftime("%b")
+                    mes_es = self.meses_es.get(mes_en, mes_en)
+                    
+                    horario_juego_texto = f"{dia_semana_es}, {dt_mx.strftime('%d')} de {mes_es} - {dt_mx.strftime('%H:%M')} MX"
+                except:
+                    horario_juego_texto = "Por confirmar"
+
                 market = bookmakers[0].get("markets", [])[0]
                 
                 for outcome in market.get("outcomes", []):
@@ -173,7 +197,6 @@ class ProfessionalBot:
                     stake = self.calcular_stake(momio)
                     if stake == 0: continue
 
-                    # Candado estricto de máximo 4 picks al día
                     picks_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
                     if len(picks_hoy) >= 4:
                         Logger.log("🔒 Límite de 4 picks alcanzado por hoy. Deteniendo envíos.")
@@ -187,6 +210,7 @@ class ProfessionalBot:
                     mensaje = (
                         f"🧠 *【 ANÁLISIS DE VALOR OPTIMIZADO 】* 🧠\n"
                         f"🏆 *Liga:* {tag}\n"
+                        f"📅 *Calendario:* `{horario_juego_texto}`\n"
                         f"────────────────────────\n"
                         f"⚔️ *Partido:* {away} vs {home}\n"
                         f"🎯 *PICK:* `{label_apuesta}`\n"
@@ -216,17 +240,40 @@ class ProfessionalBot:
             try:
                 dt_mex = self._get_hora_mexico()
                 fecha_hoy = dt_mex.strftime("%Y-%m-%d")
-                hora_actual = dt_mex.hour  # Obtiene la hora en formato 24 horas
+                hora_actual = dt_mex.hour
+                minuto_actual = dt_mex.minute
 
                 Logger.log(f"--- Ciclo de Monitoreo (Hora MX: {dt_mex.strftime('%H:%M')}) ---")
                 
                 picks_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
 
-                # REGLA 1: Si es igual o posterior a las 11:00 PM (Hora 23), dispara el Profit del día
                 if hora_actual >= 23:
                     self.enviar_reporte_profit(fecha_hoy, picks_hoy)
 
-                # REGLA 2: Si aún no llegamos a los 4 picks, sigue escaneando mercados con normalidad
+                if hora_actual == 23 and minuto_actual >= 30:
+                    if not self.db.chequeo_sistema(f"NOCHES_{fecha_hoy}"):
+                        msg_noches = (
+                            "🌙 *【 CIERRE DE CANAL 】* 🌙\n"
+                            "────────────────────────\n"
+                            "Familia, finalizamos las actividades por el día de hoy. "
+                            "El bot se queda monitoreando los mercados de madrugada para arrancar con todo mañana. "
+                            "¡Que tengan una excelente noche y descansen! 😴💤"
+                        )
+                        if self.tg.enviar(msg_noches):
+                            self.db.marcar_sistema(f"NOCHES_{fecha_hoy}", {"enviado": True})
+
+                if hora_actual == 8 and minuto_actual >= 30:
+                    if not self.db.chequeo_sistema(f"DIAS_{fecha_hoy}"):
+                        msg_dias = (
+                            "☀️ *【 BUENOS DÍAS 】* ☀️\n"
+                            "────────────────────────\n"
+                            "¡Ya estamos activos, equipo! 🚀 El escáner ya se encuentra analizando "
+                            "los primeros momios y líneas de valor del día. Mantengan las notificaciones "
+                            "activas que hoy vamos por esos verdes. ¡Mucho éxito en la jornada! 📈💰"
+                        )
+                        if self.tg.enviar(msg_dias):
+                            self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
+
                 if len(picks_hoy) >= 4:
                     Logger.log("🔒 Meta diaria completada (4/4). No se buscarán más picks por hoy.")
                 else:
@@ -235,8 +282,9 @@ class ProfessionalBot:
             except Exception as e:
                 Logger.log(f"💥 Error en el controlador principal: {e}")
             
-            Logger.log("💤 Esperando 15 minutos para la siguiente revisión...")
-            time.sleep(900)
+            # --- MODIFICACIÓN ÚNICA: Esperar 30 minutos (1800 segundos) para ahorrar créditos ---
+            Logger.log("💤 Esperando 30 minutos para la siguiente revisión...")
+            time.sleep(1800)
 
 if __name__ == "__main__":
     bot = ProfessionalBot()
