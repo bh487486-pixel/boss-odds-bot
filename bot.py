@@ -113,6 +113,26 @@ class ProfessionalBot:
         else:
             return 3 if momio <= 150 else 2
 
+    # --- NUEVA FUNCIÓN: CALCULADORA DE COMBINADAS PROFESIONAL ---
+    def _calcular_momio_combinado(self, momio1: int, momio2: int) -> tuple:
+        # 1. Pasar momio 1 a decimal
+        dec1 = (100 / abs(momio1)) + 1 if momio1 < 0 else (momio1 / 100) + 1
+        # 2. Pasar momio 2 a decimal
+        dec2 = (100 / abs(momio2)) + 1 if momio2 < 0 else (momio2 / 100) + 1
+        
+        # 3. Multiplicar cuotas decimales
+        dec_final = dec1 * dec2
+        
+        # 4. Traducir de vuelta a americano
+        if dec_final >= 2.0:
+            am_final = int((dec_final - 1) * 100)
+            txt_final = f"+{am_final}"
+        else:
+            am_final = int(-100 / (dec_final - 1))
+            txt_final = str(am_final)
+            
+        return am_final, txt_final
+
     def enviar_reporte_profit(self, fecha_hoy: str, picks_hoy: list):
         if self.db.chequeo_sistema(f"PROFIT_{fecha_hoy}"):
             return
@@ -186,57 +206,97 @@ class ProfessionalBot:
                     mes_en = dt_mx.strftime("%b")
                     mes_es = self.meses_es.get(mes_en, mes_en)
                     
-                    # CORRECCIÓN AQUÍ: Se cambió %H:%M por %I:%M %p para forzar el formato AM/PM (Ej: 10:30 PM)
                     hora_ampm = dt_mx.strftime("%I:%M %p")
                     horario_juego_texto = f"{dia_semana_es}, {dt_mx.strftime('%d')} de {mes_es} - {hora_ampm} MX"
                 except:
                     horario_juego_texto = "Por confirmar"
 
-                market = bookmakers[0].get("markets", [])[0]
+                mercado_h2h = None
+                mercado_totals = None
                 
-                for outcome in market.get("outcomes", []):
+                for bk in bookmakers:
+                    for m in bk.get("markets", []):
+                        if m.get("key") == "h2h" and not mercado_h2h:
+                            mercado_h2h = m
+                        if m.get("key") == "totals" and not mercado_totals:
+                            mercado_totals = m
+                    if mercado_h2h and mercado_totals:
+                        break
+
+                if not mercado_h2h: continue
+
+                outcomes_validos = []
+                for outcome in mercado_h2h.get("outcomes", []):
                     momio = int(outcome.get("price"))
                     stake = self.calcular_stake(momio)
-                    if stake == 0: continue
+                    if stake > 0:
+                        outcomes_validos.append((outcome, momio, stake))
 
-                    # CORRECCIÓN AQUÍ: Ajustado el tope máximo estricto a 5 picks por día
-                    picks_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
-                    if len(picks_hoy) >= 5:
-                        Logger.log("🔒 Límite de 5 picks alcanzado por hoy. Deteniendo envíos.")
-                        return
+                if not outcomes_validos: continue
 
-                    momio_txt = f"+{momio}" if momio > 0 else str(momio)
-                    label_apuesta = outcome.get("name")
-                    if label_apuesta == home: label_apuesta = f"Gana {home} (Local)"
-                    elif label_apuesta == away: label_apuesta = f"Gana {away} (Visitante)"
+                outcomes_validos.sort(key=lambda x: x[1], reverse=True)
+                outcome_elegido, momio, stake = outcomes_validos[0]
 
-                    mensaje = (
-                        f"🧠 *【 ANÁLISIS DE VALOR OPTIMIZADO 】* 🧠\n"
-                        f"🏆 *Liga:* {tag}\n"
-                        f"📅 *Calendario:* `{horario_juego_texto}`\n"
-                        f"────────────────────────\n"
-                        f"⚔️ *Partido:* {away} vs {home}\n"
-                        f"🎯 *PICK:* `{label_apuesta}`\n"
-                        f"🏛️ *Casa:* {bookmakers[0].get('title')}\n"
-                        f"📈 *Cuota/Momio:* `{momio_txt}`\n"
-                        f"🛡️ *Riesgo:* `Stake {stake}/10`\n"
-                        f"────────────────────────\n"
-                        f"🤖 _Filtro de valor verificado e ingresado a base de datos._"
-                    )
+                picks_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
+                if len(picks_hoy) >= 5:
+                    Logger.log("🔒 Límite de 5 picks alcanzado por hoy. Deteniendo envíos.")
+                    return
 
-                    if self.tg.enviar(mensaje):
-                        info_pick = {
-                            "partido_id": p_id,
-                            "partido": f"{away} vs {home}",
-                            "apuesta": label_apuesta,
-                            "momio_num": momio,
-                            "stake": stake,
-                            "fecha_registro": fecha_hoy,
-                            "estado": "PENDIENTE"
-                        }
-                        self.db.registrar_pick(f"PICK_{p_id}", info_pick)
-                        Logger.log(f"🚀 Pick enviado con éxito: {label_apuesta}")
-                        return 
+                momio_txt = f"+{momio}" if momio > 0 else str(momio)
+                label_apuesta = outcome_elegido.get("name")
+                if label_apuesta == home: label_apuesta = f"Gana {home} (Local)"
+                elif label_apuesta == away: label_apuesta = f"Gana {away} (Visitante)"
+
+                # Decisión inteligente si se requiere armar la SGP
+                es_combinada_conveniente = (momio <= -150)
+                momio_para_guardar = momio
+
+                if es_combinada_conveniente and mercado_totals and mercado_totals.get("outcomes"):
+                    out_total = mercado_totals.get("outcomes")[0]
+                    puntos = out_total.get("point")
+                    momio_total = int(out_total.get("price", -110)) # Si no hay momio, asume la línea estándar de -110
+                    
+                    if "baseball" in sport:
+                        label_pick_final = f"{label_apuesta} + Más de {puntos} Carreras"
+                    else:
+                        label_pick_final = f"{label_apuesta} + Más de {puntos} Goles"
+                    
+                    titulo_analisis = "🧠 *【 COMBINADA DE VALOR OPTIMIZADO 】* 🧠"
+                    
+                    # CORRECCIÓN AQUÍ: Se calcula el verdadero momio final combinado multiplicando las cuotas decimales
+                    momio_para_guardar, momio_final_txt = self._calcular_momio_combinado(momio, momio_total)
+                else:
+                    label_pick_final = label_apuesta
+                    titulo_analisis = "🧠 *【 ANÁLISIS DE VALOR OPTIMIZADO 】* 🧠"
+                    momio_final_txt = momio_txt
+
+                mensaje = (
+                    f"{titulo_analisis}\n"
+                    f"🏆 *Liga:* {tag}\n"
+                    f"📅 *Calendario:* `{horario_juego_texto}`\n"
+                    f"────────────────────────\n"
+                    f"⚔️ *Partido:* {away} vs {home}\n"
+                    f"🎯 *PICK:* `{label_pick_final}`\n"
+                    f"🏛️ *Casa:* {bookmakers[0].get('title')}\n"
+                    f"📈 *Cuota/Momio:* `{momio_final_txt}`\n"
+                    f"🛡️ *Riesgo:* `Stake {stake}/10`\n"
+                    f"────────────────────────\n"
+                    f"🤖 _Filtro de valor verificado de forma inteligente._"
+                )
+
+                if self.tg.enviar(mensaje):
+                    info_pick = {
+                        "partido_id": p_id,
+                        "partido": f"{away} vs {home}",
+                        "apuesta": label_pick_final,
+                        "momio_num": momio_para_guardar, # Se guarda el momio combinado real para calcular el profit exacto en la noche
+                        "stake": stake,
+                        "fecha_registro": fecha_hoy,
+                        "estado": "PENDIENTE"
+                    }
+                    self.db.registrar_pick(f"PICK_{p_id}", info_pick)
+                    Logger.log(f"🚀 Pick procesado con éxito: {label_pick_final} ({momio_final_txt})")
+                    break 
 
     def ejecutar(self):
         while True:
@@ -277,7 +337,6 @@ class ProfessionalBot:
                         if self.tg.enviar(msg_dias):
                             self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
 
-                # CORRECCIÓN AQUÍ: Ajustado a 5 en la verificación visual del ciclo
                 if len(picks_hoy) >= 5:
                     Logger.log("🔒 Meta diaria completada (5/5). No se buscarán más picks por hoy.")
                 else:
