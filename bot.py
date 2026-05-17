@@ -42,7 +42,6 @@ class DatabaseManager:
         return [v for k, v in self.data.items() if not k.startswith("SYS_") and v.get("fecha_registro") == fecha_hoy]
 
     def ya_existe_partido(self, partido_id: str, fecha_hoy: str) -> bool:
-        # Candado profesional: Un solo pick por partido al día para evitar contradicciones
         picks_hoy = self.obtener_picks_del_dia(fecha_hoy)
         return any(p.get("partido_id") == partido_id for p in picks_hoy)
 
@@ -100,20 +99,14 @@ class OddsApiClient:
 class TipsterEngine:
     @staticmethod
     def filtrar_y_calcular_stake(momio: int) -> int:
-        """
-        Un tipster profesional mide el riesgo/beneficio basado en el momio americano.
-        Filtramos momios absurdos y asignamos stakes coherentes.
-        """
-        # Evitar momios ultra favoritos donde arriesgas demasiado vago (-250 a +300 es el rango premium)
         if momio < -250 or momio > 350:
             return 0 
-            
         if momio < 0:
-            if momio <= -150: return 5  # Alta probabilidad de acierto (Stake Medio-Alto)
+            if momio <= -150: return 5
             return 4
         else:
-            if momio <= 150: return 3   # Momio positivo viable (Stake Medio)
-            return 2                    # Momio alto / Longshot analizado (Stake Bajo)
+            if momio <= 150: return 3
+            return 2
 
 class ProfessionalTipsterBot:
     def __init__(self):
@@ -129,7 +122,6 @@ class ProfessionalTipsterBot:
         self.tg = TelegramClient(bot_token, chat_id)
         self.api = OddsApiClient(api_key)
 
-        # Las ligas solicitadas estrictamente
         self.ligas = {
             "baseball_mlb": "MLB 🇺🇸",
             "soccer_mexico_ligamx": "Liga MX 🇲🇽",
@@ -142,7 +134,6 @@ class ProfessionalTipsterBot:
         return datetime.now(timezone.utc) - timedelta(hours=6)
 
     def auditar_resultados(self):
-        """ Revisa los partidos concluidos para actualizar el historial de aciertos """
         Logger.log("📊 Corriendo auditoría automatizada de resultados...")
         for sport in self.ligas.keys():
             partidos = self.api.fetch_scores(sport)
@@ -151,8 +142,6 @@ class ProfessionalTipsterBot:
                     p_id = p.get("id")
                     scores = p.get("scores")
                     if not scores or len(scores) < 2: continue
-                    
-                    # Extraer scores de manera segura
                     try:
                         score_home = int(scores[0]["score"])
                         score_away = int(scores[1]["score"])
@@ -161,7 +150,6 @@ class ProfessionalTipsterBot:
 
                     for k, v in self.db.data.items():
                         if not k.startswith("SYS_") and v.get("partido_id") == p_id and v.get("estado") == "PENDIENTE":
-                            # Marcamos como auditado (Para un manejo 100% real, guardamos el score)
                             self.db.data[k]["estado"] = "FINALIZADO"
                             self.db.data[k]["marcador_final"] = marcador_final
                             Logger.log(f"✅ Partido {p_id} auditado. Resultado: {marcador_final}")
@@ -172,19 +160,16 @@ class ProfessionalTipsterBot:
 
         for sport, tag in self.ligas.items():
             mercados = "h2h,totals,spreads,btts" if "soccer" in sport else "h2h,totals,spreads"
-            partidos_odds = self.api.fetch_odds(sport, mercados)
+            partidos_odds = self.api.fetch_odds(sport, markets=mercados)
             
-            # Traer scores en vivo si existen
             scores_raw = self.api.fetch_scores(sport)
             live_data = {s["id"]: s for s in scores_raw}
 
             for p in partidos_odds:
                 p_id = p.get("id")
                 
-                # CANDADO PROFESIONAL: Si ya mandamos un pick de este partido hoy, saltarlo por completo
                 if self.db.ya_existe_partido(p_id, fecha_hoy): continue
 
-                # Validar Horarios
                 try:
                     dt_partido = (datetime.strptime(p.get("commence_time"), "%Y-%m-%dT%H:%M:%SZ") - timedelta(hours=6)).replace(tzinfo=None)
                     f_partido = dt_partido.strftime("%Y-%m-%d")
@@ -196,7 +181,6 @@ class ProfessionalTipsterBot:
                 diff_segundos = (dt_partido - self._get_hora_mexico().replace(tzinfo=None)).total_seconds()
                 es_live = diff_segundos <= 0
 
-                # Si el partido ya lleva más de 3 horas en juego, ignorarlo
                 if es_live and diff_segundos < -10800: continue 
 
                 home = p.get("home_team")
@@ -204,7 +188,6 @@ class ProfessionalTipsterBot:
                 bookmakers = p.get("bookmakers", [])
                 if not bookmakers: continue
 
-                # Analizar cuotas de forma limpia
                 for bookie in bookmakers:
                     for market in bookie.get("markets", []):
                         m_key = market.get("key")
@@ -213,11 +196,9 @@ class ProfessionalTipsterBot:
                             point = outcome.get("point", None)
                             o_name = outcome.get("name")
                             
-                            # Evaluar si el momio tiene el perfil profesional
                             stake = TipsterEngine.filtrar_y_calcular_stake(momio)
-                            if stake == 0: continue # Rechazado por el filtro de valor
+                            if stake == 0: continue 
 
-                            # Formatear el pick de forma limpia según el deporte
                             es_base = "baseball" in sport
                             label_apuesta = o_name
                             
@@ -241,7 +222,6 @@ class ProfessionalTipsterBot:
                             else:
                                 continue
 
-                            # Identificador único de mercado para no duplicar exactamente la misma apuesta
                             llave_unica = f"{p_id}_{m_key}_{o_name}"
                             if self.db.chequeo_sistema(f"PICK_{llave_unica}"): continue
 
@@ -266,7 +246,7 @@ class ProfessionalTipsterBot:
                                 "horario": h_partido_txt,
                                 "es_live": es_live,
                                 "marcador_live": marcador_en_vivo,
-                                "prioridad": stake + (2 if es_live else 0) # El bot prioriza mejores stakes o jugadas en vivo
+                                "prioridad": stake + (2 if es_live else 0)
                             })
         return candidatos
 
@@ -278,10 +258,8 @@ class ProfessionalTipsterBot:
 
         Logger.log(f"--- Ejecutando Escáner Profesional (Hora MX: {dt_mex.strftime('%H:%M')}) ---")
         
-        # 1. Auditoría Obligatoria
         self.auditar_resultados()
 
-        # 2. Mensaje Diario de Gestión de Bank (Solo una vez al día a las 8-9 AM)
         if hora_actual >= 8 and not self.db.chequeo_sistema(f"SALUDO_{fecha_hoy}"):
             saludo = (
                 "📈 *【 SNIPER PREMIUM: GESTIÓN DE CAPITAL 】* 📈\n"
@@ -293,7 +271,6 @@ class ProfessionalTipsterBot:
             if self.tg.enviar(saludo):
                 self.db.marcar_sistema(f"SALUDO_{fecha_hoy}", {"enviado": True})
 
-        # 3. Control de Flujo de Envío (Máximo 4 al día)
         picks_enviados_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
         total_enviados = len(picks_enviados_hoy)
         Logger.log(f"Contador diario actual: {total_enviados}/4 picks emitidos.")
@@ -302,15 +279,12 @@ class ProfessionalTipsterBot:
             Logger.log("🔒 Meta diaria completada (4/4). El software descansa de emitir alertas por hoy.")
             return
 
-        # 4. Escaneo General de Oportunidades
         candidatos = self.escanear_mercados(fecha_hoy, fecha_manana, total_enviados)
 
         if candidatos:
-            # Ordenar por el sistema de prioridad profesional (mejor valor/stake primero)
             candidatos = sorted(candidatos, key=lambda x: x["prioridad"], reverse=True)
             pick_ganador = candidatos[0]
 
-            # Formatear Mensaje de Tipster de Élite
             tipo_alerta = "🔥 *【 SNIPER LIVE PREMIUM 】* 🔥" if pick_ganador["es_live"] else "🧠 *【 ANALISIS PRE-PARTIDO 】* 🧠"
             linea_live = f"📊 *Marcador Live:* `{pick_ganador['marcador_live']}`\n" if pick_ganador["es_live"] else ""
 
@@ -346,8 +320,6 @@ class ProfessionalTipsterBot:
             Logger.log("💤 No se encontraron errores de cuotas o valor en esta revisión.")
 
     def iniciar_bucle(self):
-        # Escaneo profesional continuo cada 15 minutos (900 segundos)
-        # Esto permite atrapar juegos LIVE y PRE-MATCH de todo el día sin gastar de más la API
         while True:
             try:
                 self.ejecutar_controlador()
