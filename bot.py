@@ -272,14 +272,13 @@ def buscar_picks(api_key, bot_token, chat_id):
                         if len(lista_cuotas) < 1: continue
                         mejor_casino, mejor_precio = max(lista_cuotas, key=lambda x: x[1])
                         
-                        # 🔥 FILTRO INTELIGENTE CON TOPE +500 EN VIVO EXCLUSIVO SOLICITADO
+                        # FILTRO DE CUOTAS (Tope +500 en directo activo)
                         if es_en_vivo:
                             es_valido = (mejor_precio < 0 and -300 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 500)
                         else:
                             es_valido = (mejor_precio < 0 and -250 <= mejor_precio <= -100) or (mejor_precio > 0 and 100 <= mejor_precio <= 250)
                             
                         if es_valido:
-                            # 🛠️ AJUSTE DE LLAVE INTELIGENTE: Si está en vivo genera un ID especial para saltarse el candado pre-partido
                             if es_en_vivo:
                                 llave_apuesta = f"{partido_id}_{label}_LIVE"
                             else:
@@ -320,19 +319,28 @@ def buscar_picks(api_key, bot_token, chat_id):
         CICLOS_VACIOS_CONSECUTIVOS = 0
         picks_enviados_en_este_ciclo = []
         partidos_usados_en_este_ciclo = set()
-        
-        # Prioriza los En Vivo primero, luego ordena por cercanía de tiempo
-        todos_los_picks = sorted(todos_los_picks, key=lambda x: (not x["es_en_vivo"], x["tiempo_restante"]))
         db = cargar_db()
         
-        for candidato in todos_los_picks:
-            if len(picks_enviados_en_este_ciclo) >= 4: break 
+        # 1. Prioriza los En Vivo primero, luego ordena por cercanía de tiempo
+        todos_los_picks = sorted(todos_los_picks, key=lambda x: (not x["es_en_vivo"], x["tiempo_restante"]))
+        
+        # 🎯 2. FILTRO ABSOLUTO DE DUPLICADOS CONTRA-APUESTAS (Solo una propuesta por juego por vuelta)
+        picks_filtrados_unicos = []
+        partidos_ya_agregados_pre_envio = set()
+        
+        for p in todos_los_picks:
+            if p["partido_id"] not in partidos_ya_agregados_pre_envio:
+                picks_filtrados_unicos.append(p)
+                partidos_ya_agregados_pre_envio.add(p["partido_id"])
+        
+        # 3. Ciclo de envío a Telegram (Máximo 7 selecciones por ciclo / 4 partidos en parley mixto)
+        for candidato in picks_filtrados_unicos:
+            if len(picks_enviados_en_este_ciclo) >= 7: break 
             
             p_id = candidato["partido_id"]
             llave = candidato["llave_apuesta"]
             
-            # El candado por ciclo solo frena si es el mismo TIPO de pick en la misma vuelta
-            if llave not in PICKS_ENVIADOS_REGISTRO:
+            if llave not in PICKS_ENVIADOS_REGISTRO and p_id not in partidos_usados_en_este_ciclo:
                 titulo_bloque = "🔥 *【 EN VIVO: JOYAS DEL RADAR 】* 🔥" if candidato["es_en_vivo"] else "🧠 *【 ANÁLISIS PROFESIONAL VIP 】* 🧠"
                 linea_marcador = f"📊 *Marcador Actual:* `{candidato['marcador_live']}`\n" if candidato["es_en_vivo"] else ""
                 
@@ -394,7 +402,7 @@ def buscar_picks(api_key, bot_token, chat_id):
                         f"🛡️ *STAKE GENERAL:* `Stake 2/10` 💰"
                     )
                     send_telegram(bot_token, chat_id, msg_veredicto)
-                    parley_parmed = True
+                    parley_armado = True
             
             if not parley_armado:
                 msg_veredicto = (
