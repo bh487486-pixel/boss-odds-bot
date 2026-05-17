@@ -113,6 +113,23 @@ class ProfessionalBot:
         else:
             return 3 if momio <= 150 else 2
 
+    def analizar_probabilidad_y_valor(self, momio: int) -> bool:
+        """
+        Evalúa si la apuesta es viable combinando alta probabilidad o valor puro.
+        """
+        if momio < -250 or momio > 350:
+            return False  # Filtro de seguridad extremo
+
+        # 🎯 AJUSTE SOLICITADO: Rango calibrado de favoritos rentables (Entre -110 y -180)
+        if momio <= -110 and momio >= -180:
+            return True
+
+        # Para underdogs o apuestas de valor positivo rentables
+        if momio >= 100 and momio <= 350:
+            return True
+
+        return False
+
     def _calcular_momio_combinado(self, momio1: int, momio2: int) -> tuple:
         dec1 = (100 / abs(momio1)) + 1 if momio1 < 0 else (momio1 / 100) + 1
         dec2 = (100 / abs(momio2)) + 1 if momio2 < 0 else (momio2 / 100) + 1
@@ -156,7 +173,7 @@ class ProfessionalBot:
             f"🏁 *【 CIERRE DE JORNADA INTERNO 】* 🏁\n"
             f"────────────────────────\n"
             f"📅 *Fecha:* `{fecha_hoy}`\n"
-            f"🎯 *Picks Enviados Hoy:* `{len(picks_hoy)}/5`\n\n"
+            f"🎯 *Picks Enviados Hoy:* `{len(picks_hoy)}/6`\n\n"
             f"🟢 *Ganados:* `{verdes}`\n"
             f"🔴 *Perdidos:* `{rojos}`\n"
             f"📊 *Balance Neto:* `{signo}{unidades_netas:.2f} Unidades` {emoji_balance}\n"
@@ -167,11 +184,15 @@ class ProfessionalBot:
         if self.tg.enviar(mensaje_profit):
             self.db.marcar_sistema(f"PROFIT_{fecha_hoy}", {"enviado": True, "profit": unidades_netas})
 
-    def escanear_mercados(self, fecha_hoy: str):
+    def escanear_mercados(self, fecha_hoy: str, caceria_anticipada_madrugada=False):
         partidos_procesados_este_ciclo = set()
         dt_actual_mx = self._get_hora_mexico()
 
         for sport, tag in self.ligas.items():
+            if caceria_anticipada_madrugada:
+                if sport in ["baseball_mlb", "soccer_mexico_ligamx"]:
+                    continue
+
             url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?apiKey={self.api_key}&regions=us&markets=h2h,totals&oddsFormat=american"
             try:
                 res = self.session.get(url, timeout=15)
@@ -196,12 +217,14 @@ class ProfessionalBot:
                     dt_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ")
                     dt_mx = dt_utc - timedelta(hours=6)
                     
-                    # AJUSTE LÁSER EXACTO: Filtro de 10 minutos de ventaja mínima pre-partido
                     tiempo_restante = dt_mx - dt_actual_mx.replace(tzinfo=None)
                     if tiempo_restante < timedelta(minutes=10):
-                        Logger.log(f"⏰ Partido omitido (Faltan menos de 10 minutos para iniciar): {away} vs {home}")
                         continue
                     
+                    if caceria_anticipada_madrugada:
+                        if dt_mx.hour >= 10:
+                            continue
+
                     dia_semana_en = dt_mx.strftime("%A")
                     dia_semana_es = self.dias_es.get(dia_semana_en, dia_semana_en)
                     mes_en = dt_mx.strftime("%b")
@@ -230,6 +253,10 @@ class ProfessionalBot:
                 outcomes_validos = []
                 for outcome in mercado_h2h.get("outcomes", []):
                     momio = int(outcome.get("price"))
+                    
+                    if not self.analizar_probabilidad_y_valor(momio):
+                        continue
+
                     stake = self.calcular_stake(momio)
                     if stake > 0:
                         outcomes_validos.append((outcome, momio, stake))
@@ -240,8 +267,7 @@ class ProfessionalBot:
                 outcome_elegido, momio, stake = outcomes_validos[0]
 
                 picks_hoy = self.db.obtener_picks_del_dia(fecha_hoy)
-                if len(picks_hoy) >= 5:
-                    Logger.log("🔒 Límite de 5 picks alcanzado por hoy. Deteniendo envíos.")
+                if len(picks_hoy) >= 6:
                     return
 
                 momio_txt = f"+{momio}" if momio > 0 else str(momio)
@@ -301,6 +327,7 @@ class ProfessionalBot:
 
     def ejecutar(self):
         while True:
+            tiempo_espera_segundos = 1800
             try:
                 dt_mex = self._get_hora_mexico()
                 fecha_hoy = dt_mex.strftime("%Y-%m-%d")
@@ -314,40 +341,52 @@ class ProfessionalBot:
                 if hora_actual >= 23:
                     self.enviar_reporte_profit(fecha_hoy, picks_hoy)
 
-                if hora_actual == 23 and minuto_actual >= 30:
-                    if not self.db.chequeo_sistema(f"NOCHES_{fecha_hoy}"):
-                        msg_noches = (
-                            "🌙 *【 CIERRE DE CANAL 】* 🌙\n"
-                            "────────────────────────\n"
-                            "Familia, finalizamos las actividades por el día de hoy. "
-                            "El bot se queda monitoreando los mercados de madrugada para arrancar con todo mañana. "
-                            "¡Que tengan una excelente noche y descansen! 😴💤"
-                        )
-                        if self.tg.enviar(msg_noches):
-                            self.db.marcar_sistema(f"NOCHES_{fecha_hoy}", {"enviado": True})
+                if hora_actual >= 23 or hora_actual < 5:
+                    if hora_actual == 23 and minuto_actual < 30 and len(picks_hoy) < 6:
+                        Logger.log("🦅 Cacería Nocturna: Escaneando favoritos/valor en Europa mañanero...")
+                        self.escanear_mercados(fecha_hoy, caceria_anticipada_madrugada=True)
+                        tiempo_espera_segundos = 600
+                    else:
+                        if hora_actual == 23 and minuto_actual >= 30:
+                            if not self.db.chequeo_sistema(f"NOCHES_{fecha_hoy}"):
+                                msg_noches = (
+                                    "🌙 *【 CIERRE DE CANAL 】* 🌙\n"
+                                    "────────────────────────\n"
+                                    "Familia, finalizamos las actividades por el día de hoy. "
+                                    "El bot ha dejado listos los análisis de confianza para la mañana europea. "
+                                    "¡Que tengan una excelente noche y nos vemos mañana! 😴"
+                                )
+                                if self.tg.enviar(msg_noches):
+                                    self.db.marcar_sistema(f"NOCHES_{fecha_hoy}", {"enviado": True})
 
-                if hora_actual == 8 and minuto_actual >= 30:
-                    if not self.db.chequeo_sistema(f"DIAS_{fecha_hoy}"):
-                        msg_dias = (
-                            "☀️ *【 BUENOS DÍAS 】* ☀️\n"
-                            "────────────────────────\n"
-                            "¡Ya estamos activos, equipo! 🚀 El escáner ya se encuentra analizando "
-                            "los primeros momios y líneas de valor del día. Mantengan las notificaciones "
-                            "activas que hoy vamos por esos verdes. ¡Mucho éxito en la jornada! 📈💰"
-                        )
-                        if self.tg.enviar(msg_dias):
-                            self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
+                        Logger.log("😴 Apagado Nocturno Inteligente Activo. Durmiendo bloque largo...")
+                        tiempo_espera_segundos = 19800
 
-                if len(picks_hoy) >= 5:
-                    Logger.log("🔒 Meta diaria completada (5/5). No se buscarán más picks por hoy.")
                 else:
-                    self.escanear_mercados(fecha_hoy)
+                    tiempo_espera_segundos = 1800
+                    
+                    if hora_actual == 8 and minuto_actual >= 30:
+                        if not self.db.chequeo_sistema(f"DIAS_{fecha_hoy}"):
+                            msg_dias = (
+                                "☀️ *【 BUENOS DÍAS 】* ☀️\n"
+                                "────────────────────────\n"
+                                "¡Ya estamos activos, equipo! 🚀 El escáner se encuentra distribuyendo "
+                                "los picks del día en los mercados de la tarde. ¡Mantengan notificaciones activas! 📈💰"
+                            )
+                            if self.tg.enviar(msg_dias):
+                                    self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
+
+                    if len(picks_hoy) >= 6:
+                        Logger.log("🔒 Meta diaria completada (6/6). No se buscarán más picks por hoy.")
+                    else:
+                        self.escanear_mercados(fecha_hoy, caceria_anticipada_madrugada=False)
                     
             except Exception as e:
                 Logger.log(f"💥 Error en el controlador principal: {e}")
             
-            Logger.log("💤 Esperando 30 minutos para la siguiente revisión...")
-            time.sleep(1800)
+            minutos_log = int(tiempo_espera_segundos / 60)
+            Logger.log(f"💤 Esperando {minutos_log} minutos para la siguiente revisión...")
+            time.sleep(tiempo_espera_segundos)
 
 if __name__ == "__main__":
     bot = ProfessionalBot()
