@@ -152,12 +152,12 @@ async def job_apertura_0800():
     )
     await enviar_mensaje_canal(mensaje)
 
-async def job_escaneo_0830():
+async def job_escaneo_global():
     if database_diaria["modo_sueno"]:
         logger.warning("🚫 Escaneo cancelado: El bot está en modo suspensión.")
         return
 
-    logger.info("⚡ Iniciando escaneo algorítmico global de mercados...")
+    logger.info("⚡ Iniciando escaneo algorítmico de mercados...")
     for liga_key, liga_name in LIGAS_A_MONITORIZAR.items():
         partidos = consultar_odds_api(liga_key)
         for partido in partidos[:3]:
@@ -182,6 +182,11 @@ async def job_escaneo_0830():
                         stake_final = calcular_stake_kelly(prob_real, cuota_casino)
                         if stake_final > 0:
                             pick_id = partido.get("id", "N/A")
+                            
+                            # Evitamos duplicar picks si se escanean en la mañana y en la noche
+                            if any(p["id"] == pick_id for p in database_diaria["picks_enviados"]):
+                                continue
+                                
                             database_diaria["picks_enviados"].append({
                                 "id": pick_id, "partido": f"{home} vs {away}", "mercado": f"Gana {home} (Local)",
                                 "cuota": cuota_casino, "stake": stake_final, "liga": liga_name, "resultado": "GANADO"
@@ -249,17 +254,17 @@ async def job_sueno_2305():
 async def main():
     logger.info("🚀 Iniciando procesos del Servidor del Bot...")
     
-    # Sincronización horaria amarrada estrictamente a la CDMX
     scheduler = AsyncIOScheduler(timezone=ZONE_MX)
     
-    # Inyección de la zona horaria en cada trigger individual
+    # CRONOGRAMA ACTUALIZADO (MÉXICO UTC-6)
     scheduler.add_job(job_apertura_0800, CronTrigger(hour=8, minute=0, timezone=ZONE_MX))
-    scheduler.add_job(job_escaneo_0830, CronTrigger(hour=8, minute=30, timezone=ZONE_MX))
+    scheduler.add_job(job_escaneo_global, CronTrigger(hour=8, minute=30, timezone=ZONE_MX))   # Escaneo Matutino
+    scheduler.add_job(job_escaneo_global, CronTrigger(hour=22, minute=0, timezone=ZONE_MX))  # 👀 NUEVO: Escaneo Nocturno (Europa Anticipado)
     scheduler.add_job(job_cierre_2300, CronTrigger(hour=23, minute=0, timezone=ZONE_MX))
     scheduler.add_job(job_sueno_2305, CronTrigger(hour=23, minute=5, timezone=ZONE_MX))
     
     scheduler.start()
-    logger.info("⏰ Cron Jobs emparejados con APScheduler en Hora de México.")
+    logger.info("⏰ Cron Jobs emparejados con APScheduler en Hora de México (Día y Noche).")
     
     while True:
         await asyncio.sleep(3600)
