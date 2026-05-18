@@ -87,8 +87,8 @@ class ProfessionalBot:
 
         self.ligas = {
             "soccer_mexico_ligamx": "Liga MX",
-            "baseball_mlb": "MLB USA",
-            "soccer_epl": "Premier League"
+            "soccer_epl": "Premier League",
+            "baseball_mlb": "MLB USA"
         }
 
         self.mapeo_liga_mx = {
@@ -133,37 +133,33 @@ class ProfessionalBot:
             return 1.3
         except: return 1.3
 
-    # 🔥 GENERADOR DE ANÁLISIS INTEGRAL (ESTADÍSTICA + FACTORES EXTERNOS)
     def generar_analisis_coherente(self, sport: str, mercado_label: str, home: str, away: str, prom_comb: float = None) -> str:
         es_futbol = "soccer" in sport
         es_beisbol = "baseball" in sport
         argumento_base = ""
 
-        # 1. Bloque Estadístico Automatizado
         if "Más de" in mercado_label or "Over" in mercado_label:
             if es_futbol:
                 goles_txt = f" con un promedio combinado de `{prom_comb:.2f}` goles por encuentro" if prom_comb else ""
-                argumento_base = f"📊 *Métricas:* Ambos conjuntos muestran una clara tendencia ofensiva esta temporada{goles_txt}. Sus transiciones rápidas y debilidades en las líneas bajas rivales abren un escenario ideal para buscar las altas."
+                argumento_base = f"📊 *Métricas:* Ambos conjuntos muestran una clara tendencia ofensiva{goles_txt}. Sus transiciones rápidas y debilidades defensivas abren un escenario ideal para buscar las altas."
             elif es_beisbol:
-                argumento_base = f"📊 *Métricas:* El poder al bate de los line-ups actuales frente a la fatiga del picheo abridor proyecta un partido de alta anotación en la MLB. La línea puesta por el casino se quedó corta."
+                argumento_base = f"📊 *Métricas:* El poder al bate de los line-ups actuales frente a la fatiga del picheo abridor proyecta un partido de alta anotación en la MLB."
         elif "Menos de" in mercado_label or "Under" in mercado_label:
             if es_futbol:
                 goles_txt = f" respaldado por un promedio de apenas `{prom_comb:.2f}` goles" if prom_comb else ""
-                argumento_base = f"📊 *Métricas:* Choque de alta rigidez táctica. Ambos técnicos priorizan el orden defensivo en bloque bajo{goles_txt}. Esperamos un partido muy trabado en media cancha con escasas oportunidades."
+                argumento_base = f"📊 *Métricas:* Choque de alta rigidez táctica. Ambos técnicos priorizan el orden defensivo en bloque bajo{goles_txt}. Esperamos un partido muy trabado."
             elif es_beisbol:
-                argumento_base = f"📊 *Métricas:* Los lanzadores abridores asignados para hoy y la efectividad histórica del bullpen proyectan un duelo dominado completamente por las serpentinas en la MLB. Línea de bajas plenamente justificada."
+                argumento_base = f"📊 *Métricas:* Los lanzadores abridores asignados y la efectividad histórica del bullpen proyectan un duelo dominado por las serpentinas en la MLB."
         elif "Hándicap" in mercado_label:
-            argumento_base = f"📊 *Métricas:* El mercado de hándicap nos ofrece una ventaja matemática crucial. El cruce de datos arroja que el equipo seleccionado mantiene una consistencia de cobertura que supera la línea exigida por el casino."
+            argumento_base = f"📊 *Métricas:* El mercado de hándicap nos ofrece una ventaja matemática crucial. El cruce de datos arroja que el equipo mantiene una consistencia de cobertura ideal."
         else:
-            argumento_base = f"📊 *Métricas:* La jerarquía de la plantilla y el momento actual inclinan la balanza. El momio asignado presenta una asimetría de valor matemática frente a la probabilidad real en la cancha."
+            argumento_base = f"📊 *Métricas:* La jerarquía de la plantilla y el momento actual inclinan la balanza. El momio presenta una asimetría de valor matemática clara."
 
-        # 2. Bloque de Factores Contextuales (Plantilla para el canal del administrador)
         factores_externos = (
             f"\n\n🏟️ *Estadio y Localía:* _[Analizar factor viaje de {away} y ventaja de local de {home}]_\n"
             f"🌤️ *Condiciones Climáticas:* _[Pendiente verificar viento/lluvia/altura a la hora del juego]_\n"
             f"❌ *Reporte de Bajas:* _[Revisar confirmaciones de alineación de último minuto]_"
         )
-
         return argumento_base + factores_externos
 
     def analizar_probabilidad_y_valor(self, momio: int, mercado_key: str) -> bool:
@@ -205,6 +201,7 @@ class ProfessionalBot:
 
     def escanear_mercados(self, fecha_hoy: str):
         dt_actual_mx = self._get_hora_mexico()
+        # Mantiene el tope saludable de 6 picks diarios en total
         if len(self.db.obtener_picks_jugados_el_dia(fecha_hoy)) >= 6: return
 
         for sport, tag in self.ligas.items():
@@ -229,7 +226,9 @@ class ProfessionalBot:
                     dt_mx = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ") - timedelta(hours=6)
                     fecha_real_juego = dt_mx.strftime("%Y-%m-%d")
                     tiempo_restante = dt_mx - dt_actual_mx.replace(tzinfo=None)
-                    if tiempo_restante < timedelta(minutes=10) or tiempo_restante > timedelta(hours=15): continue
+                    
+                    # 🔥 RANGO DE 36 HORAS ACTIVADO: Puede mirar partidos lejanos perfectamente
+                    if tiempo_restante < timedelta(minutes=10) or tiempo_restante > timedelta(hours=36): continue
                     horario_texto = f"{dt_mx.strftime('%d')} de {self.meses_es.get(dt_mx.strftime('%b'))} - {dt_mx.strftime('%I:%M %p')} MX"
                 except: continue
 
@@ -297,26 +296,46 @@ class ProfessionalBot:
                         "momio_num": momio, "stake": stake, "fecha_registro": fecha_hoy,
                         "fecha_juego": fecha_real_juego, "estado": "PENDIENTE"
                     })
-                    return 
+                    return  # 🔥 Manda un solo pick y frena para esperar el tiempo de re-escaneo asignado
 
     def ejecutar(self):
         while True:
-            tiempo_espera = 1800
             try:
                 dt_mex = self._get_hora_mexico()
                 fecha_hoy = dt_mex.strftime("%Y-%m-%d")
                 hora_actual = dt_mex.hour
-                Logger.log(f"--- Ciclo de Análisis Avanzado Abierto (Hora MX: {dt_mex.strftime('%H:%M')}) ---")
 
-                if hora_actual >= 23 or hora_actual < 5:
-                    if hora_actual >= 23: self.enviar_reporte_profit_y_despedida(fecha_hoy)
-                    tiempo_espera = 21600
+                # 🛌 CONTROL DE HORARIO: DORMIR 8 HORAS EXACTAS (De 11:00 PM a 7:00 AM MX)
+                if hora_actual >= 23 or hora_actual < 7:
+                    if hora_actual == 23 and dt_mex.minute < 10:
+                        self.enviar_reporte_profit_y_despedida(fecha_hoy)
+                    
+                    Logger.log("💤 Modo nocturno: El bot duerme sus 8 horas completas hasta las 7:00 AM.")
+                    time.sleep(28800)  # Duerme 8 horas clavadas
+                    continue
+
+                # ⚡ DETERMINACIÓN DINÁMICA DEL TIEMPO DE ESPERA
+                if hora_actual >= 21 and hora_actual < 23:
+                    # 🚀 MODO TURBO NOCTURNO: De 9:00 PM a 11:00 PM escanea cada 10 minutos
+                    tiempo_espera = 600  # 10 minutos
+                    Logger.log(f"⚡ MODO TURBO NOCTURNO ACTIVO (Frecuencia: 10 min) - Buscando Madrugada/Mañana Europea...")
                 else:
-                    if hora_actual == 8 and not self.db.chequeo_sistema(f"DIAS_{fecha_hoy}"):
-                        if self.tg.enviar("☀️ *【 BUENOS DÍAS 】* ☀️\n\n¡Escáner Premium abierto! Buscando valor analítico en la cartelera de hoy. 📈💰"):
-                            self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
-                    self.escanear_mercados(fecha_hoy)
-            except Exception as e: Logger.log(f"💥 Error: {e}")
+                    # ☀️ MODO REGULAR DE DÍA: De 7:00 AM a 9:00 PM escanea cada 30 minutos
+                    tiempo_espera = 1800  # 30 minutos
+                    Logger.log(f"☀️ MODO REGULAR ACTIVO (Frecuencia: 30 min) - Escaneando cartelera del día...")
+
+                # Buenos días formal al canal al despertar
+                if hora_actual == 7 and dt_mex.minute < 35 and not self.db.chequeo_sistema(f"DIAS_{fecha_hoy}"):
+                    if self.tg.enviar("☀️ *【 ESCÁNER PREMIUM ABIERTO 】* ☀️\n\n¡Buenos días! El bot está despierto y analizando la cartelera regular cada 30 minutos. 📈💰"):
+                        self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
+
+                # Ejecuta la cacería matemática
+                self.escanear_mercados(fecha_hoy)
+
+            except Exception as e: 
+                Logger.log(f"💥 Error en el ciclo general: {e}")
+                tiempo_espera = 1800
+            
             time.sleep(tiempo_espera)
 
 if __name__ == "__main__":
