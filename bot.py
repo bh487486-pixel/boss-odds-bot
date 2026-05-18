@@ -85,9 +85,12 @@ class ProfessionalBot:
         self.football_key = football_key
         self.session = requests.Session()
 
+        # 🔥 TUS 5 LIGAS CONFIGURADAS Y LISTAS
         self.ligas = {
             "soccer_mexico_ligamx": "Liga MX",
             "soccer_epl": "Premier League",
+            "soccer_spain_la_liga": "LaLiga (España)",
+            "soccer_germany_bundesliga": "Bundesliga (Alemania)",
             "baseball_mlb": "MLB USA"
         }
 
@@ -319,7 +322,6 @@ class ProfessionalBot:
                 fecha_hoy = dt_mex.strftime("%Y-%m-%d")
                 hora_actual = dt_mex.hour
 
-                # 🛌 BLOQUE DE SUEÑO EXACTO: De 11:00 PM a 7:00 AM MX
                 if hora_actual >= 23 or hora_actual < 7:
                     if hora_actual == 23 and not self.db.chequeo_sistema(f"CIERRE_CANAL_{fecha_hoy}"):
                         Logger.log("🌙 Sincronizando cierre: Mandando Profit y Buenas Noches...")
@@ -331,7 +333,6 @@ class ProfessionalBot:
                     viene_de_dormir = True
                     continue
 
-                # ☀️ SALUDO MOTIVACIONAL AL DESPERTAR (Solo tras el sleep largo)
                 if hora_actual == 7 and viene_de_dormir and not self.db.chequeo_sistema(f"DIAS_{fecha_hoy}"):
                     mensaje_buenos_dias = (
                         f"☀️ *【 ESCÁNER PREMIUM ABIERTO 】* ☀️\n\n"
@@ -342,7 +343,6 @@ class ProfessionalBot:
                         self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
                     viene_de_dormir = False
 
-                # ⏱️ ASIGNACIÓN DINÁMICA DE TIEMPOS DE ESPERA
                 if hora_actual >= 21 and hora_actual < 23:
                     tiempo_espera = 600
                     Logger.log("⚡ MODO TURBO NOCTURNO ACTIVO (Frecuencia: 10 min) - Buscando Madrugadores...")
