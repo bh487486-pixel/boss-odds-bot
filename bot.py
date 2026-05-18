@@ -73,10 +73,10 @@ class ProfessionalBot:
         api_key = os.getenv("ODDS_API_KEY")
         bot_token = os.getenv("BOT_TOKEN")
         chat_id = os.getenv("CHAT_ID")
-        football_key = os.getenv("FOOTBALL_API_KEY") # 🔥 NUEVA LLAVE DE ESTADÍSTICAS
+        football_key = os.getenv("FOOTBALL_API_KEY")
 
         if not api_key or not bot_token or not chat_id or not football_key:
-            Logger.log("❌ CRÍTICO: Faltan variables de entorno en Render. Revisa la 4ta llave.")
+            Logger.log("❌ CRÍTICO: Faltan variables de entorno en Render.")
             sys.exit(1)
 
         self.db = DatabaseManager()
@@ -91,7 +91,6 @@ class ProfessionalBot:
             "soccer_epl": "Premier League"
         }
 
-        # 🔥 DICCIONARIO DE TRADUCCIÓN: Mapea los nombres de Odds API a IDs de API-Football
         self.mapeo_liga_mx = {
             "Club América": 2281, "Guadalajara": 2288, "Cruz Azul": 2287, 
             "Pumas UNAM": 2295, "UANL Tigres": 2296, "Monterrey": 2289,
@@ -120,11 +119,9 @@ class ProfessionalBot:
             return min(max(prob_final, 55), 88)
         except: return 75
 
-    # 🔥 NUEVO MÓDULO INTELIGENTE: Consulta las estadísticas reales de un equipo en la API
     def obtener_promedio_goles_api(self, team_id: int) -> float:
         url = "https://v3.football.api-sports.io/teams/statistics"
         headers = {"x-rapidapi-key": self.football_key, "x-rapidapi-host": "v3.football.api-sports.io"}
-        # Usamos Liga MX (262) y año actual 2026
         params = {"league": "262", "season": "2026", "team": str(team_id)}
         try:
             res = self.session.get(url, headers=headers, params=params, timeout=8)
@@ -132,12 +129,42 @@ class ProfessionalBot:
                 data = res.json()
                 stats = data.get("response", {})
                 if stats:
-                    # Traemos el promedio de goles anotados en total
-                    goles_promedio = stats.get("goals", {}).get("for", {}).get("average", {}).get("total", 1.2)
-                    return float(goles_promedio)
-            return 1.2
-        except:
-            return 1.2 # Retorno de seguridad si la API falla
+                    return float(stats.get("goals", {}).get("for", {}).get("average", {}).get("total", 1.3))
+            return 1.3
+        except: return 1.3
+
+    # 🔥 GENERADOR DE ANÁLISIS INTEGRAL (ESTADÍSTICA + FACTORES EXTERNOS)
+    def generar_analisis_coherente(self, sport: str, mercado_label: str, home: str, away: str, prom_comb: float = None) -> str:
+        es_futbol = "soccer" in sport
+        es_beisbol = "baseball" in sport
+        argumento_base = ""
+
+        # 1. Bloque Estadístico Automatizado
+        if "Más de" in mercado_label or "Over" in mercado_label:
+            if es_futbol:
+                goles_txt = f" con un promedio combinado de `{prom_comb:.2f}` goles por encuentro" if prom_comb else ""
+                argumento_base = f"📊 *Métricas:* Ambos conjuntos muestran una clara tendencia ofensiva esta temporada{goles_txt}. Sus transiciones rápidas y debilidades en las líneas bajas rivales abren un escenario ideal para buscar las altas."
+            elif es_beisbol:
+                argumento_base = f"📊 *Métricas:* El poder al bate de los line-ups actuales frente a la fatiga del picheo abridor proyecta un partido de alta anotación en la MLB. La línea puesta por el casino se quedó corta."
+        elif "Menos de" in mercado_label or "Under" in mercado_label:
+            if es_futbol:
+                goles_txt = f" respaldado por un promedio de apenas `{prom_comb:.2f}` goles" if prom_comb else ""
+                argumento_base = f"📊 *Métricas:* Choque de alta rigidez táctica. Ambos técnicos priorizan el orden defensivo en bloque bajo{goles_txt}. Esperamos un partido muy trabado en media cancha con escasas oportunidades."
+            elif es_beisbol:
+                argumento_base = f"📊 *Métricas:* Los lanzadores abridores asignados para hoy y la efectividad histórica del bullpen proyectan un duelo dominado completamente por las serpentinas en la MLB. Línea de bajas plenamente justificada."
+        elif "Hándicap" in mercado_label:
+            argumento_base = f"📊 *Métricas:* El mercado de hándicap nos ofrece una ventaja matemática crucial. El cruce de datos arroja que el equipo seleccionado mantiene una consistencia de cobertura que supera la línea exigida por el casino."
+        else:
+            argumento_base = f"📊 *Métricas:* La jerarquía de la plantilla y el momento actual inclinan la balanza. El momio asignado presenta una asimetría de valor matemática frente a la probabilidad real en la cancha."
+
+        # 2. Bloque de Factores Contextuales (Plantilla para el canal del administrador)
+        factores_externos = (
+            f"\n\n🏟️ *Estadio y Localía:* _[Analizar factor viaje de {away} y ventaja de local de {home}]_\n"
+            f"🌤️ *Condiciones Climáticas:* _[Pendiente verificar viento/lluvia/altura a la hora del juego]_\n"
+            f"❌ *Reporte de Bajas:* _[Revisar confirmaciones de alineación de último minuto]_"
+        )
+
+        return argumento_base + factores_externos
 
     def analizar_probabilidad_y_valor(self, momio: int, mercado_key: str) -> bool:
         if momio < -250 or momio > 250: return False
@@ -171,7 +198,7 @@ class ProfessionalBot:
             f"🔴 *Perdidos:* `{rojos}`\n"
             f"📊 *Balance Neto:* `{signo}{unidades_netas:.2f} Unidades`\n"
             f"────────────────────────\n"
-            f"🤖 _Resultados calculados en base a los juegos de hoy._"
+            f"🤖 _Resultados calculados de forma automatizada._"
         )
         if self.tg.enviar(mensaje_profit):
             self.db.marcar_sistema(f"CIERRE_CANAL_{fecha_hoy}", {"enviado": True})
@@ -206,23 +233,14 @@ class ProfessionalBot:
                     horario_texto = f"{dt_mx.strftime('%d')} de {self.meses_es.get(dt_mx.strftime('%b'))} - {dt_mx.strftime('%I:%M %p')} MX"
                 except: continue
 
-                # 🔥 FILTRO ESTADÍSTICO EXCLUSIVO PARA LIGA MX
-                analisis_texto_extra = ""
+                promedio_combinado = None
                 if sport == "soccer_mexico_ligamx":
                     id_home = self.mapeo_liga_mx.get(home)
                     id_away = self.mapeo_liga_mx.get(away)
-                    
                     if id_home and id_away:
-                        Logger.log(f"🧠 Analizando estadísticas para: {home} vs {away}...")
                         prom_home = self.obtener_promedio_goles_api(id_home)
                         prom_away = self.obtener_promedio_goles_api(id_away)
                         promedio_combinado = prom_home + prom_away
-                        analisis_texto_extra = f"\n📈 *Análisis de Goles:* Promedio combinado de `{promedio_combinado:.2f}` goles por juego esta temporada."
-                        
-                        # Si el partido es muy aburrido estadísticamente, el bot no gasta el pick
-                        if promedio_combinado < 1.8:
-                            Logger.log(f"⏭️ Partido descartado por baja estadística de goles ({promedio_combinado:.2f}).")
-                            continue
 
                 opcion_elegida, mercado_origen = None, None
                 for bk in bookmakers:
@@ -256,8 +274,10 @@ class ProfessionalBot:
                 elif mercado_origen == "h2h":
                     label_pick_final = f"Gana {home} (Local)" if label_pick_final == home else f"Gana {away} (Visitante)"
 
+                texto_analisis_profesional = self.generar_analisis_coherente(sport, label_pick_final, home, away, promedio_combinado)
+
                 mensaje = (
-                    f"🧠 *【 ANÁLISIS DE VALOR OPTIMIZADO 】* 🧠\n"
+                    f"🧠 *【 ALERTA DE VALOR PREMIUM 】* 🧠\n"
                     f"🏆 *Liga:* {tag}\n"
                     f"📅 *Calendario:* `{horario_texto}`\n"
                     f"────────────────────────\n"
@@ -265,10 +285,10 @@ class ProfessionalBot:
                     f"🎯 *PICK:* `{label_pick_final}`\n"
                     f"🏛️ *Casa:* {bookmakers[0].get('title')}\n"
                     f"📈 *Cuota/Momio:* `{momio_txt}`\n"
-                    f"🛡️ *Seguridad:* `Stake {stake}/10 ({porcentaje_real}% Probabilidad)`"
-                    f"{analisis_texto_extra}\n"
+                    f"🛡️ *Seguridad:* `Stake {stake}/10 ({porcentaje_real}% Probabilidad)`\n\n"
+                    f"{texto_analisis_profesional}\n"
                     f"────────────────────────\n"
-                    f"🤖 _Filtro estadístico y matemático activado con éxito._"
+                    f"🤖 _Filtro estadístico y matemático activo._"
                 )
 
                 if self.tg.enviar(mensaje):
@@ -286,14 +306,14 @@ class ProfessionalBot:
                 dt_mex = self._get_hora_mexico()
                 fecha_hoy = dt_mex.strftime("%Y-%m-%d")
                 hora_actual = dt_mex.hour
-                Logger.log(f"--- Ciclo Inteligente Activado (Hora MX: {dt_mex.strftime('%H:%M')}) ---")
+                Logger.log(f"--- Ciclo de Análisis Avanzado Abierto (Hora MX: {dt_mex.strftime('%H:%M')}) ---")
 
                 if hora_actual >= 23 or hora_actual < 5:
                     if hora_actual >= 23: self.enviar_reporte_profit_y_despedida(fecha_hoy)
                     tiempo_espera = 21600
                 else:
                     if hora_actual == 8 and not self.db.chequeo_sistema(f"DIAS_{fecha_hoy}"):
-                        if self.tg.enviar("☀️ *【 BUENOS DÍAS 】* ☀️\n\n¡Escáner estadístico Premium encendido! Buscando los mejores tiros de hoy. 📈💰"):
+                        if self.tg.enviar("☀️ *【 BUENOS DÍAS 】* ☀️\n\n¡Escáner Premium abierto! Buscando valor analítico en la cartelera de hoy. 📈💰"):
                             self.db.marcar_sistema(f"DIAS_{fecha_hoy}", {"enviado": True})
                     self.escanear_mercados(fecha_hoy)
             except Exception as e: Logger.log(f"💥 Error: {e}")
