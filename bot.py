@@ -10,7 +10,7 @@ import asyncio
 from telegram import Bot
 from telegram.constants import ParseMode
 
-# Importación corregida con las mayúsculas exactas (AsyncIOScheduler)
+# Importación de APScheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -27,11 +27,11 @@ logger = logging.getLogger("SniperTipsterBot")
 # ==========================================
 ZONE_MX = pytz.timezone('America/Mexico_City')
 
-# Usa BOT_TOKEN que es el nombre real configurado en tu Render
+# Usamos estrictamente los nombres exactos de tu Render
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
+FOOTBALL_API_KEY = os.getenv("FOOTBA") # Lee tu variable 'FOOTBA' tal cual la tienes
 
 if not all([TELEGRAM_TOKEN, CHAT_ID, ODDS_API_KEY, FOOTBALL_API_KEY]):
     logger.critical("❌ ERROR CRÍTICO: Faltan variables de entorno esenciales en el servidor.")
@@ -246,10 +246,10 @@ async def job_sueno_2305():
 async def main():
     logger.info("🚀 Iniciando procesos del Servidor del Bot...")
     
-    # Sincronización horaria principal amarrada a la CDMX
+    # Sincronización horaria amarrada estrictamente a la CDMX
     scheduler = AsyncIOScheduler(timezone=ZONE_MX)
     
-    # Inyección explícita de ZONE_MX en cada disparador individual
+    # Inyección de la zona horaria en cada trigger individual
     scheduler.add_job(job_apertura_0800, CronTrigger(hour=8, minute=0, timezone=ZONE_MX))
     scheduler.add_job(job_escaneo_0830, CronTrigger(hour=8, minute=30, timezone=ZONE_MX))
     scheduler.add_job(job_cierre_2300, CronTrigger(hour=23, minute=0, timezone=ZONE_MX))
