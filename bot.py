@@ -10,14 +10,8 @@ import asyncio
 from telegram import Bot
 from telegram.constants import ParseMode
 
-# Importación robusta compatible con todas las versiones de APScheduler
-try:
-    from apscheduler.schedulers.asyncio import AsyncioScheduler
-except ImportError:
-    # Alternativa por si la estructura de carpetas cambia en el entorno virtual
-    import apscheduler.schedulers.asyncio as axs
-    AsyncioScheduler = axs.AsyncioScheduler
-
+# Importación corregida con las mayúsculas exactas (AsyncIOScheduler)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 # Configuración del Logger Profesional de la Consola
@@ -250,7 +244,9 @@ async def job_sueno_2305():
 # ==========================================
 async def main():
     logger.info("🚀 Iniciando procesos del Servidor del Bot...")
-    scheduler = AsyncioScheduler(timezone=ZONE_MX)
+    
+    # Aquí aplicamos la clase con la O mayúscula correcta
+    scheduler = AsyncIOScheduler(timezone=ZONE_MX)
     
     scheduler.add_job(job_apertura_0800, CronTrigger(hour=8, minute=0))
     scheduler.add_job(job_escaneo_0830, CronTrigger(hour=8, minute=30))
