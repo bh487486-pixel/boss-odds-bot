@@ -27,12 +27,13 @@ logger = logging.getLogger("SniperTipsterBot")
 # ==========================================
 ZONE_MX = pytz.timezone('America/Mexico_City')
 
-# Usamos estrictamente los nombres exactos de tu Render
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+# Nombre exacto de tu caja en Render asignado a la variable de tu código viejo
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN") 
 CHAT_ID = os.getenv("CHAT_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-FOOTBALL_API_KEY = os.getenv("FOOTBA") # Lee tu variable 'FOOTBA' tal cual la tienes
+FOOTBALL_API_KEY = os.getenv("FOOTBA") # Tu variable mocha de la foto
 
+# Validación 100% real con tus nombres de variable originales
 if not all([TELEGRAM_TOKEN, CHAT_ID, ODDS_API_KEY, FOOTBALL_API_KEY]):
     logger.critical("❌ ERROR CRÍTICO: Faltan variables de entorno esenciales en el servidor.")
     sys.exit(1)
