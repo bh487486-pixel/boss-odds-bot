@@ -27,7 +27,8 @@ logger = logging.getLogger("SniperTipsterBot")
 # ==========================================
 ZONE_MX = pytz.timezone('America/Mexico_City')
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Usa BOT_TOKEN que es el nombre real configurado en tu Render
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -245,13 +246,14 @@ async def job_sueno_2305():
 async def main():
     logger.info("🚀 Iniciando procesos del Servidor del Bot...")
     
-    # Aquí aplicamos la clase con la O mayúscula correcta
+    # Sincronización horaria principal amarrada a la CDMX
     scheduler = AsyncIOScheduler(timezone=ZONE_MX)
     
-    scheduler.add_job(job_apertura_0800, CronTrigger(hour=8, minute=0))
-    scheduler.add_job(job_escaneo_0830, CronTrigger(hour=8, minute=30))
-    scheduler.add_job(job_cierre_2300, CronTrigger(hour=23, minute=0))
-    scheduler.add_job(job_sueno_2305, CronTrigger(hour=23, minute=5))
+    # Inyección explícita de ZONE_MX en cada disparador individual
+    scheduler.add_job(job_apertura_0800, CronTrigger(hour=8, minute=0, timezone=ZONE_MX))
+    scheduler.add_job(job_escaneo_0830, CronTrigger(hour=8, minute=30, timezone=ZONE_MX))
+    scheduler.add_job(job_cierre_2300, CronTrigger(hour=23, minute=0, timezone=ZONE_MX))
+    scheduler.add_job(job_sueno_2305, CronTrigger(hour=23, minute=5, timezone=ZONE_MX))
     
     scheduler.start()
     logger.info("⏰ Cron Jobs emparejados con APScheduler en Hora de México.")
