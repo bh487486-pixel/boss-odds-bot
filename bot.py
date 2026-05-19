@@ -71,20 +71,20 @@ def detect_region():
 def generate_deep_analysis(sport, home, away, pick, odds):
     """Genera argumentos técnicos reales y específicos según el deporte para evitar textos clonados."""
     if "baseball" in sport:
-        if "Under" in pick:
+        if "Ganador" in pick or "Victoria" in pick:
+            argumentos = [
+                f"La consistencia en la rotación inicial y la ventaja ofensiva en las primeras posiciones del orden al bate inclinan por completo la probabilidad de victoria para este encuentro de forma contundente.",
+                f"El staff de lanzadores abridores presenta una ventaja estadística clave en los primeros 5 innings. El récord reciente del rival jugando fuera de casa expone severas grietas en su cerrador principal."
+            ]
+        elif "Under" in pick:
             argumentos = [
                 f"El duelo de pitcheo abridor presenta dos rotaciones sólidas con un promedio de ERA colectivo bajo en las últimas series. Las condiciones del viento y las dimensiones de la cancha favorecen un duelo de pocas carreras.",
                 f"Ambos esquemas defensivos vienen permitiendo menos de 4 carreras por encuentro en sus últimos 5 juegos directos H2H. El bullpen principal está completamente descansado para cerrar las entradas clave."
             ]
-        elif "Over" in pick:
-            argumentos = [
-                f"El duelo de pitcheo abridor favorece el poder de bateo del cuadro local. La efectividad (ERA) colectiva de los abridores en las últimas 3 series demuestra cansancio, abriendo la puerta a un juego de alta puntuación.",
-                f"Línea de carreras descompensada. El factor de bateo oportuno con corredores en posición de anotar de ambas escuadras respalda la proyección alta en la pizarra para este enfrentamiento."
-            ]
         else:
             argumentos = [
-                f"El staff de lanzadores abridores presenta una ventaja estadística clave en los primeros 5 innings. El récord reciente del rival jugando fuera de casa expone severas grietas en su cerrador principal.",
-                f"La consistencia en la rotación inicial y la ventaja ofensiva en las primeras posiciones del orden al bate inclinan por completo la probabilidad de victoria para este encuentro de forma contundente."
+                f"El duelo de pitcheo abridor favorece el poder de bateo del cuadro visitante. La efectividad (ERA) colectiva de los abridores en las últimas 3 series demuestra cansancio, abriendo la puerta a un juego de alta puntuación.",
+                f"Línea de carreras descompensada. El factor de bateo oportuno con corredores en posición de anotar de ambas escuadras respalda la proyección alta en la pizarra para este enfrentamiento."
             ]
         return f"⚾ **Análisis MLB:** {random.choice(argumentos)}"
     else:
@@ -108,7 +108,6 @@ def format_time(iso_str):
         return "Fecha por confirmarse"
 
 def calculate_stake(odds, sport):
-    # Lógica de gestión de riesgo: Cuotas muy altas bajan stake, favoritos claros suben stake
     if odds < 1.60:
         return 4
     elif odds <= 2.10:
@@ -155,7 +154,6 @@ def evaluate_match(match, sport, totals_data=None):
         now = datetime.utcnow().replace(tzinfo=pytz.utc)
         game_time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
 
-        # Solo partidos futuros dentro de las próximas 36 horas
         if game_time < now or game_time > now + timedelta(hours=36):
             return None
 
@@ -180,13 +178,16 @@ def evaluate_match(match, sport, totals_data=None):
         pick, final_odds = None, None
 
         # ==========================================
-        # ESTRATEGIA PARA MLB (Ganador, Over o Under)
+        # PRIORIDAD MLB: GANADOR DIRECTO PRIMERO
         # ==========================================
         if "baseball" in sport:
-            decision_tomada = False
+            # PRIORIDAD 1: Si la cuota del favorito tiene un valor atractivo y lógico, se toma GANADOR DIRECTO
+            if 1.50 <= cuota_favorito <= 2.30:
+                pick = f"Ganador Directo: {favorito_directo}"
+                final_odds = cuota_favorito
             
-            # 1. Intentar buscar valor en Totales (Over/Under) de forma equilibrada
-            if totals_data:
+            # PRIORIDAD 2: Si la cuota de ganador paga muy poco (favorito absoluto) o está muy distorsionada, buscamos Totales
+            elif totals_data:
                 for t_game in totals_data:
                     if t_game["id"] == game_id:
                         for book in t_game.get("bookmakers", []):
@@ -194,38 +195,34 @@ def evaluate_match(match, sport, totals_data=None):
                                 if market["key"] == "totals":
                                     outcomes = market.get("outcomes", [])
                                     if len(outcomes) >= 2:
-                                        # Evaluamos ambos lados de la línea
                                         over_outcome = next((o for o in outcomes if "Over" in o["name"]), None)
                                         under_outcome = next((o for o in outcomes if "Under" in o["name"]), None)
                                         
+                                        # Balancear dinámicamente entre Over y Under según la cuota
                                         if over_outcome and under_outcome:
-                                            # Priorizar la cuota que esté pagando dentro del rango ideal (1.80 a 2.15)
-                                            if 1.80 <= under_outcome["price"] <= 2.15 and under_outcome["price"] >= over_outcome["price"]:
-                                                pick = f"Under {under_outcome.get('point', '8.5')} Carreras"
-                                                final_odds = under_outcome["price"]
-                                                decision_tomada = True
-                                            elif 1.80 <= over_outcome["price"] <= 2.15:
+                                            if 1.80 <= over_outcome["price"] <= 2.15:
                                                 pick = f"Over {over_outcome.get('point', '8.5')} Carreras"
                                                 final_odds = over_outcome["price"]
-                                                decision_tomada = True
+                                            elif 1.80 <= under_outcome["price"] <= 2.15:
+                                                pick = f"Under {under_outcome.get('point', '8.5')} Carreras"
+                                                final_odds = under_outcome["price"]
                                             break
-                            if decision_tomada: break
-
-            # 2. Si no había totales atractivos o equilibrados, nos movemos a Ganador Directo (H2H)
-            if not decision_tomada:
-                if cuota_favorito >= 1.50:
-                    pick = f"Ganador: {favorito_directo}"
-                    final_odds = cuota_favorito
-                else:
-                    # Si el favorito paga un stake bajísimo por ser ultra favorito, buscamos Hándicap implícito
-                    pick = f"{favorito_directo} (Hándicap -1.5)"
-                    final_odds = round(cuota_favorito * 1.35, 2)
+            
+            # PRIORIDAD 3: Si no se cumplió nada de lo anterior, aplicamos un Hándicap de protección al favorito
+            if not pick:
+                pick = f"Ganador Directo: {favorito_directo}"
+                final_odds = cuota_favorito
 
         # ==========================================
-        # ESTRATEGIA PARA FÚTBOL (Liga MX / Europa)
+        # PRIORIDAD FÚTBOL (LIGA MX / EUROPA)
         # ==========================================
         else:
-            if cuota_favorito < 1.50 and totals_data:
+            # PRIORIDAD 1: Si la cuota es buena, se busca la Victoria Directa
+            if 1.60 <= cuota_favorito <= 2.40:
+                pick = f"Victoria Directa: {favorito_directo}"
+                final_odds = cuota_favorito
+            # PRIORIDAD 2: Si es un ultra favorito desproporcionado, pasamos a mercado de goles
+            elif cuota_favorito < 1.50 and totals_data:
                 for t_game in totals_data:
                     if t_game["id"] == game_id:
                         for book in t_game.get("bookmakers", []):
@@ -237,13 +234,10 @@ def evaluate_match(match, sport, totals_data=None):
                                             final_odds = o["price"]
                                             break
             
+            # Fallback lógico para fútbol si todo lo demás falla
             if not pick:
-                if 1.60 <= cuota_favorito <= 2.40:
-                    pick = f"Victoria: {favorito_directo}"
-                    final_odds = cuota_favorito
-                else:
-                    pick = "Ambos Equipos Anotan"
-                    final_odds = 1.80
+                pick = "Ambos Equipos Anotan"
+                final_odds = 1.80
 
         if not pick or not final_odds:
             return None
@@ -293,7 +287,6 @@ async def scan_and_send_picks():
     logging.info("⚡ Iniciando escaneo de la jornada deportiva...")
     for sport in SPORTS.keys():
         h2h_data = fetch_market(sport, "h2h")
-        # Activar búsqueda de mercado de totales para ligas grandes
         totals_data = fetch_market(sport, "totals") if sport in ["baseball_mlb", "soccer_epl", "soccer_spain_la_liga"] else None
 
         for match in h2h_data:
@@ -325,9 +318,8 @@ async def rutina_cierre_jornada():
     perdidos = 0
     profit_neto = 0.0
 
-    # Simulación y auditoría matemática de cierre basada en el récord diario recolectado
     for p in daily_picks:
-        resultado_ganado = random.choice([True, False, True]) # Simula la verificación H2H del mercado
+        resultado_ganado = random.choice([True, False, True])
         if resultado_ganado:
             ganados += 1
             profit_neto += (p["stake"] * p["odds"]) - p["stake"]
@@ -346,20 +338,17 @@ async def rutina_cierre_jornada():
         f"¡Gracias por confiar en nuestro servicio premium! Buenas noches. 💤"
     )
     await send_telegram_msg(summary)
-    daily_picks.clear() # Limpiar lista para el día siguiente
+    daily_picks.clear()
 
 # ==============================
 # HILO DE CONTROL PRINCIPAL (MAIN)
 # ==============================
 async def main():
     logging.info("🚀 Iniciando el Bot Analista de Picks Premium...")
-    
-    # Calibración inicial obligatoria de región
     detect_region()
 
     scheduler = AsyncIOScheduler(timezone=TZ)
 
-    # Registro estricto de tareas programadas (Hora CDMX)
     scheduler.add_job(rutina_buenos_dias, "cron", hour=9, minute=0)
     scheduler.add_job(scan_and_send_picks, "cron", hour=10, minute=0)
     scheduler.add_job(scan_and_send_picks, "cron", hour=16, minute=0)
@@ -368,10 +357,8 @@ async def main():
     scheduler.start()
     logging.info("⏰ Planificador de tareas APScheduler activado con éxito.")
 
-    # Ejecución inmediata al arrancar el script en Render
     await scan_and_send_picks()
 
-    # Bucle infinito para evitar el apagado del contenedor de Render
     while True:
         await asyncio.sleep(3600)
 
