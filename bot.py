@@ -31,16 +31,49 @@ TZ = pytz.timezone("America/Mexico_City")
 bot = Bot(token=TELEGRAM_TOKEN)
 
 SPORTS = [
+    "baseball_mlb",
     "soccer_mexico_ligamx",
     "soccer_epl",
     "soccer_spain_la_liga",
     "soccer_italy_serie_a",
-    "soccer_germany_bundesliga",
-    "baseball_mlb"
+    "soccer_germany_bundesliga"
 ]
+
+REGIONS = ["us", "uk", "eu", "au"]
+ACTIVE_REGION = None
 
 sent_matches = set()
 daily_picks = []
+
+# ==============================
+# AUTOCALIBRACIÓN DE REGIÓN
+# ==============================
+
+def detect_region():
+    global ACTIVE_REGION
+
+    for region in REGIONS:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
+                params={
+                    "apiKey": ODDS_API_KEY,
+                    "regions": region,
+                    "markets": "h2h"
+                },
+                timeout=10
+            )
+
+            if r.status_code == 200:
+                ACTIVE_REGION = region
+                logging.info(f"Región detectada: {region}")
+                return
+
+        except RequestException:
+            continue
+
+    logging.critical("No se pudo detectar región válida.")
+    sys.exit(1)
 
 # ==============================
 # UTILIDADES
@@ -73,13 +106,12 @@ def calculate_stake(prob, odds):
 # ==============================
 
 def fetch_market(sport, market):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
     try:
         r = requests.get(
-            url,
+            f"https://api.the-odds-api.com/v4/sports/{sport}/odds/",
             params={
                 "apiKey": ODDS_API_KEY,
-                "regions": "us",
+                "regions": ACTIVE_REGION,
                 "markets": market,
                 "oddsFormat": "decimal"
             },
@@ -87,45 +119,19 @@ def fetch_market(sport, market):
         )
 
         if r.status_code != 200:
-            logging.warning(f"{sport}-{market} status {r.status_code}")
             return []
 
         data = r.json()
+        return data if isinstance(data, list) else []
 
-        if isinstance(data, list):
-            return data
-        else:
-            return []
-
-    except RequestException as e:
-        logging.error(f"Error {sport}-{market}: {e}")
+    except RequestException:
         return []
 
 # ==============================
-# ANÁLISIS DATA REAL
+# LÓGICA TIPSTER
 # ==============================
 
-def build_analysis(home, away, odds, sport):
-    if sport == "baseball_mlb":
-        return (
-            f"Datos MLB:\n"
-            f"- Partido: {home} vs {away}\n"
-            f"- Cuota evaluada: {odds}\n"
-            f"- Línea comparada con mercado US\n"
-        )
-    else:
-        return (
-            f"Datos fútbol:\n"
-            f"- Partido: {home} vs {away}\n"
-            f"- Cuota actual: {odds}\n"
-            f"- Comparación con media del mercado\n"
-        )
-
-# ==============================
-# LÓGICA TIPSTER REAL
-# ==============================
-
-def evaluate_match(match, sport, totals=None, btts=None):
+def evaluate_match(match, sport, totals=None):
     try:
         game_id = match["id"]
 
@@ -162,11 +168,7 @@ def evaluate_match(match, sport, totals=None, btts=None):
         odds = None
         prob = 0.60
 
-        # ======================
-        # PIVOT DE MERCADO
-        # ======================
-
-        # favorito muy bajo → totals
+        # FAVORITO BAJO → TOTALS
         if cuota_fav < 1.55 and totals:
             for t in totals:
                 if t["id"] == game_id:
@@ -178,20 +180,20 @@ def evaluate_match(match, sport, totals=None, btts=None):
                                     odds = o["price"]
                                     prob = 0.65
 
-        # fútbol parejo → intentar btts
-        elif sport != "baseball_mlb" and btts:
-            for b in btts:
-                if b["id"] == game_id:
-                    for book in b["bookmakers"]:
+        # MLB → TOTALS
+        elif sport == "baseball_mlb" and totals:
+            for t in totals:
+                if t["id"] == game_id:
+                    for book in t["bookmakers"]:
                         for market in book["markets"]:
                             for o in market["outcomes"]:
-                                if o["name"] == "Yes":
-                                    pick = "BTTS Sí"
+                                if "Over" in o["name"]:
+                                    pick = "Over carreras"
                                     odds = o["price"]
-                                    prob = 0.60
+                                    prob = 0.58
 
-        # fallback → favorito SOLO si tiene valor
-        if not pick and cuota_fav >= 1.70:
+        # FAVORITO SOLO SI HAY VALOR
+        elif cuota_fav >= 1.70:
             pick = favorito
             odds = cuota_fav
             prob = 0.58
@@ -201,7 +203,11 @@ def evaluate_match(match, sport, totals=None, btts=None):
 
         stake = calculate_stake(prob, odds)
 
-        analysis = build_analysis(home, away, odds, sport)
+        analysis = (
+            f"{home} vs {away}\n"
+            f"Cuota detectada: {odds}\n"
+            f"Probabilidad estimada: {round(prob*100,1)}%"
+        )
 
         return {
             "id": game_id,
@@ -210,12 +216,10 @@ def evaluate_match(match, sport, totals=None, btts=None):
             "pick": pick,
             "odds": odds,
             "stake": stake,
-            "prob": prob,
             "analysis": analysis
         }
 
-    except Exception as e:
-        logging.error(f"Error análisis: {e}")
+    except Exception:
         return None
 
 # ==============================
@@ -225,13 +229,12 @@ def evaluate_match(match, sport, totals=None, btts=None):
 async def send(msg):
     try:
         await bot.send_message(chat_id=CHAT_ID, text=msg)
-    except Exception as e:
-        logging.error(f"Telegram error: {e}")
+    except Exception:
+        pass
 
 async def send_pick(p):
     msg = (
-        f"{p['match']}\n"
-        f"{p['time']}\n\n"
+        f"{p['match']}\n{p['time']}\n\n"
         f"Pick: {p['pick']}\n"
         f"Cuota: {p['odds']}\n"
         f"Stake: {p['stake']}\n\n"
@@ -247,15 +250,10 @@ async def scan():
     for sport in SPORTS:
 
         h2h = fetch_market(sport, "h2h")
-
         totals = fetch_market(sport, "totals")
 
-        btts = []
-        if sport != "baseball_mlb":
-            btts = fetch_market(sport, "btts")
-
         for match in h2h:
-            p = evaluate_match(match, sport, totals, btts)
+            p = evaluate_match(match, sport, totals)
 
             if p:
                 sent_matches.add(p["id"])
@@ -263,46 +261,30 @@ async def scan():
                 await send_pick(p)
 
 # ==============================
-# RESULTADOS REALES
+# RESULTADOS
 # ==============================
 
 async def results():
-    wins = 0
-    losses = 0
-    profit = 0
-
-    for p in daily_picks:
-        losses += p["stake"]
+    total = sum(p["stake"] for p in daily_picks)
 
     await send(
         f"📊 RESULTADO FINAL\n\n"
         f"Picks: {len(daily_picks)}\n"
-        f"Perdidas: {losses}\n"
-        f"Profit: {profit}"
+        f"Unidades: {total}"
     )
-
-# ==============================
-# MENSAJES
-# ==============================
-
-async def morning():
-    await send("Buenos días. Sistema activo.")
-
-async def night():
-    await send("Buenas noches. Jornada finalizada.")
 
 # ==============================
 # MAIN
 # ==============================
 
 async def main():
+    detect_region()
+
     scheduler = AsyncIOScheduler(timezone=TZ)
 
-    scheduler.add_job(morning, "cron", hour=8)
     scheduler.add_job(scan, "cron", hour=9)
     scheduler.add_job(scan, "cron", hour=22)
     scheduler.add_job(results, "cron", hour=0)
-    scheduler.add_job(night, "cron", hour=0, minute=1)
 
     scheduler.start()
 
