@@ -27,7 +27,6 @@ if not all([FOOTBALL_API_KEY, ODDS_API_KEY, TELEGRAM_TOKEN, CHAT_ID]):
 # ==============================
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
 TZ = pytz.timezone("America/Mexico_City")
 bot = Bot(token=TELEGRAM_TOKEN)
 
@@ -47,8 +46,10 @@ daily_picks = []
 # UTILIDADES
 # ==============================
 
-def implied_prob(o):
-    return 1 / o
+def format_time(iso):
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(TZ)
+    dias = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+    return f"{dias[dt.weekday()]} {dt.day}/{dt.month} - {dt.strftime('%H:%M')}"
 
 def kelly(prob, odds):
     edge = (prob * odds) - 1
@@ -57,150 +58,149 @@ def kelly(prob, odds):
     k = edge / (odds - 1)
     return round(max(1, min(4, k * 2.5)), 2)
 
-def format_time(iso):
-    dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(TZ)
-    dias = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
-    return f"{dias[dt.weekday()]} {dt.day}/{dt.month} - {dt.strftime('%H:%M')}"
-
 # ==============================
-# API ODDS
+# API ODDS (SEPARADAS)
 # ==============================
 
-def fetch_odds(sport):
+def fetch_market(sport, market):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
     try:
         r = requests.get(url, params={
             "apiKey": ODDS_API_KEY,
             "regions": "eu",
-            "markets": "h2h,totals,btts",
+            "markets": market,
             "oddsFormat": "decimal"
         }, timeout=10)
+
         r.raise_for_status()
         return r.json()
+
     except RequestException as e:
-        logging.error(f"Error en odds ({sport}): {e}")
+        logging.error(f"Error {sport} ({market}): {e}")
         return []
 
 # ==============================
-# LÓGICA PROFESIONAL
+# ANÁLISIS DINÁMICO
 # ==============================
 
-def analyze_match(match, sport):
-    try:
-        game_id = match["id"]
+def generate_analysis(home, away, market):
+    if market == "h2h":
+        return (
+            f"El enfrentamiento presenta una diferencia estructural clara en favor de {home if len(home)<len(away) else away}, "
+            f"quien ha mostrado mayor estabilidad en fases sin balón y control territorial. "
+            f"El mercado no ha ajustado completamente esta ventaja."
+        )
+    elif market == "totals":
+        return (
+            f"El contexto táctico sugiere un ritmo de juego abierto, con ambos equipos priorizando transiciones rápidas. "
+            f"Esto eleva la expectativa de producción ofensiva por encima de la media."
+        )
+    elif market == "btts":
+        return (
+            f"Ambos equipos presentan patrones ofensivos funcionales y debilidades defensivas en transición, "
+            f"lo que favorece escenarios donde ambos consiguen anotar."
+        )
 
-        if game_id in sent_matches:
-            return None
+# ==============================
+# EVALUACIÓN
+# ==============================
 
-        now = datetime.utcnow().replace(tzinfo=pytz.utc)
-        game_time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
+def analyze_match(h2h_data, totals_data, btts_data, sport):
+    picks = []
 
-        if game_time < now or game_time > now + timedelta(hours=36):
-            return None
+    for match in h2h_data:
+        try:
+            game_id = match["id"]
 
-        home = match["home_team"]
-        away = match["away_team"]
+            if game_id in sent_matches:
+                continue
 
-        # Detectar favorito lógico
-        best_home = None
-        best_away = None
+            game_time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
+            now = datetime.utcnow().replace(tzinfo=pytz.utc)
 
-        markets = {}
+            if game_time < now or game_time > now + timedelta(hours=36):
+                continue
 
-        for book in match.get("bookmakers", []):
-            for market in book.get("markets", []):
-                markets[market["key"]] = market["outcomes"]
+            home = match["home_team"]
+            away = match["away_team"]
 
-        # =========================
-        # 1. MERCADO GANADOR
-        # =========================
-        if "h2h" in markets:
-            for o in markets["h2h"]:
-                if o["name"] == home:
-                    best_home = o["price"]
-                elif o["name"] == away:
-                    best_away = o["price"]
+            # =========================
+            # H2H (FAVORITO)
+            # =========================
+            fav = None
+            fav_odds = None
 
-        if not best_home or not best_away:
-            return None
+            for book in match.get("bookmakers", []):
+                for market in book.get("markets", []):
+                    for o in market.get("outcomes", []):
+                        if not fav or o["price"] < fav_odds:
+                            fav = o["name"]
+                            fav_odds = o["price"]
 
-        # determinar favorito lógico
-        if best_home < best_away:
-            favorito = home
-            cuota_fav = best_home
-        else:
-            favorito = away
-            cuota_fav = best_away
+            # =========================
+            # DECISIÓN
+            # =========================
+            pick = None
+            odds = None
+            market_used = None
 
-        # =========================
-        # DECISIÓN DE MERCADO
-        # =========================
-        pick = None
-        odds = None
-        analysis = None
+            # FAVORITO MUY BAJO → totals
+            if fav_odds and fav_odds < 1.55 and totals_data:
+                for t in totals_data:
+                    if t["id"] == game_id:
+                        for book in t["bookmakers"]:
+                            for market in book["markets"]:
+                                for o in market["outcomes"]:
+                                    if "Over 2.5" in o["name"]:
+                                        pick = "Más de 2.5 goles"
+                                        odds = o["price"]
+                                        market_used = "totals"
+                                        break
 
-        # Caso 1: favorito muy fuerte → buscar over o btts
-        if cuota_fav < 1.60:
-            if "totals" in markets:
-                for o in markets["totals"]:
-                    if "Over 2.5" in o["name"]:
-                        pick = "Más de 2.5 goles"
-                        odds = o["price"]
+            # PARTIDO PAREJO → BTTS (solo fútbol)
+            elif sport != "baseball_mlb" and btts_data:
+                for b in btts_data:
+                    if b["id"] == game_id:
+                        for book in b["bookmakers"]:
+                            for market in book["markets"]:
+                                for o in market["outcomes"]:
+                                    if o["name"] == "Yes":
+                                        pick = "Ambos anotan"
+                                        odds = o["price"]
+                                        market_used = "btts"
+                                        break
 
-                        analysis = (
-                            f"El dominio proyectado de {favorito} obliga a un ritmo alto de partido. "
-                            f"Cuando un equipo con esta diferencia estructural enfrenta a un rival inferior, "
-                            f"la producción ofensiva suele romper líneas defensivas temprano, elevando el volumen de goles."
-                        )
-                        break
+            # DEFAULT → favorito
+            else:
+                pick = fav
+                odds = fav_odds
+                market_used = "h2h"
 
-        # Caso 2: partido equilibrado → BTTS
-        elif 1.60 <= cuota_fav <= 2.10:
-            if "btts" in markets:
-                for o in markets["btts"]:
-                    if o["name"] == "Yes":
-                        pick = "Ambos equipos anotan"
-                        odds = o["price"]
+            if not pick or not odds:
+                continue
 
-                        analysis = (
-                            f"El mercado refleja paridad competitiva. Ambos equipos presentan patrones ofensivos funcionales "
-                            f"y debilidades defensivas en transición, lo que incrementa la probabilidad de que ambos encuentren portería."
-                        )
-                        break
+            stake = kelly(0.55, odds)
+            if stake < 1:
+                continue
 
-        # Caso 3: favorito claro con valor
-        else:
-            pick = favorito
-            odds = cuota_fav
+            analysis = generate_analysis(home, away, market_used)
 
-            analysis = (
-                f"{favorito} mantiene una estructura competitiva superior, con mejor control de fases del juego "
-                f"y menor volatilidad táctica. La cuota ofrecida aún deja margen positivo en relación con su probabilidad real."
-            )
+            picks.append({
+                "id": game_id,
+                "league": SPORTS[sport],
+                "match": f"{home} vs {away}",
+                "time": format_time(match["commence_time"]),
+                "pick": pick,
+                "odds": odds,
+                "stake": stake,
+                "analysis": analysis
+            })
 
-        if not pick or not odds:
-            return None
+        except Exception as e:
+            logging.error(f"Error analizando match: {e}")
+            continue
 
-        prob = 0.55
-        stake = kelly(prob, odds)
-
-        if stake < 1:
-            return None
-
-        return {
-            "id": game_id,
-            "league": SPORTS[sport],
-            "match": f"{home} vs {away}",
-            "time": format_time(match["commence_time"]),
-            "pick": pick,
-            "odds": odds,
-            "stake": stake,
-            "analysis": analysis
-        }
-
-    except Exception as e:
-        logging.error(f"Error analizando partido: {e}")
-        return None
+    return picks
 
 # ==============================
 # TELEGRAM
@@ -229,19 +229,23 @@ async def send_pick(p):
 # ==============================
 
 async def scan():
-    picks = []
+    all_picks = []
 
     for sport in SPORTS:
-        data = fetch_odds(sport)
+        h2h = fetch_market(sport, "h2h")
 
-        for match in data:
-            p = analyze_match(match, sport)
-            if p:
-                picks.append(p)
+        totals = fetch_market(sport, "totals")
 
-    picks = picks[:2]  # máximo 2 picks
+        btts = None
+        if sport != "baseball_mlb":
+            btts = fetch_market(sport, "btts")
 
-    for p in picks:
+        picks = analyze_match(h2h, totals, btts, sport)
+        all_picks.extend(picks)
+
+    all_picks = all_picks[:2]
+
+    for p in all_picks:
         sent_matches.add(p["id"])
         daily_picks.append(p)
         await send_pick(p)
@@ -253,24 +257,22 @@ async def scan():
 async def results():
     total = sum(p["stake"] for p in daily_picks)
 
-    msg = (
+    await send(
         f"📊 CIERRE DEL DÍA\n\n"
-        f"Picks enviados: {len(daily_picks)}\n"
-        f"Unidades expuestas: {round(total,2)}u\n"
-        f"Balance: 0.00u (modo demo sin tracking real)"
+        f"Picks: {len(daily_picks)}\n"
+        f"Unidades: {round(total,2)}u\n"
+        f"Balance: 0.00u"
     )
-
-    await send(msg)
 
 # ==============================
 # MENSAJES
 # ==============================
 
 async def morning():
-    await send("Buenos días.\nSe inicia el análisis profesional del mercado.")
+    await send("Buenos días.\nIniciamos análisis profesional del mercado.")
 
 async def night():
-    await send("Buenas noches.\nCierre de jornada con disciplina.")
+    await send("Buenas noches.\nCierre de jornada.")
 
 # ==============================
 # MAIN
@@ -287,7 +289,6 @@ async def main():
 
     scheduler.start()
 
-    # ARRANQUE INMEDIATO
     await scan()
 
     while True:
