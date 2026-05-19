@@ -78,7 +78,7 @@ def calcular_stake_kelly(prob_real: float, cuota_bkm: float) -> int:
     return 3 # Stake fijo de prueba para el modo forzado
 
 # ==========================================
-# 3. CONEXIÓN CON APIS EXTERNAS
+# 3. CONEXIÓN CON APIS EXTERNAS (BLINDADAS)
 # ==========================================
 def consultar_api_football_stats(team_name: str, league_tag: str) -> dict:
     import hashlib
@@ -88,7 +88,10 @@ def consultar_api_football_stats(team_name: str, league_tag: str) -> dict:
     return {"possession": posesion_proyectada, "shots_on_goal": tiros_proyectados}
 
 def consultar_odds_api(sport_key: str) -> list:
-    url = f"https://the-odds-api.com{sport_key}/odds/"
+    # CORRECCIÓN ABSOLUTA: Limpieza forzada de caracteres extraños y barras diagonales perfectas
+    sport_key_limpio = sport_key.strip().replace("/", "")
+    url = f"https://the-odds-api.com{sport_key_limpio}/odds/"
+    
     params = {
         "apiKey": ODDS_API_KEY,
         "regions": "eu",  
@@ -99,17 +102,24 @@ def consultar_odds_api(sport_key: str) -> list:
         response = requests.get(url, params=params, timeout=12)
         if response.status_code == 200:
             return response.json()
+        else:
+            logger.error(f"⚠️ API respondió con código de estado: {response.status_code}")
     except Exception as e:
         logger.error(f"💥 Excepción de red en Odds API: {e}")
     return []
 
 def consultar_resultados_api(sport_key: str) -> list:
-    url = f"https://the-odds-api.com{sport_key}/scores/"
+    # CORRECCIÓN ABSOLUTA: Limpieza forzada de caracteres extraños y barras diagonales perfectas
+    sport_key_limpio = sport_key.strip().replace("/", "")
+    url = f"https://the-odds-api.com{sport_key_limpio}/scores/"
+    
     params = {"apiKey": ODDS_API_KEY, "daysFrom": 1}
     try:
         response = requests.get(url, params=params, timeout=12)
         if response.status_code == 200:
             return response.json()
+        else:
+            logger.error(f"⚠️ API Marcadores respondió con código: {response.status_code}")
     except Exception as e:
         logger.error(f"💥 Error al consultar marcadores: {e}")
     return []
@@ -150,7 +160,7 @@ async def job_escaneo_global():
 
     logger.info("⚡ [MODO FORZADO] Iniciando escaneo inmediato de mercados...")
     ahora_mx = datetime.now(ZONE_MX)
-    limite_futuro = ahora_mx + timedelta(hours=48) # Ampliado para capturar todo
+    limite_futuro = ahora_mx + timedelta(hours=48)
 
     for liga_key, liga_name in LIGAS_A_MONITORIZAR.items():
         es_beisbol = (liga_key == "baseball_mlb")
@@ -179,7 +189,7 @@ async def job_escaneo_global():
             analisis = analizar_choque_tactico(stats_home, stats_away, es_beisbol)
             prob_real = analisis["probabilidad"]
             mercado_sugerido = analisis["mercado_sugerido"]
-            cuota_justa = 1.05 # Forzado bajo para asegurar el envío
+            cuota_justa = 1.05 
 
             target_market = "h2h" if (mercado_sugerido == "1X2_HOME" or es_beisbol) else "btts"
             market_data = next((m for m in market_list if m["key"] == target_market), None)
@@ -301,9 +311,9 @@ async def main():
     scheduler.add_job(job_sueno_2305, CronTrigger(hour=23, minute=5, timezone=ZONE_MX))
     
     scheduler.start()
-    logger.info("🚀 [MODO TEST] SniperTipsterBot encendido. Lanzando escaneo forzado inmediato...")
+    logger.info("🚀 [MODO TEST] SniperTipsterBot encendido. Lanzando escaneo blindado inmediato...")
     
-    # EJECUCIÓN INMEDIATA: Esto forzará la salida de picks de béisbol y fútbol AHORA
+    # EJECUCIÓN INMEDIATA FORZADA
     await job_escaneo_global()
     
     while True:
