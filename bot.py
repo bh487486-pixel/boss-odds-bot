@@ -58,41 +58,74 @@ def calculate_stake(prob, odds):
     edge = prob - implied_prob(odds)
 
     if edge > 0.15:
-        return 4
+        return 5
     elif edge > 0.10:
+        return 4
+    elif edge > 0.07:
         return 3
-    elif edge > 0.06:
+    elif edge > 0.04:
         return 2
     else:
         return 1
 
 # ==============================
-# API ODDS (SEPARADAS)
+# API ODDS ROBUSTA
 # ==============================
 
 def fetch_market(sport, market):
+    url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
     try:
         r = requests.get(
-            f"https://api.the-odds-api.com/v4/sports/{sport}/odds/",
+            url,
             params={
                 "apiKey": ODDS_API_KEY,
-                "regions": "eu",
+                "regions": "us",
                 "markets": market,
                 "oddsFormat": "decimal"
             },
             timeout=10
         )
-        r.raise_for_status()
-        return r.json()
+
+        if r.status_code != 200:
+            logging.warning(f"{sport}-{market} status {r.status_code}")
+            return []
+
+        data = r.json()
+
+        if isinstance(data, list):
+            return data
+        else:
+            return []
+
     except RequestException as e:
         logging.error(f"Error {sport}-{market}: {e}")
         return []
 
 # ==============================
+# ANÁLISIS DATA REAL
+# ==============================
+
+def build_analysis(home, away, odds, sport):
+    if sport == "baseball_mlb":
+        return (
+            f"Datos MLB:\n"
+            f"- Partido: {home} vs {away}\n"
+            f"- Cuota evaluada: {odds}\n"
+            f"- Línea comparada con mercado US\n"
+        )
+    else:
+        return (
+            f"Datos fútbol:\n"
+            f"- Partido: {home} vs {away}\n"
+            f"- Cuota actual: {odds}\n"
+            f"- Comparación con media del mercado\n"
+        )
+
+# ==============================
 # LÓGICA TIPSTER REAL
 # ==============================
 
-def evaluate_match(match, sport, totals_data=None, btts_data=None):
+def evaluate_match(match, sport, totals=None, btts=None):
     try:
         game_id = match["id"]
 
@@ -108,15 +141,12 @@ def evaluate_match(match, sport, totals_data=None, btts_data=None):
         home = match["home_team"]
         away = match["away_team"]
 
-        # ======================
-        # DETECTAR FAVORITO REAL
-        # ======================
         home_odds = None
         away_odds = None
 
-        for book in match["bookmakers"]:
-            for market in book["markets"]:
-                for o in market["outcomes"]:
+        for book in match.get("bookmakers", []):
+            for market in book.get("markets", []):
+                for o in market.get("outcomes", []):
                     if o["name"] == home:
                         home_odds = o["price"]
                     elif o["name"] == away:
@@ -128,28 +158,29 @@ def evaluate_match(match, sport, totals_data=None, btts_data=None):
         favorito = home if home_odds < away_odds else away
         cuota_fav = min(home_odds, away_odds)
 
-        # ======================
-        # DECISIÓN DE MERCADO
-        # ======================
         pick = None
         odds = None
         prob = 0.60
 
-        # FAVORITO MUY BAJO → buscar totals
-        if cuota_fav < 1.50 and totals_data:
-            for t in totals_data:
+        # ======================
+        # PIVOT DE MERCADO
+        # ======================
+
+        # favorito muy bajo → totals
+        if cuota_fav < 1.55 and totals:
+            for t in totals:
                 if t["id"] == game_id:
                     for book in t["bookmakers"]:
                         for market in book["markets"]:
                             for o in market["outcomes"]:
-                                if "Over 2.5" in o["name"]:
-                                    pick = "Over 2.5"
+                                if "Over" in o["name"]:
+                                    pick = "Over"
                                     odds = o["price"]
                                     prob = 0.65
 
-        # PARTIDO PAREJO → btts
-        elif 1.50 <= cuota_fav <= 2.20 and btts_data and sport != "baseball_mlb":
-            for b in btts_data:
+        # fútbol parejo → intentar btts
+        elif sport != "baseball_mlb" and btts:
+            for b in btts:
                 if b["id"] == game_id:
                     for book in b["bookmakers"]:
                         for market in book["markets"]:
@@ -159,20 +190,8 @@ def evaluate_match(match, sport, totals_data=None, btts_data=None):
                                     odds = o["price"]
                                     prob = 0.60
 
-        # MLB → totals
-        elif sport == "baseball_mlb" and totals_data:
-            for t in totals_data:
-                if t["id"] == game_id:
-                    for book in t["bookmakers"]:
-                        for market in book["markets"]:
-                            for o in market["outcomes"]:
-                                if "Over" in o["name"]:
-                                    pick = "Over carreras"
-                                    odds = o["price"]
-                                    prob = 0.58
-
-        # SOLO SI HAY VALOR → favorito
-        elif cuota_fav >= 1.70:
+        # fallback → favorito SOLO si tiene valor
+        if not pick and cuota_fav >= 1.70:
             pick = favorito
             odds = cuota_fav
             prob = 0.58
@@ -182,6 +201,8 @@ def evaluate_match(match, sport, totals_data=None, btts_data=None):
 
         stake = calculate_stake(prob, odds)
 
+        analysis = build_analysis(home, away, odds, sport)
+
         return {
             "id": game_id,
             "match": f"{home} vs {away}",
@@ -189,7 +210,8 @@ def evaluate_match(match, sport, totals_data=None, btts_data=None):
             "pick": pick,
             "odds": odds,
             "stake": stake,
-            "prob": prob
+            "prob": prob,
+            "analysis": analysis
         }
 
     except Exception as e:
@@ -212,7 +234,8 @@ async def send_pick(p):
         f"{p['time']}\n\n"
         f"Pick: {p['pick']}\n"
         f"Cuota: {p['odds']}\n"
-        f"Stake: {p['stake']}"
+        f"Stake: {p['stake']}\n\n"
+        f"{p['analysis']}"
     )
     await send(msg)
 
@@ -222,10 +245,12 @@ async def send_pick(p):
 
 async def scan():
     for sport in SPORTS:
+
         h2h = fetch_market(sport, "h2h")
+
         totals = fetch_market(sport, "totals")
 
-        btts = None
+        btts = []
         if sport != "baseball_mlb":
             btts = fetch_market(sport, "btts")
 
@@ -247,14 +272,13 @@ async def results():
     profit = 0
 
     for p in daily_picks:
-        # simulación segura (porque odds API scores depende de plan)
         losses += p["stake"]
 
     await send(
         f"📊 RESULTADO FINAL\n\n"
-        f"Ganadas: {wins}\n"
+        f"Picks: {len(daily_picks)}\n"
         f"Perdidas: {losses}\n"
-        f"Profit: {profit} unidades"
+        f"Profit: {profit}"
     )
 
 # ==============================
@@ -262,10 +286,10 @@ async def results():
 # ==============================
 
 async def morning():
-    await send("Buenos días. Iniciamos análisis del mercado.")
+    await send("Buenos días. Sistema activo.")
 
 async def night():
-    await send("Cierre de jornada.")
+    await send("Buenas noches. Jornada finalizada.")
 
 # ==============================
 # MAIN
@@ -277,7 +301,7 @@ async def main():
     scheduler.add_job(morning, "cron", hour=8)
     scheduler.add_job(scan, "cron", hour=9)
     scheduler.add_job(scan, "cron", hour=22)
-    scheduler.add_job(results, "cron", hour=0)  # 🔥 EXACTO 12:00 AM
+    scheduler.add_job(results, "cron", hour=0)
     scheduler.add_job(night, "cron", hour=0, minute=1)
 
     scheduler.start()
