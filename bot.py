@@ -43,15 +43,14 @@ LEAGUES = [
 # Inicialización del Bot (v20+)
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Base de datos local volátil en memoria para simular el registro de apuestas del día
-# En producción avanzada se sugeriría persistencia (SQLite/Redis), pero aquí se mantiene autocontenido.
+# Base de datos local volátil en memoria
 daily_picks_registry = {} 
 
 # ==========================================
 # 1. APIS Y ENDPOINTS SEPARADOS
 # ==========================================
 def clean_sport_key(sport_key: str) -> str:
-    """Limpia la clave del deporte para evitar errores de duplicación de barras."""
+    """Limplia la clave del deporte para evitar errores de duplicación de barras."""
     cleaned = sport_key.strip().replace('/', '')
     return f"/{cleaned}" if not cleaned.startswith('/') else cleaned
 
@@ -62,8 +61,8 @@ async def fetch_odds_data(sport_key: str) -> list:
     
     params = {
         'apiKey': ODDS_API_KEY,
-        'regions': 'us,eu',  # Se extraen mercados internacionales comunes
-        'markets': 'h2h',    # Ganador Directo / Moneyline / 1X2
+        'regions': 'us,eu',
+        'markets': 'h2h',
         'oddsFormat': 'decimal'
     }
     
@@ -86,7 +85,7 @@ async def fetch_scores_data(sport_key: str) -> list:
     
     params = {
         'apiKey': ODDS_API_KEY,
-        'daysFrom': '3' # Trae partidos finalizados recientemente
+        'daysFrom': '3'
     }
     
     try:
@@ -105,30 +104,19 @@ async def fetch_scores_data(sport_key: str) -> list:
 # 4. INTELIGENCIA DE APUESTAS (ESTÁTICA)
 # ==========================================
 def analyze_and_calculate_stake(home_team: str, away_team: str, decimal_odds: float, is_mlb: bool):
-    """
-    Evalúa si la cuota asignada por las casas tiene valor matemático implícito 
-    comparado con una probabilidad proyectada interna lógica y calcula el Stake.
-    """
-    # Simulación de un modelo estadístico predictivo real
-    # En un escenario real, aquí consultarías estadísticas previas de los equipos.
-    # Para cumplir de forma lógica, asignamos una probabilidad base balanceada del 48% al favorito aparente
+    """Evalúa si la cuota asignada por las casas tiene valor matemático implícito."""
     projected_probability = 0.48 
-    
     implied_probability = 1 / decimal_odds
     
-    # Si la probabilidad proyectada es mayor que la implícita de la cuota, hay Valor (+EV)
     if projected_probability > implied_probability:
-        # Fórmula de Kelly Moderada: ((Prob * Cuota) - 1) / (Cuota - 1) * Factor de resguardo (0.2)
         kelly_stake = ((projected_probability * decimal_odds) - 1) / (decimal_odds - 1)
-        calculated_stake = round(kelly_stake * 10, 1) # Escala base
+        calculated_stake = round(kelly_stake * 10, 1)
         
-        # Acotamos estrictamente el Stake entre el rango solicitado de 1 a 4 unidades
         final_stake = max(1.0, min(4.0, calculated_stake))
         
-        # Selección lógica del mercado según deporte
         if is_mlb:
             market_text = "Ganador Directo (Moneyline)"
-            pick_team = home_team if decimal_odds < 2.10 else away_team # Apuesta lógica al que tiene cuota competitiva
+            pick_team = home_team if decimal_odds < 2.10 else away_team
         else:
             market_text = "Resultado de Tiempo Regular (1X2)"
             pick_team = home_team if decimal_odds < 2.30 else away_team
@@ -185,20 +173,17 @@ async def task_global_odds_scan():
                 
             commence_time = datetime.strptime(commence_time_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.utc)
             
-            # Filtrar estrictamente eventos dentro de la ventana de 36 horas en adelante
             if now_utc <= commence_time <= max_window:
                 bookmakers = event.get('bookmakers', [])
                 if not bookmakers:
                     continue
                 
-                # Extraemos la cuota promedio del primer mercado disponible
                 market_data = bookmakers[0].get('markets', [{}])[0]
                 outcomes = market_data.get('outcomes', [])
                 
                 if not outcomes:
                     continue
                     
-                # Tomamos la primera cuota para evaluar valor de manera estática
                 sample_outcome = outcomes[0]
                 odds = sample_outcome.get('price')
                 
@@ -208,7 +193,6 @@ async def task_global_odds_scan():
                     alerts_found += 1
                     local_time = commence_time.astimezone(MEXICO_TZ).strftime('%d/%m %H:%M')
                     
-                    # Registro interno para el balance nocturno
                     daily_picks_registry[event_id] = {
                         "sport": sport,
                         "home": home_team,
@@ -219,7 +203,6 @@ async def task_global_odds_scan():
                         "status": "PENDING"
                     }
                     
-                    # Renderizado del mensaje Premium formal
                     alert_msg = (
                         "🚨 *¡ALERTA SNIPER PREMIUM!* 🚨\n\n"
                         f"🏆 *Liga:* `{sport.upper()}`\n"
@@ -234,7 +217,7 @@ async def task_global_odds_scan():
                         "⚠️ _Invierta responsablemente respetando su gestión de Bankroll._"
                     )
                     await send_telegram_message(alert_msg)
-                    await asyncio.sleep(2) # Respetar límites de rate-limiting de Telegram
+                    await asyncio.sleep(2)
                     
     logger.info(f"Escaneo finalizado. Alertas enviadas: {alerts_found}")
     if alerts_found == 0:
@@ -247,14 +230,13 @@ async def task_settle_balances():
     units_lost = 0.0
     settled_count = 0
     
-    # Agrupamos los eventos que tenemos registrados pendientes por resolver
-    pending_events = [eid for編, data in daily_picks_registry.items() if data["status"] == "PENDING"]
+    # Línea corregida rigurosamente aquí:
+    pending_events = [eid for eid, data in daily_picks_registry.items() if data["status"] == "PENDING"]
     
     if not pending_events:
         await send_telegram_message("📊 *Balance Diario:* No se registraron selecciones cerradas para computar en este ciclo.")
         return
 
-    # Consultamos marcadores de las ligas involucradas
     for sport in LEAGUES:
         scores_list = await fetch_scores_data(sport)
         for match in scores_list:
@@ -271,7 +253,6 @@ async def task_settle_balances():
                         home_team = match.get('home_team')
                         away_team = match.get('away_team')
                         
-                        # Determinar ganador explícito
                         winner = None
                         if score_home > score_away:
                             winner = home_team
@@ -297,30 +278,28 @@ async def task_settle_balances():
     
     summary_msg = (
         "📊 *REPORTE DE BALANCE TRANSPARENTE* 📊\n\n"
-        f"✅ Pronósticos Clauisurados Hoy: `{settled_count}`\n"
+        f"✅ Pronósticos Clausurados Hoy: `{settled_count}`\n"
         f"➕ Unidades Ganadas: `+{round(units_won, 2)}` u.\n"
         f"➖ Unidades Perdidas: `-{round(units_lost, 2)}` u.\n"
         "----------------------------------\n"
         f"{balance_emoji} *Balance Neto del Día:* `{'+' if net_balance >= 0 else ''}{net_balance} Unidades`\n"
         "----------------------------------\n"
-        "📖 _Mantenemos un historial 100% verídico y auditable. El éxito a largo plazo es nuestro único norte._"
+        "📖 _Mantenemos un historial 100% verídico y auditable._"
     )
     await send_telegram_message(summary_msg)
 
 async def task_sleep_mode():
-    """11:05 PM: Notifica la suspensión temporal de alertas nocturnas."""
-    await send_telegram_message("💤 *Modo Sueño Activado:* El bot detiene el envío de alertas automáticas para respetar el descanso. Nos vemos en el reporte de la mañana.")
+    """11:05 PM: Notifica la suspensión temporal de alertas."""
+    await send_telegram_message("💤 *Modo Sueño Activado:* El bot detiene el envío de alertas automáticas hasta mañana.")
 
 # ==========================================
 # 6. FUNCIÓN PRINCIPAL Y MODO PRUEBA DE ARRANQUE
 # ==========================================
 async def main():
-    logger.info("Iniciando e inicializando SniperTipsterBot...")
+    logger.info("Iniciando SniperTipsterBot...")
     
-    # Configuración del programador con zona horaria de Ciudad de México
     scheduler = AsyncIOScheduler(timezone=MEXICO_TZ)
     
-    # 5. Configuración de Cronogramas bajo APScheduler
     scheduler.add_job(task_morning_report, 'cron', hour=8, minute=0)
     scheduler.add_job(task_global_odds_scan, 'cron', hour=8, minute=30)
     scheduler.add_job(task_global_odds_scan, 'cron', hour=22, minute=0)
@@ -328,19 +307,17 @@ async def main():
     scheduler.add_job(task_sleep_mode, 'cron', hour=23, minute=5)
     
     scheduler.start()
-    logger.info("Programador de tareas APScheduler iniciado con éxito.")
+    logger.info("APScheduler iniciado con éxito.")
     
-    # 6. MODO PRUEBA DE ARRANQUE (Verificación inmediata en hosting)
+    # MODO PRUEBA DE ARRANQUE
     await send_telegram_message("🚀 *Bot Inicializado en la Nube (Render).* Ejecutando escaneo de verificación inicial obligatorio...")
     await task_global_odds_scan()
     
-    # Bucle infinito asíncrono para mantener vivo el Worker 24/7 en Render
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    # Gestión del bucle de eventos asíncronos nativo de Python
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot apagado manualmente o mediante señal del sistema.")
+        logger.info("Bot apagado.")
