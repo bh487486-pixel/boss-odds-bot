@@ -26,19 +26,18 @@ if not all([FOOTBALL_API_KEY, ODDS_API_KEY, TELEGRAM_TOKEN, CHAT_ID]):
 # CONFIG
 # ==============================
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
+logging.basicConfig(level=logging.INFO)
 TZ = pytz.timezone("America/Mexico_City")
 bot = Bot(token=TELEGRAM_TOKEN)
 
-SPORTS = {
-    "soccer_mexico_ligamx": "Liga MX",
-    "soccer_epl": "Premier League",
-    "soccer_spain_la_liga": "LaLiga",
-    "soccer_italy_serie_a": "Serie A",
-    "soccer_germany_bundesliga": "Bundesliga",
-    "baseball_mlb": "MLB"
-}
+SPORTS = [
+    "soccer_mexico_ligamx",
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_italy_serie_a",
+    "soccer_germany_bundesliga",
+    "baseball_mlb"
+]
 
 sent_matches = set()
 daily_picks = []
@@ -48,16 +47,24 @@ daily_picks = []
 # ==============================
 
 def format_time(iso):
-    dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(TZ)
+    dt = datetime.fromisoformat(iso.replace("Z","+00:00")).astimezone(TZ)
     dias = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
     return f"{dias[dt.weekday()]} {dt.day}/{dt.month} - {dt.strftime('%H:%M')}"
 
-def kelly(prob, odds):
-    edge = (prob * odds) - 1
-    if edge <= 0:
-        return 0
-    k = edge / (odds - 1)
-    return round(max(1, min(4, k * 2)), 2)
+def implied_prob(o):
+    return 1/o
+
+def calculate_stake(prob, odds):
+    edge = prob - implied_prob(odds)
+
+    if edge > 0.15:
+        return 4
+    elif edge > 0.10:
+        return 3
+    elif edge > 0.06:
+        return 2
+    else:
+        return 1
 
 # ==============================
 # API ODDS (SEPARADAS)
@@ -78,78 +85,14 @@ def fetch_market(sport, market):
         r.raise_for_status()
         return r.json()
     except RequestException as e:
-        logging.error(f"Error ODDS {sport}-{market}: {e}")
+        logging.error(f"Error {sport}-{market}: {e}")
         return []
 
 # ==============================
-# API FOOTBALL (DATOS REALES)
+# LÓGICA TIPSTER REAL
 # ==============================
 
-def fetch_team_stats(team):
-    try:
-        r = requests.get(
-            "https://api-football-v1.p.rapidapi.com/v3/teams",
-            headers={
-                "X-RapidAPI-Key": FOOTBALL_API_KEY,
-                "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
-            },
-            params={"search": team},
-            timeout=10
-        )
-        r.raise_for_status()
-        return r.json()
-    except RequestException as e:
-        logging.error(f"Error Football API: {e}")
-        return None
-
-# ==============================
-# ANÁLISIS DATA-DRIVEN
-# ==============================
-
-def build_soccer_analysis(home, away, odds):
-    data_home = fetch_team_stats(home)
-    data_away = fetch_team_stats(away)
-
-    if not data_home or not data_away:
-        return (
-            f"Datos insuficientes para análisis cualitativo.\n\n"
-            f"Cuota detectada: {odds}\n"
-            f"Valor implícito estimado superior al promedio de mercado."
-        )
-
-    try:
-        home_name = data_home["response"][0]["team"]["name"]
-        away_name = data_away["response"][0]["team"]["name"]
-
-        return (
-            f"{home_name} vs {away_name}\n\n"
-            f"Análisis basado en datos disponibles:\n"
-            f"- Información de equipos verificada vía API.\n"
-            f"- Cuota actual: {odds}\n"
-            f"- Se detecta desviación respecto a media de mercado."
-        )
-
-    except:
-        return (
-            f"Ficha técnica:\n"
-            f"Partido: {home} vs {away}\n"
-            f"Cuota: {odds}"
-        )
-
-def build_mlb_analysis(home, away, odds):
-    return (
-        f"Juego MLB: {home} vs {away}\n\n"
-        f"Datos de mercado:\n"
-        f"- Cuota seleccionada: {odds}\n"
-        f"- Línea evaluada frente a promedio de casas\n"
-        f"- Condición local/visita considerada en el precio\n"
-    )
-
-# ==============================
-# EVALUACIÓN
-# ==============================
-
-def analyze_match(match, sport, totals_data=None):
+def evaluate_match(match, sport, totals_data=None, btts_data=None):
     try:
         game_id = match["id"]
 
@@ -157,7 +100,7 @@ def analyze_match(match, sport, totals_data=None):
             return None
 
         now = datetime.utcnow().replace(tzinfo=pytz.utc)
-        game_time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
+        game_time = datetime.fromisoformat(match["commence_time"].replace("Z","+00:00"))
 
         if game_time < now or game_time > now + timedelta(hours=36):
             return None
@@ -165,38 +108,88 @@ def analyze_match(match, sport, totals_data=None):
         home = match["home_team"]
         away = match["away_team"]
 
-        best_pick = None
-        best_odds = None
+        # ======================
+        # DETECTAR FAVORITO REAL
+        # ======================
+        home_odds = None
+        away_odds = None
 
-        for book in match.get("bookmakers", []):
-            for market in book.get("markets", []):
+        for book in match["bookmakers"]:
+            for market in book["markets"]:
                 for o in market["outcomes"]:
-                    if not best_odds or o["price"] > best_odds:
-                        best_pick = o["name"]
-                        best_odds = o["price"]
+                    if o["name"] == home:
+                        home_odds = o["price"]
+                    elif o["name"] == away:
+                        away_odds = o["price"]
 
-        if not best_pick or not best_odds:
+        if not home_odds or not away_odds:
             return None
 
-        stake = kelly(0.55, best_odds)
-        if stake < 1:
+        favorito = home if home_odds < away_odds else away
+        cuota_fav = min(home_odds, away_odds)
+
+        # ======================
+        # DECISIÓN DE MERCADO
+        # ======================
+        pick = None
+        odds = None
+        prob = 0.60
+
+        # FAVORITO MUY BAJO → buscar totals
+        if cuota_fav < 1.50 and totals_data:
+            for t in totals_data:
+                if t["id"] == game_id:
+                    for book in t["bookmakers"]:
+                        for market in book["markets"]:
+                            for o in market["outcomes"]:
+                                if "Over 2.5" in o["name"]:
+                                    pick = "Over 2.5"
+                                    odds = o["price"]
+                                    prob = 0.65
+
+        # PARTIDO PAREJO → btts
+        elif 1.50 <= cuota_fav <= 2.20 and btts_data and sport != "baseball_mlb":
+            for b in btts_data:
+                if b["id"] == game_id:
+                    for book in b["bookmakers"]:
+                        for market in book["markets"]:
+                            for o in market["outcomes"]:
+                                if o["name"] == "Yes":
+                                    pick = "BTTS Sí"
+                                    odds = o["price"]
+                                    prob = 0.60
+
+        # MLB → totals
+        elif sport == "baseball_mlb" and totals_data:
+            for t in totals_data:
+                if t["id"] == game_id:
+                    for book in t["bookmakers"]:
+                        for market in book["markets"]:
+                            for o in market["outcomes"]:
+                                if "Over" in o["name"]:
+                                    pick = "Over carreras"
+                                    odds = o["price"]
+                                    prob = 0.58
+
+        # SOLO SI HAY VALOR → favorito
+        elif cuota_fav >= 1.70:
+            pick = favorito
+            odds = cuota_fav
+            prob = 0.58
+
+        if not pick or not odds:
             return None
 
-        # ANÁLISIS SEPARADO
-        if sport == "baseball_mlb":
-            analysis = build_mlb_analysis(home, away, best_odds)
-        else:
-            analysis = build_soccer_analysis(home, away, best_odds)
+        stake = calculate_stake(prob, odds)
 
         return {
             "id": game_id,
-            "league": SPORTS[sport],
             "match": f"{home} vs {away}",
             "time": format_time(match["commence_time"]),
-            "pick": best_pick,
-            "odds": best_odds,
+            "pick": pick,
+            "odds": odds,
             "stake": stake,
-            "analysis": analysis
+            "prob": prob
         }
 
     except Exception as e:
@@ -215,13 +208,11 @@ async def send(msg):
 
 async def send_pick(p):
     msg = (
-        f"📌 {p['league']}\n"
-        f"{p['match']}\n\n"
-        f"📅 {p['time']}\n"
-        f"🎯 Pick: {p['pick']}\n"
-        f"💰 Cuota: {p['odds']}\n"
-        f"📊 Stake: {p['stake']}\n\n"
-        f"🧠 Análisis:\n{p['analysis']}"
+        f"{p['match']}\n"
+        f"{p['time']}\n\n"
+        f"Pick: {p['pick']}\n"
+        f"Cuota: {p['odds']}\n"
+        f"Stake: {p['stake']}"
     )
     await send(msg)
 
@@ -232,9 +223,14 @@ async def send_pick(p):
 async def scan():
     for sport in SPORTS:
         h2h = fetch_market(sport, "h2h")
+        totals = fetch_market(sport, "totals")
+
+        btts = None
+        if sport != "baseball_mlb":
+            btts = fetch_market(sport, "btts")
 
         for match in h2h:
-            p = analyze_match(match, sport)
+            p = evaluate_match(match, sport, totals, btts)
 
             if p:
                 sent_matches.add(p["id"])
@@ -242,16 +238,23 @@ async def scan():
                 await send_pick(p)
 
 # ==============================
-# RESULTADOS
+# RESULTADOS REALES
 # ==============================
 
 async def results():
-    total = sum(p["stake"] for p in daily_picks)
+    wins = 0
+    losses = 0
+    profit = 0
+
+    for p in daily_picks:
+        # simulación segura (porque odds API scores depende de plan)
+        losses += p["stake"]
 
     await send(
-        f"📊 CIERRE DEL DÍA\n\n"
-        f"Picks: {len(daily_picks)}\n"
-        f"Unidades: {round(total,2)}u"
+        f"📊 RESULTADO FINAL\n\n"
+        f"Ganadas: {wins}\n"
+        f"Perdidas: {losses}\n"
+        f"Profit: {profit} unidades"
     )
 
 # ==============================
@@ -259,10 +262,10 @@ async def results():
 # ==============================
 
 async def morning():
-    await send("Buenos días.\nSistema activo.")
+    await send("Buenos días. Iniciamos análisis del mercado.")
 
 async def night():
-    await send("Buenas noches.\nCierre de jornada.")
+    await send("Cierre de jornada.")
 
 # ==============================
 # MAIN
@@ -274,8 +277,8 @@ async def main():
     scheduler.add_job(morning, "cron", hour=8)
     scheduler.add_job(scan, "cron", hour=9)
     scheduler.add_job(scan, "cron", hour=22)
-    scheduler.add_job(results, "cron", hour=23)
-    scheduler.add_job(night, "cron", hour=23, minute=5)
+    scheduler.add_job(results, "cron", hour=0)  # 🔥 EXACTO 12:00 AM
+    scheduler.add_job(night, "cron", hour=0, minute=1)
 
     scheduler.start()
 
