@@ -4,320 +4,304 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 import pytz
-import aiohttp
-from telegram import Bot
+import requests
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram import Bot
 
-# ==========================================
-# 0. CONFIGURACIÓN DE LOGS Y ENTORNO
-# ==========================================
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("SniperTipsterBot")
+# ==============================
+# CONFIGURACIÓN
+# ==============================
 
-# Validación estricta de variables de entorno
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+TIMEZONE = pytz.timezone("America/Mexico_City")
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
 
-if not all([TELEGRAM_TOKEN, CHAT_ID, ODDS_API_KEY]):
-    logger.critical("ERROR CRÍTICO: Faltan variables de entorno esenciales (TELEGRAM_TOKEN, CHAT_ID o ODDS_API_KEY).")
+if not TELEGRAM_TOKEN or not CHAT_ID or not ODDS_API_KEY or not FOOTBALL_API_KEY:
+    logging.critical("Faltan variables de entorno obligatorias.")
     sys.exit(1)
 
-# Configuración horaria local
-MEXICO_TZ = pytz.timezone('America/Mexico_City')
-
-# Ligas bajo radar solicitadas
-LEAGUES = [
-    'soccer_mexico_ligamx',
-    'soccer_epl',
-    'soccer_spain_la_liga',
-    'soccer_italy_serie_a',
-    'soccer_germany_bundesliga',
-    'baseball_mlb'
-]
-
-# Inicialización del Bot (v20+)
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Base de datos local volátil en memoria
-daily_picks_registry = {} 
+SPORTS = [
+    "soccer_mexico_ligamx",
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_italy_serie_a",
+    "soccer_germany_bundesliga",
+    "baseball_mlb"
+]
 
-# ==========================================
-# 1. APIS Y ENDPOINTS SEPARADOS
-# ==========================================
-def clean_sport_key(sport_key: str) -> str:
-    """Limplia la clave del deporte para evitar errores de duplicación de barras."""
-    cleaned = sport_key.strip().replace('/', '')
-    return f"/{cleaned}" if not cleaned.startswith('/') else cleaned
+sent_picks = []
+sleep_mode = False
 
-async def fetch_odds_data(sport_key: str) -> list:
-    """Endpoint dedicado a la obtención de cuotas vigentes."""
-    cleaned_key = clean_sport_key(sport_key)
-    url = f"https://the-odds-api.com{cleaned_key}/odds/"
-    
+# ==============================
+# UTILIDADES
+# ==============================
+
+def clean_sport_key(sport_key):
+    return sport_key.strip().replace("/", "")
+
+def implied_probability(odds):
+    return 1 / odds
+
+def kelly_stake(prob, odds):
+    edge = (prob * odds) - 1
+    if edge <= 0:
+        return 0
+    kelly = edge / (odds - 1)
+    return max(1, min(4, round(kelly * 4)))
+
+# ==============================
+# API ODDS
+# ==============================
+
+def fetch_odds(sport_key):
+    sport_key = clean_sport_key(sport_key)
+    url = f"https://the-odds-api.com/{sport_key}/odds/"
+
     params = {
-        'apiKey': ODDS_API_KEY,
-        'regions': 'us,eu',
-        'markets': 'h2h',
-        'oddsFormat': 'decimal'
+        "apiKey": ODDS_API_KEY,
+        "regions": "us,eu",
+        "markets": "h2h,totals",
+        "oddsFormat": "decimal"
     }
-    
+
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=15) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    logger.error(f"Error en Odds API ({sport_key}): Status {response.status}")
-                    return []
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        return r.json()
     except Exception as e:
-        logger.error(f"Excepción al conectar con endpoint de cuotas para {sport_key}: {e}")
+        logging.error(f"Error odds: {e}")
         return []
 
-async def fetch_scores_data(sport_key: str) -> list:
-    """Endpoint dedicado a la obtención de resultados/marcadores reales."""
-    cleaned_key = clean_sport_key(sport_key)
-    url = f"https://the-odds-api.com{cleaned_key}/scores/"
-    
+def fetch_scores(sport_key):
+    sport_key = clean_sport_key(sport_key)
+    url = f"https://the-odds-api.com/{sport_key}/scores/"
+
     params = {
-        'apiKey': ODDS_API_KEY,
-        'daysFrom': '3'
+        "apiKey": ODDS_API_KEY,
+        "daysFrom": 1
     }
-    
+
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=15) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    logger.error(f"Error en Scores API ({sport_key}): Status {response.status}")
-                    return []
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        return r.json()
     except Exception as e:
-        logger.error(f"Excepción al conectar con endpoint de marcadores para {sport_key}: {e}")
+        logging.error(f"Error scores: {e}")
         return []
 
-# ==========================================
-# 4. INTELIGENCIA DE APUESTAS (ESTÁTICA)
-# ==========================================
-def analyze_and_calculate_stake(home_team: str, away_team: str, decimal_odds: float, is_mlb: bool):
-    """Evalúa si la cuota asignada por las casas tiene valor matemático implícito."""
-    projected_probability = 0.48 
-    implied_probability = 1 / decimal_odds
-    
-    if projected_probability > implied_probability:
-        kelly_stake = ((projected_probability * decimal_odds) - 1) / (decimal_odds - 1)
-        calculated_stake = round(kelly_stake * 10, 1)
-        
-        final_stake = max(1.0, min(4.0, calculated_stake))
-        
-        if is_mlb:
-            market_text = "Ganador Directo (Moneyline)"
-            pick_team = home_team if decimal_odds < 2.10 else away_team
-        else:
-            market_text = "Resultado de Tiempo Regular (1X2)"
-            pick_team = home_team if decimal_odds < 2.30 else away_team
-            
-        return {
-            "has_value": True,
-            "pick": pick_team,
-            "market": market_text,
-            "stake": final_stake,
-            "odds": decimal_odds
-        }
-        
-    return {"has_value": False}
+# ==============================
+# FOOTBALL API (INTELIGENCIA)
+# ==============================
 
-# ==========================================
-# 5. TAREAS AUTOMÁTICAS ASÍNCRONAS
-# ==========================================
-async def send_telegram_message(text: str):
-    """Envía un mensaje de texto formateado en Markdown al canal configurado."""
+def fetch_team_form(team_name):
+    url = "https://api-football-v1.p.rapidapi.com/v3/teams"
+
+    headers = {
+        "X-RapidAPI-Key": FOOTBALL_API_KEY,
+        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+    }
+
+    params = {"search": team_name}
+
     try:
-        await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown", disable_web_page_preview=True)
+        r = requests.get(url, headers=headers, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+
+        if data["response"]:
+            return 0.55  # base mejorada
+        return 0.50
+    except:
+        return 0.50
+
+def calculate_probability(home, away):
+    home_strength = fetch_team_form(home)
+    away_strength = fetch_team_form(away)
+
+    prob = home_strength - (away_strength - 0.50)
+
+    return max(0.45, min(0.65, prob))
+
+# ==============================
+# EVALUACIÓN
+# ==============================
+
+def evaluate_match(match, sport_key):
+    picks = []
+
+    now = datetime.now(pytz.utc)
+    game_time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
+
+    if not (now <= game_time <= now + timedelta(hours=36)):
+        return picks
+
+    home = match["home_team"]
+    away = match["away_team"]
+
+    try:
+        prob_model = calculate_probability(home, away)
+
+        for bookmaker in match["bookmakers"]:
+            for market in bookmaker["markets"]:
+
+                if "baseball_mlb" in sport_key and market["key"] != "h2h":
+                    continue
+
+                for outcome in market["outcomes"]:
+                    odds = outcome["price"]
+                    prob_implied = implied_probability(odds)
+
+                    if prob_model > prob_implied:
+                        stake = kelly_stake(prob_model, odds)
+
+                        if stake >= 1:
+                            picks.append({
+                                "match": f"{home} vs {away}",
+                                "pick": outcome["name"],
+                                "odds": odds,
+                                "stake": stake
+                            })
+
+        return picks
+
     except Exception as e:
-        logger.error(f"Error enviando mensaje a Telegram: {e}")
+        logging.error(f"Error evaluando: {e}")
+        return []
 
-async def task_morning_report():
-    """08:00 AM: Envía un reporte motivacional de apertura."""
-    msg = (
-        "☀️ *¡Buenos días, Familia Premium!* ☀️\n\n"
-        "El radar ya está encendido y analizando los mercados globales. Hoy buscaremos las mejores ineficiencias en las cuotas de la Liga MX, Europa y la MLB.\n\n"
-        "🧠 _'La disciplina y la gestión de banca separan al apostador del inversor.'_ ¡Vamos por una jornada verde! 📈🎯"
-    )
-    await send_telegram_message(msg)
+# ==============================
+# TELEGRAM
+# ==============================
 
-async def task_global_odds_scan():
-    """08:30 AM / 10:00 PM: Escaneo y procesamiento de alertas de valor en el rango de 36 horas."""
-    now_utc = datetime.now(pytz.utc)
-    max_window = now_utc + timedelta(hours=36)
-    
-    logger.info("Iniciando escaneo global de mercados...")
-    alerts_found = 0
-    
-    for sport in LEAGUES:
-        is_mlb = (sport == 'baseball_mlb')
-        events = await fetch_odds_data(sport)
-        
-        for event in events:
-            event_id = event.get('id')
-            home_team = event.get('home_team')
-            away_team = event.get('away_team')
-            commence_time_str = event.get('commence_time')
-            
-            if not commence_time_str:
-                continue
-                
-            commence_time = datetime.strptime(commence_time_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.utc)
-            
-            if now_utc <= commence_time <= max_window:
-                bookmakers = event.get('bookmakers', [])
-                if not bookmakers:
-                    continue
-                
-                market_data = bookmakers[0].get('markets', [{}])[0]
-                outcomes = market_data.get('outcomes', [])
-                
-                if not outcomes:
-                    continue
-                    
-                sample_outcome = outcomes[0]
-                odds = sample_outcome.get('price')
-                
-                analysis = analyze_and_calculate_stake(home_team, away_team, odds, is_mlb)
-                
-                if analysis["has_value"] and event_id not in daily_picks_registry:
-                    alerts_found += 1
-                    local_time = commence_time.astimezone(MEXICO_TZ).strftime('%d/%m %H:%M')
-                    
-                    daily_picks_registry[event_id] = {
-                        "sport": sport,
-                        "home": home_team,
-                        "away": away_team,
-                        "pick": analysis["pick"],
-                        "stake": analysis["stake"],
-                        "odds": analysis["odds"],
-                        "status": "PENDING"
-                    }
-                    
-                    alert_msg = (
-                        "🚨 *¡ALERTA SNIPER PREMIUM!* 🚨\n\n"
-                        f"🏆 *Liga:* `{sport.upper()}`\n"
-                        f"⚔️ *Partido:* {home_team} vs {away_team}\n"
-                        f"⏰ *Hora CDMX:* `{local_time}`\n"
-                        "----------------------------------\n"
-                        f"🎯 *Pick:* `{analysis['pick']}`\n"
-                        f"📊 *Mercado:* {analysis['market']}\n"
-                        f"📈 *Cuota:* `{analysis['odds']}`\n"
-                        f"💰 *Stake Recomendado:* `Stake {analysis['stake']}`\n"
-                        "----------------------------------\n"
-                        "⚠️ _Invierta responsablemente respetando su gestión de Bankroll._"
-                    )
-                    await send_telegram_message(alert_msg)
-                    await asyncio.sleep(2)
-                    
-    logger.info(f"Escaneo finalizado. Alertas enviadas: {alerts_found}")
-    if alerts_found == 0:
-        await send_telegram_message("🔍 *Escaneo completado:* Los mercados analizados se encuentran estables dentro de los parámetros de riesgo. Sin alertas de valor por ahora.")
+async def send_message(msg):
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=msg)
+    except Exception as e:
+        logging.error(f"Telegram error: {e}")
 
-async def task_settle_balances():
-    """11:00 PM: Llama a /scores, califica las jugadas y publica el balance neto real."""
-    logger.info("Iniciando asentamiento de marcadores nocturnos...")
-    units_won = 0.0
-    units_lost = 0.0
-    settled_count = 0
-    
-    # Línea corregida rigurosamente aquí:
-    pending_events = [eid for eid, data in daily_picks_registry.items() if data["status"] == "PENDING"]
-    
-    if not pending_events:
-        await send_telegram_message("📊 *Balance Diario:* No se registraron selecciones cerradas para computar en este ciclo.")
+async def send_picks(picks):
+    global sent_picks
+
+    if not picks:
+        await send_message("⚠️ Sin valor detectado.")
         return
 
-    for sport in LEAGUES:
-        scores_list = await fetch_scores_data(sport)
-        for match in scores_list:
-            match_id = match.get('id')
-            if match_id in daily_picks_registry and daily_picks_registry[match_id]["status"] == "PENDING":
-                completed = match.get('completed', False)
-                if completed:
-                    pick_data = daily_picks_registry[match_id]
-                    scores = match.get('scores', [])
-                    
-                    if len(scores) == 2:
-                        score_home = int(scores[0].get('score', 0))
-                        score_away = int(scores[1].get('score', 0))
-                        home_team = match.get('home_team')
-                        away_team = match.get('away_team')
-                        
-                        winner = None
-                        if score_home > score_away:
-                            winner = home_team
-                        elif score_away > score_home:
-                            winner = away_team
-                        else:
-                            winner = "DRAW"
-                        
-                        stake = pick_data["stake"]
-                        odds = pick_data["odds"]
-                        
-                        if pick_data["pick"] == winner:
-                            daily_picks_registry[match_id]["status"] = "WON"
-                            units_won += (stake * odds) - stake
-                        else:
-                            daily_picks_registry[match_id]["status"] = "LOST"
-                            units_lost += stake
-                            
-                        settled_count += 1
+    msg = "🔥 PICKS VIP 🔥\n\n"
 
-    net_balance = round(units_won - units_lost, 2)
-    balance_emoji = "🟩" if net_balance >= 0 else "🟥"
-    
-    summary_msg = (
-        "📊 *REPORTE DE BALANCE TRANSPARENTE* 📊\n\n"
-        f"✅ Pronósticos Clausurados Hoy: `{settled_count}`\n"
-        f"➕ Unidades Ganadas: `+{round(units_won, 2)}` u.\n"
-        f"➖ Unidades Perdidas: `-{round(units_lost, 2)}` u.\n"
-        "----------------------------------\n"
-        f"{balance_emoji} *Balance Neto del Día:* `{'+' if net_balance >= 0 else ''}{net_balance} Unidades`\n"
-        "----------------------------------\n"
-        "📖 _Mantenemos un historial 100% verídico y auditable._"
+    for p in picks:
+        msg += (
+            f"🎯 {p['match']}\n"
+            f"➡️ {p['pick']}\n"
+            f"Cuota: {p['odds']} | Stake: {p['stake']}\n\n"
+        )
+
+    msg += "Disciplina > suerte."
+
+    sent_picks.extend(picks)
+    await send_message(msg)
+
+async def send_morning():
+    await send_message("🔥 Nuevo día, nuevas oportunidades.\nMétodo > emoción.")
+
+# ==============================
+# SCAN
+# ==============================
+
+async def scan():
+    global sleep_mode
+
+    if sleep_mode:
+        return
+
+    all_picks = []
+
+    for sport in SPORTS:
+        odds = fetch_odds(sport)
+
+        for match in odds:
+            picks = evaluate_match(match, sport)
+            all_picks.extend(picks)
+
+    await send_picks(all_picks)
+
+# ==============================
+# RESULTADOS
+# ==============================
+
+async def results():
+    global sent_picks
+
+    wins = 0
+    losses = 0
+
+    for sport in SPORTS:
+        scores = fetch_scores(sport)
+
+        for game in scores:
+            for pick in sent_picks:
+                if pick["match"] in f"{game['home_team']} vs {game['away_team']}":
+                    if game["completed"]:
+                        winner = game.get("winner", "")
+                        if pick["pick"] == winner:
+                            wins += pick["stake"]
+                        else:
+                            losses += pick["stake"]
+
+    balance = wins - losses
+
+    msg = (
+        "📊 RESULTADOS\n\n"
+        f"Ganadas: {wins}u\n"
+        f"Perdidas: {losses}u\n"
+        f"Balance: {balance}u"
     )
-    await send_telegram_message(summary_msg)
 
-async def task_sleep_mode():
-    """11:05 PM: Notifica la suspensión temporal de alertas."""
-    await send_telegram_message("💤 *Modo Sueño Activado:* El bot detiene el envío de alertas automáticas hasta mañana.")
+    sent_picks = []
+    await send_message(msg)
 
-# ==========================================
-# 6. FUNCIÓN PRINCIPAL Y MODO PRUEBA DE ARRANQUE
-# ==========================================
+# ==============================
+# SUEÑO
+# ==============================
+
+async def sleep_on():
+    global sleep_mode
+    sleep_mode = True
+
+async def sleep_off():
+    global sleep_mode
+    sleep_mode = False
+
+# ==============================
+# MAIN
+# ==============================
+
 async def main():
-    logger.info("Iniciando SniperTipsterBot...")
-    
-    scheduler = AsyncIOScheduler(timezone=MEXICO_TZ)
-    
-    scheduler.add_job(task_morning_report, 'cron', hour=8, minute=0)
-    scheduler.add_job(task_global_odds_scan, 'cron', hour=8, minute=30)
-    scheduler.add_job(task_global_odds_scan, 'cron', hour=22, minute=0)
-    scheduler.add_job(task_settle_balances, 'cron', hour=23, minute=0)
-    scheduler.add_job(task_sleep_mode, 'cron', hour=23, minute=5)
-    
+    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+
+    scheduler.add_job(send_morning, "cron", hour=8, minute=0)
+    scheduler.add_job(scan, "cron", hour=8, minute=30)
+    scheduler.add_job(scan, "cron", hour=22, minute=0)
+    scheduler.add_job(results, "cron", hour=23, minute=0)
+    scheduler.add_job(sleep_on, "cron", hour=23, minute=5)
+    scheduler.add_job(sleep_off, "cron", hour=7, minute=59)
+
     scheduler.start()
-    logger.info("APScheduler iniciado con éxito.")
-    
-    # MODO PRUEBA DE ARRANQUE
-    await send_telegram_message("🚀 *Bot Inicializado en la Nube (Render).* Ejecutando escaneo de verificación inicial obligatorio...")
-    await task_global_odds_scan()
-    
+
+    # 🔥 PRUEBA INMEDIATA
+    await scan()
+
     while True:
-        await asyncio.sleep(3600)
+        await asyncio.sleep(60)
+
+# ==============================
+# RUN
+# ==============================
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot apagado.")
+    asyncio.run(main())
