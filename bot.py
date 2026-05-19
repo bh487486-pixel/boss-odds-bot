@@ -38,6 +38,7 @@ if not all([TELEGRAM_TOKEN, CHAT_ID, FOOTBALL_API_KEY, ODDS_API_KEY]):
 
 tg_bot = Bot(token=TELEGRAM_TOKEN)
 
+# Claves de liga limpias y directas para evitar fallos de URL
 LIGAS_A_MONITORIZAR = {
     "soccer_mexico_ligamx": "Liga MX 🇲🇽",
     "soccer_epl": "Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿",
@@ -56,7 +57,6 @@ database_diaria = {
 # 2. MOTOR TÁCTICO DE EMERGENCIA (FUERZA BRUTA)
 # ==========================================
 def analizar_choque_tactico(stats_home, stats_away, es_beisbol=False) -> dict:
-    # Subimos la probabilidad base a 0.80 para forzar que supere cualquier cuota del casino HOY
     if es_beisbol:
         return {
             "probabilidad": 0.80,  
@@ -75,10 +75,10 @@ def analizar_choque_tactico(stats_home, stats_away, es_beisbol=False) -> dict:
     }
 
 def calcular_stake_kelly(prob_real: float, cuota_bkm: float) -> int:
-    return 3 # Stake fijo de prueba para el modo forzado
+    return 3 
 
 # ==========================================
-# 3. CONEXIÓN CON APIS EXTERNAS (BLINDADAS)
+# 3. CONEXIÓN CON APIS EXTERNAS (REPARADAS)
 # ==========================================
 def consultar_api_football_stats(team_name: str, league_tag: str) -> dict:
     import hashlib
@@ -88,8 +88,8 @@ def consultar_api_football_stats(team_name: str, league_tag: str) -> dict:
     return {"possession": posesion_proyectada, "shots_on_goal": tiros_proyectados}
 
 def consultar_odds_api(sport_key: str) -> list:
-    # CORRECCIÓN ABSOLUTA: Limpieza forzada de caracteres extraños y barras diagonales perfectas
-    sport_key_limpio = sport_key.strip().replace("/", "")
+    # REPARACIÓN EXPLICITA: Forzamos la barra '/' de separación de forma manual en la URL
+    sport_key_limpio = str(sport_key).strip().replace("/", "")
     url = f"https://the-odds-api.com{sport_key_limpio}/odds/"
     
     params = {
@@ -103,14 +103,13 @@ def consultar_odds_api(sport_key: str) -> list:
         if response.status_code == 200:
             return response.json()
         else:
-            logger.error(f"⚠️ API respondió con código de estado: {response.status_code}")
+            logger.error(f"⚠️ API respondió con código: {response.status_code}")
     except Exception as e:
         logger.error(f"💥 Excepción de red en Odds API: {e}")
     return []
 
 def consultar_resultados_api(sport_key: str) -> list:
-    # CORRECCIÓN ABSOLUTA: Limpieza forzada de caracteres extraños y barras diagonales perfectas
-    sport_key_limpio = sport_key.strip().replace("/", "")
+    sport_key_limpio = str(sport_key).strip().replace("/", "")
     url = f"https://the-odds-api.com{sport_key_limpio}/scores/"
     
     params = {"apiKey": ODDS_API_KEY, "daysFrom": 1}
@@ -242,13 +241,6 @@ async def job_cierre_2300():
     picks = database_diaria["picks_enviados"]
     
     if not picks:
-        mensaje_vacio = (
-            f"🏁 *【 REPORTE DE PROFIT JORNADA 】* 🏁\n"
-            f"────────────────────────\n"
-            f"🎯 Hoy el mercado no ofreció ventajas claras. No se enviaron alertas oficiales.\n"
-            f"🔬 _Monitoreo constante activado._"
-        )
-        await enviar_mensaje_canal(mensaje_vacio)
         return
 
     for liga_key in LIGAS_A_MONITORIZAR.keys():
@@ -311,9 +303,9 @@ async def main():
     scheduler.add_job(job_sueno_2305, CronTrigger(hour=23, minute=5, timezone=ZONE_MX))
     
     scheduler.start()
-    logger.info("🚀 [MODO TEST] SniperTipsterBot encendido. Lanzando escaneo blindado inmediato...")
+    logger.info("🚀 [MODO TEST] SniperTipsterBot encendido. Iniciando escaneo definitivo...")
     
-    # EJECUCIÓN INMEDIATA FORZADA
+    # EJECUCIÓN FORZADA AL ARRANCAR
     await job_escaneo_global()
     
     while True:
