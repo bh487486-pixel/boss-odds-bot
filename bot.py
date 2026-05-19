@@ -57,7 +57,7 @@ def kelly(prob, odds):
     return max(1, min(4, round(k * 4)))
 
 # ==============================
-# ODDS API (CORREGIDA)
+# ODDS API (FIX)
 # ==============================
 
 def fetch_odds(sport_key):
@@ -115,7 +115,7 @@ def fetch_team_strength(team):
         r.raise_for_status()
         data = r.json()
 
-        if data["response"]:
+        if data.get("response"):
             return 0.55
         return 0.50
     except:
@@ -169,7 +169,7 @@ def evaluate(match, sport_key):
     return picks
 
 # ==============================
-# TELEGRAM
+# TELEGRAM (FIX LONG MESSAGE)
 # ==============================
 
 async def send(msg):
@@ -185,19 +185,31 @@ async def send_picks(picks):
         await send("⚠️ No hay valor detectado.")
         return
 
-    msg = "🔥 PICKS VIP 🔥\n\n"
+    base = "🔥 PICKS VIP 🔥\n\n"
+    messages = []
+    current = base
 
     for p in picks:
-        msg += (
+        text = (
             f"🎯 {p['match']}\n"
             f"➡️ {p['pick']}\n"
             f"Cuota: {p['odds']} | Stake: {p['stake']}\n\n"
         )
 
-    msg += "Disciplina > suerte."
+        if len(current) + len(text) > 4000:
+            messages.append(current)
+            current = base + text
+        else:
+            current += text
+
+    messages.append(current)
+
+    for m in messages:
+        await send(m)
+
+    await send("Disciplina > suerte.")
 
     sent_picks.extend(picks)
-    await send(msg)
 
 async def morning():
     await send("🔥 Buenos días.\nHoy se gana con método.")
@@ -285,7 +297,7 @@ async def main():
 
     scheduler.start()
 
-    # 🔥 TEST ARRANQUE
+    # 🔥 PRUEBA AL ARRANCAR
     await scan()
 
     while True:
