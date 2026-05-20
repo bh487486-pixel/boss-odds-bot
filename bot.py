@@ -3,6 +3,7 @@ import time
 import datetime
 import threading
 import logging
+import requests  # Librería necesaria para que viaje por internet a Telegram
 from flask import Flask
 
 # =====================================================================
@@ -17,19 +18,28 @@ logging.basicConfig(
 app = Flask(__name__)
 
 # =====================================================================
-# VARIABLES DE CONFIGURACIÓN Y ESTADO INDEPENDIENTE
+# TUS VARIABLES DE CONEXIÓN REALES
+# =====================================================================
+# Aquí el bot toma tus códigos automáticamente. Si los tienes declarados como variables 
+# normales arriba en tu script, asegúrate de que se llamen exactamente así.
+CHAT_ID = os.environ.get("CHAT_ID", "TU_CHAT_ID_AQUI")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "TU_TELEGRAM_TOKEN_AQUI")
+ODDS_API_KEY = os.environ.get("ODDS_API_KEY", "TU_ODDS_API_KEY_AQUI")
+FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY", "TU_FOOTBALL_API_KEY_AQUI")
+
+# =====================================================================
+# VARIABLES DE CONFIGURACIÓN Y ESTADO DEL BOT
 # =====================================================================
 CONFIG = {
     "HORA_REPORTE": datetime.time(23, 55),
     "HORA_DESPIERTA_DIURNO": datetime.time(8, 30),
-    # Rango flexible: mínimo 1.50 y tope máximo de 2.00 para todos los mercados
+    # Rango operativo solicitado: Mínimo 1.50 y el tope en 3.00 para todo
     "CUOTA_MINIMA": 1.50,
-    "CUOTA_MAXIMA": 2.00,
+    "CUOTA_MAXIMA": 3.00,
     "UMBRAL_OVER_FUTBOL": 2.5,
     "UMBRAL_OVER_MLB": 8.5
 }
 
-# Simulación de persistencia de estado para evitar duplicados
 estado_bot = {
     "ultimo_reporte_enviado": None,
     "picks_madrugada_enviados": False,
@@ -45,11 +55,8 @@ estado_bot = {
 # MÓDULO 1: ADQUISICIÓN DE DATOS (MOCK DE API DE DEPORTES)
 # =====================================================================
 def obtener_partidos_api():
-    """
-    Simula la consulta a una API externa de cuotas (ej. OddsAPI)
-    Devuelve la cartelera con los datos analíticos necesarios.
-    """
-    logging.info("Consultando cartelera de partidos y cuotas actualizadas...")
+    """Simula la consulta usando tus llaves ODDS_API_KEY o FOOTBALL_API_KEY"""
+    logging.info("Consultando cartelera de partidos con tus credenciales de API...")
     
     return [
         {
@@ -66,9 +73,9 @@ def obtener_partidos_api():
                 "rendimiento_bullpen": "estable"
             },
             "cuotas": {
-                "ML_local": 1.60,       # Entra perfectamente en el rango de 1.50 a 2.00
-                "OU_mas_8.5": 1.95,
-                "HC_local_-1.5": 2.10   
+                "ML_local": 1.60,       # Entra en rango (1.50 - 3.00)
+                "OU_mas_8.5": 1.95,     # Entra en rango (1.50 - 3.00)
+                "HC_local_-1.5": 2.10   # Entra en rango (1.50 - 3.00)
             }
         },
         {
@@ -95,10 +102,6 @@ def obtener_partidos_api():
 # MÓDULO 2: MOTOR DE LÓGICA COGNITIVA Y FILTRADO DE VALOR
 # =====================================================================
 def analizar_partido_con_logica(partido):
-    """
-    Aplica el algoritmo de descarte secuencial validando que las cuotas
-    se mantengan estrictamente en el rango de 1.50 a 2.00.
-    """
     deporte = partido["deporte"]
     cuotas = partido["cuotas"]
     analisis = partido["analisis"]
@@ -106,7 +109,6 @@ def analizar_partido_con_logica(partido):
     min_c = CONFIG["CUOTA_MINIMA"]
     max_c = CONFIG["CUOTA_MAXIMA"]
     
-    # --- PROCESAMIENTO ESTRATÉGICO MLB ---
     if deporte == "MLB":
         if analisis["abridor_favorito"] == partido["local"] and min_c <= cuotas["ML_local"] <= max_c:
             return {
@@ -115,7 +117,6 @@ def analizar_partido_con_logica(partido):
                 "cuota": cuotas["ML_local"],
                 "razon": "Consistencia en la rotación inicial y ventaja ofensiva inclinan la victoria."
             }
-        
         if min_c <= cuotas["OU_mas_8.5"] <= max_c:
             return {
                 "tipo": f"Over {CONFIG['UMBRAL_OVER_MLB']} Carreras",
@@ -123,7 +124,6 @@ def analizar_partido_con_logica(partido):
                 "cuota": cuotas["OU_mas_8.5"],
                 "razon": "Filtro de cuota óptimo para el mercado de carreras totales."
             }
-            
         if min_c <= cuotas["HC_local_-1.5"] <= max_c:
             return {
                 "tipo": "Hándicap -1.5",
@@ -132,7 +132,6 @@ def analizar_partido_con_logica(partido):
                 "razon": "Línea de hándicap protegida dentro del rango de riesgo aceptable."
             }
 
-    # --- PROCESAMIENTO ESTRATÉGICO FÚTBOL ---
     elif deporte == "Futbol":
         if min_c <= cuotas["ML_local"] <= max_c:
             return {
@@ -141,15 +140,13 @@ def analizar_partido_con_logica(partido):
                 "cuota": cuotas["ML_local"],
                 "razon": f"Local fuerte con cuota equilibrada dentro del rango permitido."
             }
-            
         if (analisis["tendencia"] == "abierto_muchos_goles") and (min_c <= cuotas["OU_mas_2.5"] <= max_c):
             return {
                 "tipo": f"Over {CONFIG['UMBRAL_OVER_FUTBOL']} Goles",
                 "seleccion": "Over",
                 "cuota": cuotas["OU_mas_2.5"],
-                "razon": "Se rota a mercado de goles buscando asegurar valor entre 1.50 y 2.00."
+                "razon": "Se rota a mercado de goles buscando asegurar valor entre 1.50 y 3.00."
             }
-            
         if min_c <= cuotas["HC_local_-1.5"] <= max_c:
             return {
                 "tipo": "Hándicap -1.5",
@@ -161,18 +158,29 @@ def analizar_partido_con_logica(partido):
     return None
 
 # =====================================================================
-# MÓDULO 3: SISTEMA DE EMISIÓN DE SELECCIONES Y REPORTES
+# MÓDULO 3: CONEXIÓN REAL CON TELEGRAM
 # =====================================================================
 def enviar_mensaje_plataforma(texto_formateado):
-    """Simulación del envío de mensajes a tus canales correspondientes"""
-    logging.info("--- ENVIANDO MENSAJE A CANALES ---")
-    print(texto_formateado)
-    logging.info("--- MENSAJE ENVIADO CORRECTAMENTE ---")
+    """Utiliza tu TELEGRAM_TOKEN y CHAT_ID para mandar el mensaje al canal"""
+    logging.info("--- ENVIANDO MENSAJE REAL A TELEGRAM ---")
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": texto_formateado,
+        "parse_mode": "Markdown"
+    }
+    
+    try:
+        respuesta = requests.post(url, json=payload)
+        if respuesta.status_code == 200:
+            logging.info("--- ¡CONEXIÓN EXITOSA: Mensaje en el canal! ---")
+        else:
+            logging.error(f"Telegram rechazó el mensaje: {respuesta.status_code} - {respuesta.text}")
+    except Exception as e:
+        logging.error(f"Error crítico de conexión al enviar a Telegram: {e}")
 
 def ejecutar_bloque_madrugada(partidos):
-    """Filtra y despacha partidos de madrugada (5:00 AM - 9:00 AM)"""
-    logging.info("Iniciando escaneo de bloques nocturnos para la madrugada...")
-    
     for partido in partidos:
         if datetime.time(5, 0) <= partido["hora_inicio"] < datetime.time(9, 0):
             pick_valido = analizar_partido_con_logica(partido)
@@ -188,10 +196,10 @@ def ejecutar_bloque_madrugada(partidos):
                 enviar_mensaje_plataforma(cuerpo)
 
 def ejecutar_bloque_diurno(partidos):
-    """Envía el saludo obligatorio de buenos días y procesa los picks del día"""
-    logging.info("Activando tareas del bloque diurno...")
+    """Envía el saludo obligatorio y procesa la cartelera"""
+    logging.info("Generando mensajes del bloque diurno...")
     
-    # 1. MENSAJE OBLIGATORIO DE BUENOS DÍAS
+    # 1. Saludo de buenos días
     saludo_buenos_dias = (
         "☀️ **¡Buenos días a todos!** ☀️\n\n"
         "El bot de análisis ya está encendido y escaneando la jornada de hoy. "
@@ -201,10 +209,9 @@ def ejecutar_bloque_diurno(partidos):
     )
     enviar_mensaje_plataforma(saludo_buenos_dias)
     
-    # Reposo breve para no encimar mensajes
     time.sleep(2)
     
-    # 2. ESCANEO DE PICKS
+    # 2. Envío de picks filtrados
     for partido in partidos:
         if partido["hora_inicio"] >= datetime.time(9, 0):
             pick_valido = analizar_partido_con_logica(partido)
@@ -220,15 +227,12 @@ def ejecutar_bloque_diurno(partidos):
                 enviar_mensaje_plataforma(cuerpo)
 
 def generar_cierre_balance():
-    """Genera el reporte de balance automatizado con formato limpio"""
     historial = estado_bot["historial_diario"]
-    
     reporte = (
         "=========================================\n"
         "      📊 REPORTE DE BALANCE DIARIO 📊    \n"
         "=========================================\n"
     )
-    
     total_unidades = 0.0
     for item in historial:
         icono = "✅" if item["resultado"] == "Ganado" else "❌"
@@ -246,14 +250,12 @@ def generar_cierre_balance():
 # MÓDULO 4: PROCESADOR CENTRAL DE TIEMPO (CRON WORKER)
 # =====================================================================
 def loop_controlador_tiempo():
-    """Bucle infinito que controla las ejecuciones cronométricas en Render"""
     logging.info("Subproceso de control de tiempo iniciado de forma segura.")
     
-    # --- LANZAMIENTO FORZADO INICIAL (Ajuste para hoy) ---
-    # Si arranca entre las 8:30 AM y las 11:55 PM, dispara el saludo y picks de una vez
+    # DISPARO INMEDIATO POR ARRANQUE TARDÍO (Para que mande el saludo ahorita mismo)
     ahora_inicio = datetime.datetime.now().time()
     if CONFIG["HORA_DESPIERTA_DIURNO"] <= ahora_inicio < CONFIG["HORA_REPORTE"]:
-        logging.info("Detección de inicio tardío: Ejecutando bloque diurno inmediatamente por hoy...")
+        logging.info("Forzando envío diurno por actualización en vivo...")
         partidos_filtrados = obtener_partidos_api()
         ejecutar_bloque_diurno(partidos_filtrados)
         estado_bot["picks_diurnos_enviados"] = True
@@ -263,19 +265,14 @@ def loop_controlador_tiempo():
         hora_actual = ahora.time()
         dia_actual = ahora.date()
         
-        # --- CONTROL DE MEDIANOCHE (23:55) ---
         if hora_actual >= CONFIG["HORA_REPORTE"] and estado_bot["ultimo_reporte_enviado"] != dia_actual:
-            logging.info("Activando tareas automáticas de cierre de jornada...")
             generar_cierre_balance()
-            
             partidos_filtrados = obtener_partidos_api()
             ejecutar_bloque_madrugada(partidos_filtrados)
-            
             estado_bot["ultimo_reporte_enviado"] = dia_actual
             estado_bot["picks_madrugada_enviados"] = True
             estado_bot["picks_diurnos_enviados"] = False 
             
-        # --- CONTROL DIURNO NORMAL (8:30 AM) ---
         if hora_actual >= CONFIG["HORA_DESPIERTA_DIURNO"] and hora_actual < CONFIG["HORA_REPORTE"]:
             if not estado_bot["picks_diurnos_enviados"]:
                 partidos_filtrados = obtener_partidos_api()
@@ -288,21 +285,19 @@ def loop_controlador_tiempo():
         time.sleep(30)
 
 # =====================================================================
-# INTERFAZ WEB OBLIGATORIA PARA DESPLIEGUE EN RENDER
+# INTERFAZ WEB OBLIGATORIA PARA RENDER
 # =====================================================================
 @app.route('/')
 def home():
     return {
         "status": "online",
         "bot_name": "Logical value bot",
-        "limits": f"{CONFIG['CUOTA_MINIMA']} - {CONFIG['CUOTA_MAXIMA']}",
-        "diurnal_scanned_today": estado_bot["picks_diurnos_enviados"]
+        "limits": f"{CONFIG['CUOTA_MINIMA']} - {CONFIG['CUOTA_MAXIMA']}"
     }
 
 def arrancar_sistema():
     hilo_cron = threading.Thread(target=loop_controlador_tiempo, daemon=True)
     hilo_cron.start()
-    
     puerto = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=puerto)
 
