@@ -95,13 +95,13 @@ def obtener_partidos_api():
             "deporte": "MLB",
             "local": "NY Yankees",
             "visitante": "Boston Red Sox",
-            "hora_inicio": datetime.time(18, 05),  # Noche (Bloque Diurno)
+            "hora_inicio": datetime.time(18, 5),  # CORREGIDO: Se quitó el cero inicial (05 -> 5) para evitar el SyntaxError
             "analisis": {
                 "abridor_favorito": "NY Yankees",
                 "racha_local": "excelente",
                 "racha_visitante": "mala",
                 "clima_estadio": "neutral",
-                "rendimiento_bullpen": "estable"
+                "rendimiento_bullpen": "stable"
             },
             "cuotas": {
                 "ML_local": 1.75,  # ¡Tiene valor directo!
@@ -171,7 +171,7 @@ def analizar_partido_con_logica(partido):
                 "tipo": f"Over {CONFIG['UMBRAL_OVER_FUTBOL']} Goles",
                 "seleccion": "Over",
                 "cuota": cuotas["OU_mas_2.5"],
-                "razon": f"ML paga poco. Se rota a goles por expectativa de juego abierto y bajas en defensa."
+                "razon": f"ML paga poco. Se rota a goles por expectativa de juego abierto y bajas en defense."
             }
             
         # Paso 3: Hándicap alternativo
@@ -277,7 +277,6 @@ def loop_controlador_tiempo():
         dia_actual = ahora.date()
         
         # --- CONTROL DE MEDIANOCHE (23:55) ---
-        # Envía el balance diario y calcula los partidos que jugarán de 5 AM a 9 AM del día siguiente
         if hora_actual >= CONFIG["HORA_REPORTE"] and estado_bot["ultimo_reporte_enviado"] != dia_actual:
             logging.info("Activando tareas automáticas de cierre de jornada...")
             generar_cierre_balance()
@@ -287,7 +286,6 @@ def loop_controlador_tiempo():
             
             estado_bot["ultimo_reporte_enviado"] = dia_actual
             estado_bot["picks_madrugada_enviados"] = True
-            # Resetear la bandera diurna para el día entrante
             estado_bot["picks_diurnos_enviados"] = False 
             
         # --- CONTROL DIURNO (A partir de las 8:30 AM) ---
@@ -298,7 +296,6 @@ def loop_controlador_tiempo():
                 ejecutar_bloque_diurno(partidos_filtrados)
                 estado_bot["picks_diurnos_enviados"] = True
                 
-        # Limpieza de banderas al iniciar una nueva madrugada si es necesario
         if hora_actual > datetime.time(0, 0) and hora_actual < datetime.time(1, 0):
             estado_bot["picks_madrugada_enviados"] = False
 
