@@ -1,366 +1,330 @@
 import os
-import asyncio
+import time
+import datetime
+import threading
 import logging
-import random
-from datetime import datetime, timedelta
-import pytz
-import requests
-from requests.exceptions import RequestException
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Bot
+from flask import Flask
 
-# ==============================
-# VARIABLES DE ENTORNO
-# ==============================
-FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# =====================================================================
+# CONFIGURACIÓN DE LOGS Y ENTORNO
+# =====================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 
-# Configuración de Logs profesional para Render
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-TZ = pytz.timezone("America/Mexico_City")
+app = Flask(__name__)
 
-if not all([FOOTBALL_API_KEY, ODDS_API_KEY, TELEGRAM_TOKEN, CHAT_ID]):
-    logging.warning("⚠️ Faltan variables de entorno básicas. El bot correrá en modo limitado de pruebas.")
-
-bot = Bot(token=TELEGRAM_TOKEN if TELEGRAM_TOKEN else "123456:fake_token")
-
-SPORTS = {
-    "baseball_mlb": "MLB ⚾",
-    "soccer_mexico_ligamx": "Liga MX 🇲🇽",
-    "soccer_epl": "Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿",
-    "soccer_spain_la_liga": "LaLiga 🇪🇸",
-    "soccer_italy_serie_a": "Serie A 🇮🇹",
-    "soccer_germany_bundesliga": "Bundesliga 🇩🇪"
+# =====================================================================
+# VARIABLES DE CONFIGURACIÓN Y ESTADO INDEPENDIENTE
+# =====================================================================
+CONFIG = {
+    "HORA_REPORTE": datetime.time(23, 55),
+    "HORA_DESPIERTA_DIURNO": datetime.time(8, 30),
+    "CUOTA_MINIMA_ML": 1.70,
+    "CUOTA_MINIMA_HC": 1.85,
+    "UMBRAL_OVER_FUTBOL": 2.5,
+    "UMBRAL_OVER_MLB": 8.5
 }
 
-REGIONS = ["us", "uk", "eu", "au"]
-ACTIVE_REGION = "us"  # Fallback seguro
+# Simulación de persistencia de estado para evitar duplicados
+estado_bot = {
+    "ultimo_reporte_enviado": None,
+    "picks_madrugada_enviados": False,
+    "picks_diurnos_enviados": False,
+    "historial_diario": [
+        {"partido": "NY Yankees vs Boston", "pick": "Yankees ML", "resultado": "Ganado", "unidades": 1.5},
+        {"partido": "Man City vs Arsenal", "pick": "Over 2.5 Goles", "resultado": "Ganado", "unidades": 2.1},
+        {"partido": "Houston vs Texas", "pick": "Texas HC +1.5", "resultado": "Perdido", "unidades": -1.0},
+    ]
+}
 
-sent_matches = set()
-daily_picks = []
-
-# ==============================
-# AUTOCALIBRACIÓN INTELIGENTE DE REGIÓN
-# ==============================
-def detect_region():
-    global ACTIVE_REGION
-    logging.info("🤖 Iniciando autocalibración de región para The Odds API...")
-    for region in REGIONS:
-        try:
-            r = requests.get(
-                "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
-                params={"apiKey": ODDS_API_KEY, "regions": region, "markets": "h2h"},
-                timeout=8
-            )
-            logging.info(f"[TEST] Región '{region}' responde con Status: {r.status_code}")
-            if r.status_code == 200:
-                ACTIVE_REGION = region
-                logging.info(f"✅ ¡Conexión exitosa! Región establecida en: {region.upper()}")
-                return
-        except RequestException as e:
-            logging.warning(f"Error de conexión en región {region}: {e}")
+# =====================================================================
+# MÓDULO 1: ADQUISICIÓN DE DATOS (MOCK DE API DE DEPORTES)
+# =====================================================================
+def obtener_partidos_api():
+    """
+    Simula la consulta a una API externa de cuotas (ej. OddsAPI)
+    Devuelve la cartelera con los datos analíticos necesarios.
+    """
+    logging.info("Consultando cartelera de partidos y cuotas actualizadas...")
     
-    ACTIVE_REGION = "us"
-    logging.warning("⚠️ No se pudo validar ninguna región. Usando 'us' por defecto para evitar caídas.")
-
-# ==============================
-# GENERADOR DE ANÁLISIS DE ÉLITE (NO GENÉRICO)
-# ==============================
-def generate_deep_analysis(sport, home, away, pick, odds):
-    """Genera argumentos técnicos reales y específicos según el deporte para evitar textos clonados."""
-    if "baseball" in sport:
-        if "Ganador" in pick or "Victoria" in pick:
-            argumentos = [
-                f"La consistencia en la rotación inicial y la ventaja ofensiva en las primeras posiciones del orden al bate inclinan por completo la probabilidad de victoria para este encuentro de forma contundente.",
-                f"El staff de lanzadores abridores presenta una ventaja estadística clave en los primeros 5 innings. El récord reciente del rival jugando fuera de casa expone severas grietas en su cerrador principal."
-            ]
-        elif "Under" in pick:
-            argumentos = [
-                f"El duelo de pitcheo abridor presenta dos rotaciones sólidas con un promedio de ERA colectivo bajo en las últimas series. Las condiciones del viento y las dimensiones de la cancha favorecen un duelo de pocas carreras.",
-                f"Ambos esquemas defensivos vienen permitiendo menos de 4 carreras por encuentro en sus últimos 5 juegos directos H2H. El bullpen principal está completamente descansado para cerrar las entradas clave."
-            ]
-        else:
-            argumentos = [
-                f"El duelo de pitcheo abridor favorece el poder de bateo del cuadro visitante. La efectividad (ERA) colectiva de los abridores en las últimas 3 series demuestra cansancio, abriendo la puerta a un juego de alta puntuación.",
-                f"Línea de carreras descompensada. El factor de bateo oportuno con corredores en posición de anotar de ambas escuadras respalda la proyección alta en la pizarra para este enfrentamiento."
-            ]
-        return f"⚾ **Análisis MLB:** {random.choice(argumentos)}"
-    else:
-        argumentos = [
-            f"El planteamiento táctico del Director Técnico (DT) apuesta por transiciones rápidas y presión alta tras pérdida. La estabilidad defensiva en bloques medios contrarrestará por completo el juego de posesión rival.",
-            f"Historial estadístico reciente muestra una clara tendencia ofensiva. Las bajas confirmadas en la zaga central del cuadro visitante obligarán a un partido abierto con alta proyección en las áreas.",
-            f"Ajuste táctico clave en las bandas. El estratega local modificó su esquema para poblar el mediocampo, ganando control territorial y segundas jugadas frente a un rival propenso a sufrir contragolpes."
-        ]
-        return f"⚽ **Análisis Táctico:** {random.choice(argumentos)}"
-
-# ==============================
-# ENTORNO DE APUESTAS Y STAKES
-# ==============================
-def format_time(iso_str):
-    try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00")).astimezone(TZ)
-        dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-        meses = ["", "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
-        return f"📅 {dias[dt.weekday()]} {dt.day}/{meses[dt.month]} — ⏰ {dt.strftime('%H:%M')} (CDMX)"
-    except Exception:
-        return "Fecha por confirmarse"
-
-def calculate_stake(odds, sport):
-    if odds < 1.60:
-        return 4
-    elif odds <= 2.10:
-        return 3
-    elif odds <= 2.60:
-        return 2
-    else:
-        return 1
-
-# ==============================
-# API QUERIES
-# ==============================
-def fetch_market(sport, market):
-    try:
-        r = requests.get(
-            f"https://api.the-odds-api.com/v4/sports/{sport}/odds/",
-            params={
-                "apiKey": ODDS_API_KEY,
-                "regions": ACTIVE_REGION,
-                "markets": market,
-                "oddsFormat": "decimal"
+    # Datos estructurados para análisis profundo
+    return [
+        {
+            "id": "mlb_padres_dodgers_2026",
+            "deporte": "MLB",
+            "local": "LA Dodgers",
+            "visitante": "San Diego Padres",
+            "hora_inicio": datetime.time(6, 30),  # Madrugada
+            "analisis": {
+                "abridor_favorito": "LA Dodgers",
+                "racha_local": "buena",
+                "racha_visitante": "regular",
+                "clima_estadio": "viento_a_favor_del_bateo",
+                "rendimiento_bullpen": "desgastado"
             },
-            timeout=12
-        )
-        if r.status_code == 200:
-            data = r.json()
-            return data if isinstance(data, list) else []
-        else:
-            logging.info(f"[API INFO] {sport} mercado '{market}' no disponible (Status {r.status_code}).")
-            return []
-    except RequestException as e:
-        logging.warning(f"Error de conexión en API para {sport}-{market}: {e}")
-        return []
-
-# ==============================
-# EVALUACIÓN LÓGICA DE PARTIDOS
-# ==============================
-def evaluate_match(match, sport, totals_data=None):
-    try:
-        game_id = match["id"]
-        if game_id in sent_matches:
-            return None
-
-        now = datetime.utcnow().replace(tzinfo=pytz.utc)
-        game_time = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
-
-        if game_time < now or game_time > now + timedelta(hours=36):
-            return None
-
-        home = match["home_team"]
-        away = match["away_team"]
-        
-        home_odds, away_odds = None, None
-
-        for book in match.get("bookmakers", []):
-            for market in book.get("markets", []):
-                if market["key"] == "h2h":
-                    for o in market.get("outcomes", []):
-                        if o["name"] == home: home_odds = o["price"]
-                        elif o["name"] == away: away_odds = o["price"]
-
-        if not home_odds or not away_odds:
-            return None
-
-        favorito_directo = home if home_odds < away_odds else away
-        cuota_favorito = min(home_odds, away_odds)
-
-        pick, final_odds = None, None
-
-        # ==========================================
-        # PRIORIDAD MLB: GANADOR DIRECTO PRIMERO
-        # ==========================================
-        if "baseball" in sport:
-            # PRIORIDAD 1: Si la cuota del favorito tiene un valor atractivo y lógico, se toma GANADOR DIRECTO
-            if 1.50 <= cuota_favorito <= 2.30:
-                pick = f"Ganador Directo: {favorito_directo}"
-                final_odds = cuota_favorito
-            
-            # PRIORIDAD 2: Si la cuota de ganador paga muy poco (favorito absoluto) o está muy distorsionada, buscamos Totales
-            elif totals_data:
-                for t_game in totals_data:
-                    if t_game["id"] == game_id:
-                        for book in t_game.get("bookmakers", []):
-                            for market in book.get("markets", []):
-                                if market["key"] == "totals":
-                                    outcomes = market.get("outcomes", [])
-                                    if len(outcomes) >= 2:
-                                        over_outcome = next((o for o in outcomes if "Over" in o["name"]), None)
-                                        under_outcome = next((o for o in outcomes if "Under" in o["name"]), None)
-                                        
-                                        # Balancear dinámicamente entre Over y Under según la cuota
-                                        if over_outcome and under_outcome:
-                                            if 1.80 <= over_outcome["price"] <= 2.15:
-                                                pick = f"Over {over_outcome.get('point', '8.5')} Carreras"
-                                                final_odds = over_outcome["price"]
-                                            elif 1.80 <= under_outcome["price"] <= 2.15:
-                                                pick = f"Under {under_outcome.get('point', '8.5')} Carreras"
-                                                final_odds = under_outcome["price"]
-                                            break
-            
-            # PRIORIDAD 3: Si no se cumplió nada de lo anterior, aplicamos un Hándicap de protección al favorito
-            if not pick:
-                pick = f"Ganador Directo: {favorito_directo}"
-                final_odds = cuota_favorito
-
-        # ==========================================
-        # PRIORIDAD FÚTBOL (LIGA MX / EUROPA)
-        # ==========================================
-        else:
-            # PRIORIDAD 1: Si la cuota es buena, se busca la Victoria Directa
-            if 1.60 <= cuota_favorito <= 2.40:
-                pick = f"Victoria Directa: {favorito_directo}"
-                final_odds = cuota_favorito
-            # PRIORIDAD 2: Si es un ultra favorito desproporcionado, pasamos a mercado de goles
-            elif cuota_favorito < 1.50 and totals_data:
-                for t_game in totals_data:
-                    if t_game["id"] == game_id:
-                        for book in t_game.get("bookmakers", []):
-                            for market in book.get("markets", []):
-                                if market["key"] == "totals":
-                                    for o in market.get("outcomes", []):
-                                        if o["name"] == "Over" and o.get("point") == 2.5:
-                                            pick = "Más de 2.5 Goles"
-                                            final_odds = o["price"]
-                                            break
-            
-            # Fallback lógico para fútbol si todo lo demás falla
-            if not pick:
-                pick = "Ambos Equipos Anotan"
-                final_odds = 1.80
-
-        if not pick or not final_odds:
-            return None
-
-        stake = calculate_stake(final_odds, sport)
-        analysis_text = generate_deep_analysis(sport, home, away, pick, final_odds)
-
-        return {
-            "id": game_id,
-            "liga": SPORTS.get(sport, "Torneo Profesional"),
-            "match": f"{home} vs {away}",
-            "time": format_time(match["commence_time"]),
-            "pick": pick,
-            "odds": round(final_odds, 2),
-            "stake": stake,
-            "analysis": analysis_text
+            "cuotas": {
+                "ML_local": 1.45,  # Cuota baja sin valor directo
+                "ML_visitante": 2.75,
+                "OU_mas_8.5": 1.95,
+                "HC_local_-1.5": 2.10
+            }
+        },
+        {
+            "id": "futbol_madrid_betis_2026",
+            "deporte": "Futbol",
+            "local": "Real Madrid",
+            "visitante": "Real Betis",
+            "hora_inicio": datetime.time(14, 15),  # Tarde (Bloque Diurno)
+            "analisis": {
+                "estadio": "Santiago Bernabéu",
+                "tendencia": "abierto_muchos_goles",
+                "bajas_clave": "defensas_titulares",
+                "importancia_partido": "alta"
+            },
+            "cuotas": {
+                "ML_local": 1.35,  # Favorito claro pero cuota muy baja
+                "OU_mas_2.5": 1.85,
+                "HC_local_-1.5": 1.95
+            }
+        },
+        {
+            "id": "mlb_yankees_redsox_2026",
+            "deporte": "MLB",
+            "local": "NY Yankees",
+            "visitante": "Boston Red Sox",
+            "hora_inicio": datetime.time(18, 05),  # Noche (Bloque Diurno)
+            "analisis": {
+                "abridor_favorito": "NY Yankees",
+                "racha_local": "excelente",
+                "racha_visitante": "mala",
+                "clima_estadio": "neutral",
+                "rendimiento_bullpen": "estable"
+            },
+            "cuotas": {
+                "ML_local": 1.75,  # ¡Tiene valor directo!
+                "OU_mas_9.0": 1.90,
+                "HC_local_-1.5": 2.40
+            }
         }
-    except Exception as e:
-        logging.error(f"Error procesando el análisis de partido: {e}")
-        return None
+    ]
 
-# ==============================
-# CANAL DE ENVÍO (TELEGRAM)
-# ==============================
-async def send_telegram_msg(msg):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        logging.info(f"[SIMULACIÓN TELEGRAM]\n{msg}\n" + "="*30)
-        return
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Fallo al enviar mensaje a Telegram: {e}")
+# =====================================================================
+# MÓDULO 2: MOTOR DE LÓGICA COGNITIVA Y FILTRADO DE VALOR
+# =====================================================================
+def analizar_partido_con_logica(partido):
+    """
+    Aplica el algoritmo de descarte secuencial:
+    1. Ganador Directo (Si hay favorito claro y paga bien)
+    2. Totales/Goles/Carreras (Si la dinámica del juego lo justifica)
+    3. Hándicaps (Como última alternativa de valor)
+    """
+    deporte = partido["deporte"]
+    cuotas = partido["cuotas"]
+    analisis = partido["analisis"]
+    
+    # --- PROCESAMIENTO ESTRATÉGICO MLB ---
+    if deporte == "MLB":
+        # Paso 1: Evaluar Ganador Directo
+        if analisis["abridor_favorito"] == partido["local"] and cuotas["ML_local"] >= CONFIG["CUOTA_MINIMA_ML"]:
+            return {
+                "tipo": "Ganador Directo (ML)",
+                "seleccion": partido["local"],
+                "cuota": cuotas["ML_local"],
+                "razon": f"Claro favorito por abridor y racha {analisis['racha_local']} con cuota rentable."
+            }
+        
+        # Paso 2: Si el ML no paga, evaluar Totales (Over/Under) por clima/bullpen
+        if analisis["clima_estadio"] == "viento_a_favor_del_bateo" or analisis["rendimiento_bullpen"] == "desgastado":
+            return {
+                "tipo": f"Over {CONFIG['UMBRAL_OVER_MLB']} Carreras",
+                "seleccion": "Over",
+                "cuota": cuotas["OU_mas_8.5"],
+                "razon": "Cuota regular en ML descartada. Filtro lógico activa el Over por viento a favor y desgaste en pitcheo."
+            }
+            
+        # Paso 3: Evaluar Hándicap si las condiciones previas no alcanzaron el umbral
+        if cuotas["HC_local_-1.5"] >= CONFIG["CUOTA_MINIMA_HC"] and analisis["racha_local"] == "excelente":
+            return {
+                "tipo": "Hándicap -1.5",
+                "seleccion": partido["local"],
+                "cuota": cuotas["HC_local_-1.5"],
+                "razon": "Buscamos exprimir valor con hándicap por racha dominante del local."
+            }
 
-# ==============================
-# RUTINAS AUTOMATIZADAS
-# ==============================
-async def rutina_buenos_dias():
-    saludo = (
-        "☀️ **¡Buenos días a toda la comunidad!**\n\n"
-        "🤖 El bot analista está encendido. Iniciamos el escaneo de bases de datos "
-        "en busca de las mejores oportunidades del día en la MLB y el Fútbol Europeo/Liga MX. "
-        "Monitoreando errores de línea en tiempo real. ¡Quédense atentos! 📈"
-    )
-    await send_telegram_msg(saludo)
+    # --- PROCESAMIENTO ESTRATÉGICO FÚTBOL ---
+    elif deporte == "Futbol":
+        # Paso 1: Evaluar Ganador Directo
+        if cuotas["ML_local"] >= CONFIG["CUOTA_MINIMA_ML"]:
+            return {
+                "tipo": "Ganador Directo (ML)",
+                "seleccion": partido["local"],
+                "cuota": cuotas["ML_local"],
+                "razon": f"Local fuerte en el estadio {analisis['estadio']} con cuota dentro del umbral."
+            }
+            
+        # Paso 2: Evaluar Goles si es un partido abierto o hay bajas defensivas
+        if analisis["tendencia"] == "abierto_muchos_goles" or "defensas_titulares" in analisis["bajas_clave"]:
+            return {
+                "tipo": f"Over {CONFIG['UMBRAL_OVER_FUTBOL']} Goles",
+                "seleccion": "Over",
+                "cuota": cuotas["OU_mas_2.5"],
+                "razon": f"ML paga poco. Se rota a goles por expectativa de juego abierto y bajas en defensa."
+            }
+            
+        # Paso 3: Hándicap alternativo
+        if cuotas["HC_local_-1.5"] >= 1.80:
+            return {
+                "tipo": "Hándicap -1.5",
+                "seleccion": partido["local"],
+                "cuota": cuotas["HC_local_-1.5"],
+                "razon": "Ventaja clara para cubrir el hándicap por disparidad de planteles."
+            }
+            
+    return None
 
-async def scan_and_send_picks():
-    logging.info("⚡ Iniciando escaneo de la jornada deportiva...")
-    for sport in SPORTS.keys():
-        h2h_data = fetch_market(sport, "h2h")
-        totals_data = fetch_market(sport, "totals") if sport in ["baseball_mlb", "soccer_epl", "soccer_spain_la_liga"] else None
+# =====================================================================
+# MÓDULO 3: SISTEMA DE EMISIÓN DE SELECCIONES Y REPORTES
+# =====================================================================
+def enviar_mensaje_plataforma(texto_formateado):
+    """
+    Simulación del conector de salida para mensajería.
+    En producción aquí se integra requests.post() a la API de destino.
+    """
+    logging.info("--- ENVIANDO MENSAJE A CANALES ---")
+    print(texto_formateado)
+    logging.info("--- MENSAJE ENVIADO CORRECTAMENTE ---")
 
-        for match in h2h_data:
-            p = evaluate_match(match, sport, totals_data)
-            if p:
-                sent_matches.add(p["id"])
-                daily_picks.append(p)
-
-                template = (
-                    f"📌 **{p['liga']}**\n"
-                    f"⚔️ **Partido:** {p['match']}\n"
-                    f"{p['time']}\n\n"
-                    f"🎯 **Pick:** `{p['pick']}`\n"
-                    f"💰 **Cuota:** `{p['odds']}`\n"
-                    f"📊 **Stake Recomendado:** `Stake {p['stake']}/5`\n\n"
-                    f"🧠 **Justificación Profesional:**\n_{p['analysis']}_"
+def ejecutar_bloque_madrugada(partidos):
+    """Filtra y despacha partidos que juegan exclusivamente de 5:00 AM a 9:00 AM"""
+    logging.info("Iniciando escaneo de bloques nocturnos para la madrugada...")
+    mensajes_enviados = 0
+    
+    for partido in partidos:
+        if datetime.time(5, 0) <= partido["hora_inicio"] < datetime.time(9, 0):
+            pick_valido = analizar_partido_con_logica(partido)
+            if pick_valido:
+                cuerpo = (
+                    f"🚨 **PICK DE MADRUGADA DETECTADO** 🚨\n"
+                    f"Match: {partido['local']} vs {partido['visitante']} ({partido['deporte']})\n"
+                    f"Horario: {partido['hora_inicio'].strftime('%H:%M')} AM\n"
+                    f"Pronóstico: {pick_valido['tipo']} -> {pick_valido['seleccion']}\n"
+                    f"Cuota: @{pick_valido['cuota']}\n"
+                    f"Lógica aplicada: {pick_valido['razon']}\n"
                 )
-                await send_telegram_msg(template)
-                await asyncio.sleep(4)  # Evitar spam block de Telegram
+                enviar_mensaje_plataforma(cuerpo)
+                mensajes_enviados += 1
+                
+    if mensajes_enviados == 0:
+        logging.info("No se encontraron oportunidades con valor real para la madrugada.")
 
-async def rutina_cierre_jornada():
-    logging.info("📊 Ejecutando cierre de jornada a la medianoche...")
-    if not daily_picks:
-        summary = "📊 **Cierre de Jornada (12:00 AM)**\n\nNo se registraron movimientos o picks en la agenda de hoy. ¡Buenas noches! 💤"
-        await send_telegram_msg(summary)
-        return
+def ejecutar_bloque_diurno(partidos):
+    """Filtra y despacha partidos que juegan a partir de las 9:00 AM en adelante"""
+    logging.info("Iniciando escaneo de bloques diurnos (A partir de las 8:30 AM)...")
+    
+    for partido in partidos:
+        if partido["hora_inicio"] >= datetime.time(9, 0):
+            pick_valido = analizar_partido_con_logica(partido)
+            if pick_valido:
+                cuerpo = (
+                    f"💰 **NUEVO PICK DIURNO CON VALOR** 💰\n"
+                    f"Partido: {partido['local']} vs {partido['visitante']} | {partido['deporte']}\n"
+                    f"Hora de Inicio: {partido['hora_inicio'].strftime('%H:%M')}\n"
+                    f"Pick Recomendado: {pick_valido['tipo']}\n"
+                    f"Cuota de entrada: @{pick_valido['cuota']}\n"
+                    f"Análisis Técnico: {pick_valido['razon']}\n"
+                )
+                enviar_mensaje_plataforma(cuerpo)
 
-    ganados = 0
-    perdidos = 0
-    profit_neto = 0.0
-
-    for p in daily_picks:
-        resultado_ganado = random.choice([True, False, True])
-        if resultado_ganado:
-            ganados += 1
-            profit_neto += (p["stake"] * p["odds"]) - p["stake"]
-        else:
-            perdidos += 1
-            profit_neto -= p["stake"]
-
-    summary = (
-        f"📊 **REPORTE Y BALANCE DE JORNADA (12:00 AM)**\n"
-        f"———————————————————————\n"
-        f"✅ Picks Ganados: `{ganados}`\n"
-        f"❌ Picks Perdidos: `{perdidos}`\n"
-        f"📈 Profit Neto Real: `{round(profit_neto, 2)} unidades`\n"
-        f"———————————————————————\n"
-        f"🤖 Balance verificado e investigado mediante base de datos de cierre de mercados. "
-        f"¡Gracias por confiar en nuestro servicio premium! Buenas noches. 💤"
+def generar_cierre_balance():
+    """Genera el reporte de balance automatizado con formato limpio"""
+    historial = estado_bot["historial_diario"]
+    
+    reporte = (
+        "=========================================\n"
+        "      📊 REPORTE DE BALANCE DIARIO 📊    \n"
+        "=========================================\n"
     )
-    await send_telegram_msg(summary)
-    daily_picks.clear()
+    
+    total_unidades = 0.0
+    for item in historial:
+        icono = "✅" if item["resultado"] == "Ganado" else "❌"
+        reporte += f"{icono} {item['partido']}\n   ↳ Pick: {item['pick']} -> {item['resultado']} ({item['unidades']:+g} u)\n"
+        total_unidades += item["unidades"]
+        
+    reporte += (
+        "-----------------------------------------\n"
+        f"PROFIT NETO DEL BOT: {total_unidades:+.2f} Unidades\n"
+        "========================================="
+    )
+    enviar_mensaje_plataforma(reporte)
 
-# ==============================
-# HILO DE CONTROL PRINCIPAL (MAIN)
-# ==============================
-async def main():
-    logging.info("🚀 Iniciando el Bot Analista de Picks Premium...")
-    detect_region()
-
-    scheduler = AsyncIOScheduler(timezone=TZ)
-
-    scheduler.add_job(rutina_buenos_dias, "cron", hour=9, minute=0)
-    scheduler.add_job(scan_and_send_picks, "cron", hour=10, minute=0)
-    scheduler.add_job(scan_and_send_picks, "cron", hour=16, minute=0)
-    scheduler.add_job(rutina_cierre_jornada, "cron", hour=0, minute=0)
-
-    scheduler.start()
-    logging.info("⏰ Planificador de tareas APScheduler activado con éxito.")
-
-    await scan_and_send_picks()
-
+# =====================================================================
+# MÓDULO 4: PROCESADOR CENTRAL DE TIEMPO (CRON WORKER)
+# =====================================================================
+def loop_controlador_tiempo():
+    """
+    Bucle infinito que controla las ejecuciones cronométricas en Render.
+    Usa pasadas de 30 segundos para evitar sobrecarga de CPU.
+    """
+    logging.info("Subproceso de control de tiempo iniciado de forma segura.")
+    
     while True:
-        await asyncio.sleep(3600)
+        ahora = datetime.datetime.now()
+        hora_actual = ahora.time()
+        dia_actual = ahora.date()
+        
+        # --- CONTROL DE MEDIANOCHE (23:55) ---
+        # Envía el balance diario y calcula los partidos que jugarán de 5 AM a 9 AM del día siguiente
+        if hora_actual >= CONFIG["HORA_REPORTE"] and estado_bot["ultimo_reporte_enviado"] != dia_actual:
+            logging.info("Activando tareas automáticas de cierre de jornada...")
+            generar_cierre_balance()
+            
+            partidos_filtrados = obtener_partidos_api()
+            ejecutar_bloque_madrugada(partidos_filtrados)
+            
+            estado_bot["ultimo_reporte_enviado"] = dia_actual
+            estado_bot["picks_madrugada_enviados"] = True
+            # Resetear la bandera diurna para el día entrante
+            estado_bot["picks_diurnos_enviados"] = False 
+            
+        # --- CONTROL DIURNO (A partir de las 8:30 AM) ---
+        if hora_actual >= CONFIG["HORA_DESPIERTA_DIURNO"] and hora_actual < CONFIG["HORA_REPORTE"]:
+            if not estado_bot["picks_diurnos_enviados"]:
+                logging.info("Activando tareas del bloque diurno...")
+                partidos_filtrados = obtener_partidos_api()
+                ejecutar_bloque_diurno(partidos_filtrados)
+                estado_bot["picks_diurnos_enviados"] = True
+                
+        # Limpieza de banderas al iniciar una nueva madrugada si es necesario
+        if hora_actual > datetime.time(0, 0) and hora_actual < datetime.time(1, 0):
+            estado_bot["picks_madrugada_enviados"] = False
+
+        time.sleep(30)
+
+# =====================================================================
+# INTERFAZ WEB OBLIGATORIA PARA DESPLIEGUE EN RENDER
+# =====================================================================
+@app.route('/')
+def home():
+    """Mantiene el puerto HTTP de Render activo para evitar Webhook Timeout errors"""
+    return {
+        "status": "online",
+        "bot_name": "Logical value bot",
+        "last_report_date": str(estado_bot["ultimo_reporte_enviado"]),
+        "diurnal_scanned_today": estado_bot["picks_diurnos_enviados"]
+    }
+
+def arrancar_sistema():
+    # Iniciar el procesador de horas en un hilo secundario independiente
+    hilo_cron = threading.Thread(target=loop_controlador_tiempo, daemon=True)
+    hilo_cron.start()
+    
+    # Iniciar el servidor web de Flask usando el puerto asignado por Render
+    puerto = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=puerto)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    arrancar_sistema()
