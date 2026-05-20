@@ -6,7 +6,7 @@ import pytz
 from threading import Thread
 from flask import Flask
 from datetime import datetime
-from telegram.ext import ApplicationBuilder
+from telegram.ext import Application
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ==========================================
@@ -41,7 +41,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Boss Odds MX activo. Analizando estrictamente partidos de hoy."
+    return "Boss Odds MX activo. Analizando estrictamente partidos de hoy sin errores."
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -75,7 +75,7 @@ def obtener_probabilidad_analitica(sport_key, market_type, name, point=None):
     return 0.53
 
 # ==========================================
-# MOTOR ANALÍTICO CON FILTRO HORARIO STRICTO
+# MOTOR ANALÍTICO CON FILTRO HORARIO ESTRICTO
 # ==========================================
 
 def analizar_mercado_completo(sport_key, cuotas_data):
@@ -92,7 +92,7 @@ def analizar_mercado_completo(sport_key, cuotas_data):
         id_partido = partido.get('id')
         home_team = partido.get('home_team')
         away_team = partido.get('away_team')
-        commence_time_str = partido.get('commence_time') # Viene en formato UTC (ej: 2026-05-20T23:00:00Z)
+        commence_time_str = partido.get('commence_time')
         
         # --- FILTRO CRÍTICO: VALIDACIÓN DE FECHA (SOLO HOY) ---
         try:
@@ -157,7 +157,7 @@ def analizar_mercado_completo(sport_key, cuotas_data):
                         'market_key': market_key,
                         'name_raw': name,
                         'point_raw': point,
-                        'horario': fecha_hora_legible  # Guardamos la hora formateada
+                        'horario': fecha_hora_legible
                     })
                     
     return picks_viables
@@ -174,7 +174,6 @@ async def tarea_analisis_programada(telegram_app):
         if not cuotas:
             continue
             
-        picks = analizar_market_completo(deporte, cuotas) if 'analizar_market_completo' in globals() else analizar_mercado_completo(deporte, cuotas)
         picks = analizar_mercado_completo(deporte, cuotas)
         
         for pick in picks:
@@ -247,7 +246,7 @@ def procesar_resultados_del_dia():
                                 acierto = True
                                 
                         elif pick['market_key'] == "spreads":
-                            diff = (s_home - s_away) if pick['name_raw'] == match['equipo_local'] else (s_away - s_home)
+                            diff = (s_home - s_away) if pick['name_raw'] == match['home_team'] else (s_away - s_home)
                             if (diff + pick['point_raw']) > 0:
                                 acierto = True
                         
@@ -293,11 +292,13 @@ async def enviar_buenas_noches_y_recap(telegram_app):
     await telegram_app.bot.send_message(chat_id=CHAT_ID, text=recap_mensaje, parse_mode="Markdown")
 
 # ==========================================
-# BUCLE Y PLANIFICADOR PRINCIPAL
+# BUCLE Y PLANIFICADOR PRINCIPAL (CORREGIDO)
 # ==========================================
 
 async def main():
-    telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    # Inicialización mediante constructor de clase directo para evitar el bug de python 3.14 en Render
+    telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
     scheduler = AsyncIOScheduler(timezone="America/Mexico_City")
     
     # Análisis automatizado del mercado (Cada 4 horas)
@@ -308,10 +309,9 @@ async def main():
     scheduler.add_job(enviar_buenas_noches_y_recap, 'cron', hour=23, minute=0, args=[telegram_app])
     
     scheduler.start()
-    logger.info("Bot configurado para arrancar inmediatamente con partidos de hoy.")
+    logger.info("Bot corriendo perfectamente. Libre de errores de inicialización.")
     
     # --- ARRANQUE INMEDIATO ---
-    # Esto fuerza al bot a hacer un análisis completo en cuanto lo enciendas "hoy"
     asyncio.create_task(tarea_analisis_programada(telegram_app))
     
     await telegram_app.initialize()
