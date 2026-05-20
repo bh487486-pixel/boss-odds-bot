@@ -22,8 +22,9 @@ app = Flask(__name__)
 CONFIG = {
     "HORA_REPORTE": datetime.time(23, 55),
     "HORA_DESPIERTA_DIURNO": datetime.time(8, 30),
-    "CUOTA_MINIMA_ML": 1.70,
-    "CUOTA_MINIMA_HC": 1.85,
+    # Rango flexible: mínimo 1.50 y tope máximo de 2.00 para todos los mercados
+    "CUOTA_MINIMA": 1.50,
+    "CUOTA_MAXIMA": 2.00,
     "UMBRAL_OVER_FUTBOL": 2.5,
     "UMBRAL_OVER_MLB": 8.5
 }
@@ -50,26 +51,24 @@ def obtener_partidos_api():
     """
     logging.info("Consultando cartelera de partidos y cuotas actualizadas...")
     
-    # Datos estructurados para análisis profundo
     return [
         {
             "id": "mlb_padres_dodgers_2026",
             "deporte": "MLB",
             "local": "LA Dodgers",
             "visitante": "San Diego Padres",
-            "hora_inicio": datetime.time(6, 30),  # Madrugada
+            "hora_inicio": datetime.time(18, 41),
             "analisis": {
                 "abridor_favorito": "LA Dodgers",
                 "racha_local": "buena",
                 "racha_visitante": "regular",
-                "clima_estadio": "viento_a_favor_del_bateo",
-                "rendimiento_bullpen": "desgastado"
+                "clima_estadio": "neutral",
+                "rendimiento_bullpen": "estable"
             },
             "cuotas": {
-                "ML_local": 1.45,  # Cuota baja sin valor directo
-                "ML_visitante": 2.75,
+                "ML_local": 1.60,       # Entra perfectamente en el rango de 1.50 a 2.00
                 "OU_mas_8.5": 1.95,
-                "HC_local_-1.5": 2.10
+                "HC_local_-1.5": 2.10   
             }
         },
         {
@@ -77,7 +76,7 @@ def obtener_partidos_api():
             "deporte": "Futbol",
             "local": "Real Madrid",
             "visitante": "Real Betis",
-            "hora_inicio": datetime.time(14, 15),  # Tarde (Bloque Diurno)
+            "hora_inicio": datetime.time(14, 15),
             "analisis": {
                 "estadio": "Santiago Bernabéu",
                 "tendencia": "abierto_muchos_goles",
@@ -85,28 +84,9 @@ def obtener_partidos_api():
                 "importancia_partido": "alta"
             },
             "cuotas": {
-                "ML_local": 1.35,  # Favorito claro pero cuota muy baja
-                "OU_mas_2.5": 1.85,
-                "HC_local_-1.5": 1.95
-            }
-        },
-        {
-            "id": "mlb_yankees_redsox_2026",
-            "deporte": "MLB",
-            "local": "NY Yankees",
-            "visitante": "Boston Red Sox",
-            "hora_inicio": datetime.time(18, 5),  # CORREGIDO: Se quitó el cero inicial (05 -> 5) para evitar el SyntaxError
-            "analisis": {
-                "abridor_favorito": "NY Yankees",
-                "racha_local": "excelente",
-                "racha_visitante": "mala",
-                "clima_estadio": "neutral",
-                "rendimiento_bullpen": "stable"
-            },
-            "cuotas": {
-                "ML_local": 1.75,  # ¡Tiene valor directo!
-                "OU_mas_9.0": 1.90,
-                "HC_local_-1.5": 2.40
+                "ML_local": 1.35,       
+                "OU_mas_2.5": 1.85,     
+                "HC_local_-1.5": 1.95   
             }
         }
     ]
@@ -116,71 +96,66 @@ def obtener_partidos_api():
 # =====================================================================
 def analizar_partido_con_logica(partido):
     """
-    Aplica el algoritmo de descarte secuencial:
-    1. Ganador Directo (Si hay favorito claro y paga bien)
-    2. Totales/Goles/Carreras (Si la dinámica del juego lo justifica)
-    3. Hándicaps (Como última alternativa de valor)
+    Aplica el algoritmo de descarte secuencial validando que las cuotas
+    se mantengan estrictamente en el rango de 1.50 a 2.00.
     """
     deporte = partido["deporte"]
     cuotas = partido["cuotas"]
     analisis = partido["analisis"]
     
+    min_c = CONFIG["CUOTA_MINIMA"]
+    max_c = CONFIG["CUOTA_MAXIMA"]
+    
     # --- PROCESAMIENTO ESTRATÉGICO MLB ---
     if deporte == "MLB":
-        # Paso 1: Evaluar Ganador Directo
-        if analisis["abridor_favorito"] == partido["local"] and cuotas["ML_local"] >= CONFIG["CUOTA_MINIMA_ML"]:
+        if analisis["abridor_favorito"] == partido["local"] and min_c <= cuotas["ML_local"] <= max_c:
             return {
                 "tipo": "Ganador Directo (ML)",
                 "seleccion": partido["local"],
                 "cuota": cuotas["ML_local"],
-                "razon": f"Claro favorito por abridor y racha {analisis['racha_local']} con cuota rentable."
+                "razon": "Consistencia en la rotación inicial y ventaja ofensiva inclinan la victoria."
             }
         
-        # Paso 2: Si el ML no paga, evaluar Totales (Over/Under) por clima/bullpen
-        if analisis["clima_estadio"] == "viento_a_favor_del_bateo" or analisis["rendimiento_bullpen"] == "desgastado":
+        if min_c <= cuotas["OU_mas_8.5"] <= max_c:
             return {
                 "tipo": f"Over {CONFIG['UMBRAL_OVER_MLB']} Carreras",
                 "seleccion": "Over",
                 "cuota": cuotas["OU_mas_8.5"],
-                "razon": "Cuota regular en ML descartada. Filtro lógico activa el Over por viento a favor y desgaste en pitcheo."
+                "razon": "Filtro de cuota óptimo para el mercado de carreras totales."
             }
             
-        # Paso 3: Evaluar Hándicap si las condiciones previas no alcanzaron el umbral
-        if cuotas["HC_local_-1.5"] >= CONFIG["CUOTA_MINIMA_HC"] and analisis["racha_local"] == "excelente":
+        if min_c <= cuotas["HC_local_-1.5"] <= max_c:
             return {
                 "tipo": "Hándicap -1.5",
                 "seleccion": partido["local"],
                 "cuota": cuotas["HC_local_-1.5"],
-                "razon": "Buscamos exprimir valor con hándicap por racha dominante del local."
+                "razon": "Línea de hándicap protegida dentro del rango de riesgo aceptable."
             }
 
     # --- PROCESAMIENTO ESTRATÉGICO FÚTBOL ---
     elif deporte == "Futbol":
-        # Paso 1: Evaluar Ganador Directo
-        if cuotas["ML_local"] >= CONFIG["CUOTA_MINIMA_ML"]:
+        if min_c <= cuotas["ML_local"] <= max_c:
             return {
                 "tipo": "Ganador Directo (ML)",
                 "seleccion": partido["local"],
                 "cuota": cuotas["ML_local"],
-                "razon": f"Local fuerte en el estadio {analisis['estadio']} con cuota dentro del umbral."
+                "razon": f"Local fuerte con cuota equilibrada dentro del rango permitido."
             }
             
-        # Paso 2: Evaluar Goles si es un partido abierto o hay bajas defensivas
-        if analisis["tendencia"] == "abierto_muchos_goles" or "defensas_titulares" in analisis["bajas_clave"]:
+        if (analisis["tendencia"] == "abierto_muchos_goles") and (min_c <= cuotas["OU_mas_2.5"] <= max_c):
             return {
                 "tipo": f"Over {CONFIG['UMBRAL_OVER_FUTBOL']} Goles",
                 "seleccion": "Over",
                 "cuota": cuotas["OU_mas_2.5"],
-                "razon": f"ML paga poco. Se rota a goles por expectativa de juego abierto y bajas en defense."
+                "razon": "Se rota a mercado de goles buscando asegurar valor entre 1.50 y 2.00."
             }
             
-        # Paso 3: Hándicap alternativo
-        if cuotas["HC_local_-1.5"] >= 1.80:
+        if min_c <= cuotas["HC_local_-1.5"] <= max_c:
             return {
                 "tipo": "Hándicap -1.5",
                 "seleccion": partido["local"],
                 "cuota": cuotas["HC_local_-1.5"],
-                "razon": "Ventaja clara para cubrir el hándicap por disparidad de planteles."
+                "razon": "Ventaja de goles con cuota óptima regulada."
             }
             
     return None
@@ -189,18 +164,14 @@ def analizar_partido_con_logica(partido):
 # MÓDULO 3: SISTEMA DE EMISIÓN DE SELECCIONES Y REPORTES
 # =====================================================================
 def enviar_mensaje_plataforma(texto_formateado):
-    """
-    Simulación del conector de salida para mensajería.
-    En producción aquí se integra requests.post() a la API de destino.
-    """
+    """Simulación del envío de mensajes a tus canales correspondientes"""
     logging.info("--- ENVIANDO MENSAJE A CANALES ---")
     print(texto_formateado)
     logging.info("--- MENSAJE ENVIADO CORRECTAMENTE ---")
 
 def ejecutar_bloque_madrugada(partidos):
-    """Filtra y despacha partidos que juegan exclusivamente de 5:00 AM a 9:00 AM"""
+    """Filtra y despacha partidos de madrugada (5:00 AM - 9:00 AM)"""
     logging.info("Iniciando escaneo de bloques nocturnos para la madrugada...")
-    mensajes_enviados = 0
     
     for partido in partidos:
         if datetime.time(5, 0) <= partido["hora_inicio"] < datetime.time(9, 0):
@@ -212,29 +183,39 @@ def ejecutar_bloque_madrugada(partidos):
                     f"Horario: {partido['hora_inicio'].strftime('%H:%M')} AM\n"
                     f"Pronóstico: {pick_valido['tipo']} -> {pick_valido['seleccion']}\n"
                     f"Cuota: @{pick_valido['cuota']}\n"
-                    f"Lógica aplicada: {pick_valido['razon']}\n"
+                    f"Justificación: {pick_valido['razon']}\n"
                 )
                 enviar_mensaje_plataforma(cuerpo)
-                mensajes_enviados += 1
-                
-    if mensajes_enviados == 0:
-        logging.info("No se encontraron oportunidades con valor real para la madrugada.")
 
 def ejecutar_bloque_diurno(partidos):
-    """Filtra y despacha partidos que juegan a partir de las 9:00 AM en adelante"""
-    logging.info("Iniciando escaneo de bloques diurnos (A partir de las 8:30 AM)...")
+    """Envía el saludo obligatorio de buenos días y procesa los picks del día"""
+    logging.info("Activando tareas del bloque diurno...")
     
+    # 1. MENSAJE OBLIGATORIO DE BUENOS DÍAS
+    saludo_buenos_dias = (
+        "☀️ **¡Buenos días a todos!** ☀️\n\n"
+        "El bot de análisis ya está encendido y escaneando la jornada de hoy. "
+        "Buscando las mejores opciones en Ganador Directo, Totales y Hándicaps "
+        f"con nuestro rango regulado de cuotas ({CONFIG['CUOTA_MINIMA']:.2f} - {CONFIG['CUOTA_MAXIMA']:.2f}).\n\n"
+        "¡Mucho éxito en los mercados de hoy! 🚀"
+    )
+    enviar_mensaje_plataforma(saludo_buenos_dias)
+    
+    # Reposo breve para no encimar mensajes
+    time.sleep(2)
+    
+    # 2. ESCANEO DE PICKS
     for partido in partidos:
         if partido["hora_inicio"] >= datetime.time(9, 0):
             pick_valido = analizar_partido_con_logica(partido)
             if pick_valido:
                 cuerpo = (
-                    f"💰 **NUEVO PICK DIURNO CON VALOR** 💰\n"
-                    f"Partido: {partido['local']} vs {partido['visitante']} | {partido['deporte']}\n"
-                    f"Hora de Inicio: {partido['hora_inicio'].strftime('%H:%M')}\n"
-                    f"Pick Recomendado: {pick_valido['tipo']}\n"
-                    f"Cuota de entrada: @{pick_valido['cuota']}\n"
-                    f"Análisis Técnico: {pick_valido['razon']}\n"
+                    f"📌 **{partido['deporte']}** ⚾️⚽️\n"
+                    f"❌ Partido: {partido['local']} vs {partido['visitante']}\n"
+                    f"📅 Hora de Inicio: {partido['hora_inicio'].strftime('%H:%M')}\n\n"
+                    f"🎯 Pick: {pick_valido['tipo']}: {pick_valido['seleccion']}\n"
+                    f"💰 Cuota: {pick_valido['cuota']}\n\n"
+                    f"🧠 **Justificación Profesional:** {pick_valido['razon']}"
                 )
                 enviar_mensaje_plataforma(cuerpo)
 
@@ -256,7 +237,7 @@ def generar_cierre_balance():
         
     reporte += (
         "-----------------------------------------\n"
-        f"PROFIT NETO DEL BOT: {total_unidades:+.2f} Unidades\n"
+        f"PROFIT NETO REAL: {total_unidades:+.2f} Unidades\n"
         "========================================="
     )
     enviar_mensaje_plataforma(reporte)
@@ -265,12 +246,18 @@ def generar_cierre_balance():
 # MÓDULO 4: PROCESADOR CENTRAL DE TIEMPO (CRON WORKER)
 # =====================================================================
 def loop_controlador_tiempo():
-    """
-    Bucle infinito que controla las ejecuciones cronométricas en Render.
-    Usa pasadas de 30 segundos para evitar sobrecarga de CPU.
-    """
+    """Bucle infinito que controla las ejecuciones cronométricas en Render"""
     logging.info("Subproceso de control de tiempo iniciado de forma segura.")
     
+    # --- LANZAMIENTO FORZADO INICIAL (Ajuste para hoy) ---
+    # Si arranca entre las 8:30 AM y las 11:55 PM, dispara el saludo y picks de una vez
+    ahora_inicio = datetime.datetime.now().time()
+    if CONFIG["HORA_DESPIERTA_DIURNO"] <= ahora_inicio < CONFIG["HORA_REPORTE"]:
+        logging.info("Detección de inicio tardío: Ejecutando bloque diurno inmediatamente por hoy...")
+        partidos_filtrados = obtener_partidos_api()
+        ejecutar_bloque_diurno(partidos_filtrados)
+        estado_bot["picks_diurnos_enviados"] = True
+
     while True:
         ahora = datetime.datetime.now()
         hora_actual = ahora.time()
@@ -288,10 +275,9 @@ def loop_controlador_tiempo():
             estado_bot["picks_madrugada_enviados"] = True
             estado_bot["picks_diurnos_enviados"] = False 
             
-        # --- CONTROL DIURNO (A partir de las 8:30 AM) ---
+        # --- CONTROL DIURNO NORMAL (8:30 AM) ---
         if hora_actual >= CONFIG["HORA_DESPIERTA_DIURNO"] and hora_actual < CONFIG["HORA_REPORTE"]:
             if not estado_bot["picks_diurnos_enviados"]:
-                logging.info("Activando tareas del bloque diurno...")
                 partidos_filtrados = obtener_partidos_api()
                 ejecutar_bloque_diurno(partidos_filtrados)
                 estado_bot["picks_diurnos_enviados"] = True
@@ -306,20 +292,17 @@ def loop_controlador_tiempo():
 # =====================================================================
 @app.route('/')
 def home():
-    """Mantiene el puerto HTTP de Render activo para evitar Webhook Timeout errors"""
     return {
         "status": "online",
         "bot_name": "Logical value bot",
-        "last_report_date": str(estado_bot["ultimo_reporte_enviado"]),
+        "limits": f"{CONFIG['CUOTA_MINIMA']} - {CONFIG['CUOTA_MAXIMA']}",
         "diurnal_scanned_today": estado_bot["picks_diurnos_enviados"]
     }
 
 def arrancar_sistema():
-    # Iniciar el procesador de horas en un hilo secundario independiente
     hilo_cron = threading.Thread(target=loop_controlador_tiempo, daemon=True)
     hilo_cron.start()
     
-    # Iniciar el servidor web de Flask usando el puerto asignado por Render
     puerto = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=puerto)
 
