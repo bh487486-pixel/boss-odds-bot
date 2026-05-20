@@ -6,7 +6,7 @@ import pytz
 from threading import Thread
 from flask import Flask
 from datetime import datetime
-from telegram.ext import Application
+from telegram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ==========================================
@@ -41,7 +41,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Boss Odds MX activo. Analizando estrictamente partidos de hoy sin errores."
+    return "Boss Odds MX activo. Sincronizado y operando con conexión directa."
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -67,7 +67,6 @@ def obtener_cuotas_por_deporte(sport_key):
     return []
 
 def obtener_probabilidad_analitica(sport_key, market_type, name, point=None):
-    # Simulación de alta precisión estadística para el value betting
     if market_type == "totals":
         return 0.55
     if market_type == "spreads":
@@ -79,12 +78,10 @@ def obtener_probabilidad_analitica(sport_key, market_type, name, point=None):
 # ==========================================
 
 def analizar_mercado_completo(sport_key, cuotas_data):
-    """Analiza mercados buscando valor, restringido ÚNICAMENTE a partidos de hoy."""
     picks_viables = []
     TOPE_MINIMO = 1.50
     TOPE_MAXIMO = 3.00
     
-    # Configurar zona horaria de México para comparar
     zona_mexico = pytz.timezone("America/Mexico_City")
     ahora_mexico = datetime.now(zona_mexico)
 
@@ -94,21 +91,16 @@ def analizar_mercado_completo(sport_key, cuotas_data):
         away_team = partido.get('away_team')
         commence_time_str = partido.get('commence_time')
         
-        # --- FILTRO CRÍTICO: VALIDACIÓN DE FECHA (SOLO HOY) ---
         try:
-            # Convertir el tiempo de la API a objeto datetime UTC
             hora_utc = datetime.strptime(commence_time_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.utc)
-            # Transformarlo a la hora local de México
             hora_partido_mexico = hora_utc.astimezone(zona_mexico)
         except Exception as e:
             logger.error(f"Error al procesar la fecha del partido: {e}")
             continue
 
-        # Si el partido NO es hoy, el bot lo ignora de inmediato
         if hora_partido_mexico.date() != ahora_mexico.date():
             continue
             
-        # Formatear la fecha y hora de manera limpia para el canal de Telegram
         fecha_hora_legible = hora_partido_mexico.strftime("%d/%m/%Y a las %H:%M")
         
         bookmakers = partido.get('bookmakers', [])
@@ -166,7 +158,7 @@ def analizar_mercado_completo(sport_key, cuotas_data):
 # GESTIÓN DE ENVÍOS Y CONTROL DE DUPLICADOS
 # ==========================================
 
-async def tarea_analisis_programada(telegram_app):
+async def tarea_analisis_programada(bot_client):
     logger.info("Iniciando escaneo de mercados del día de hoy...")
     
     for deporte in SPORTS:
@@ -177,11 +169,9 @@ async def tarea_analisis_programada(telegram_app):
         picks = analizar_mercado_completo(deporte, cuotas)
         
         for pick in picks:
-            # Evitar duplicados exactos
             if any(p['firma'] == pick['firma'] for p in REGISTRO_DIARIO['picks_enviados']):
                 continue
                 
-            # Máximo 2 picks distintos por juego
             picks_del_mismo_partido = [p for p in REGISTRO_DIARIO['picks_enviados'] if p['id'] == pick['id']]
             if len(picks_del_mismo_partido) >= 2:
                 continue
@@ -203,7 +193,7 @@ async def tarea_analisis_programada(telegram_app):
             )
             
             try:
-                await telegram_app.bot.send_message(chat_id=CHAT_ID, text=mensaje, parse_mode="Markdown")
+                await bot_client.send_message(chat_id=CHAT_ID, text=mensaje, parse_mode="Markdown")
                 REGISTRO_DIARIO['picks_enviados'].append(pick)
                 await asyncio.sleep(2)
             except Exception as e:
@@ -259,7 +249,7 @@ def procesar_resultados_del_dia():
         except Exception as e:
             logger.error(f"Error al auditar resultado: {e}")
 
-async def enviar_buenos_dias(telegram_app):
+async def enviar_buenos_dias(bot_client):
     global REGISTRO_DIARIO
     REGISTRO_DIARIO = {"ganadas": 0, "perdidas": 0, "unidades_netas": 0.0, "picks_enviados": []}
     saludo = (
@@ -268,9 +258,9 @@ async def enviar_buenos_dias(telegram_app):
         "*esta jornada* en búsqueda de las mejores cuotas de valor.\n\n"
         "💼 *Compromiso:* Análisis enfocado únicamente en eventos del día, cuidando la gestión de banca al máximo. ¡Mucho éxito! 🎯"
     )
-    await telegram_app.bot.send_message(chat_id=CHAT_ID, text=saludo, parse_mode="Markdown")
+    await bot_client.send_message(chat_id=CHAT_ID, text=saludo, parse_mode="Markdown")
 
-async def enviar_buenas_noches_y_recap(telegram_app):
+async def enviar_buenas_noches_y_recap(bot_client):
     procesar_resultados_del_dia()
     ganadas = REGISTRO_DIARIO['ganadas']
     perdidas = REGISTRO_DIARIO['perdidas']
@@ -289,33 +279,29 @@ async def enviar_buenas_noches_y_recap(telegram_app):
         "==================================\n"
         "Control matemático estricto. Nos leemos mañana temprano con una nueva cartelera. ¡Descansen! 🧠💼"
     )
-    await telegram_app.bot.send_message(chat_id=CHAT_ID, text=recap_mensaje, parse_mode="Markdown")
+    await bot_client.send_message(chat_id=CHAT_ID, text=recap_mensaje, parse_mode="Markdown")
 
 # ==========================================
-# BUCLE Y PLANIFICADOR PRINCIPAL (CORREGIDO)
+# BUCLE Y PLANIFICADOR PRINCIPAL (MÉTODO ULTRA-ESTABLE)
 # ==========================================
 
 async def main():
-    # Inicialización mediante constructor de clase directo para evitar el bug de python 3.14 en Render
-    telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+    # Eliminamos por completo el ApplicationBuilder defectuoso de Python 3.14 
+    # Usamos el cliente nativo de envío asíncrono directo para garantizar estabilidad absoluta
+    bot_client = Bot(token=TELEGRAM_TOKEN)
     
     scheduler = AsyncIOScheduler(timezone="America/Mexico_City")
     
-    # Análisis automatizado del mercado (Cada 4 horas)
-    scheduler.add_job(tarea_analisis_programada, 'interval', hours=4, args=[telegram_app])
-    
-    # Mensajes recurrentes diarios (Hora de CDMX)
-    scheduler.add_job(enviar_buenos_dias, 'cron', hour=8, minute=0, args=[telegram_app])
-    scheduler.add_job(enviar_buenas_noches_y_recap, 'cron', hour=23, minute=0, args=[telegram_app])
+    # Planificación horaria
+    scheduler.add_job(tarea_analisis_programada, 'interval', hours=4, args=[bot_client])
+    scheduler.add_job(enviar_buenos_dias, 'cron', hour=8, minute=0, args=[bot_client])
+    scheduler.add_job(enviar_buenas_noches_y_recap, 'cron', hour=23, minute=0, args=[bot_client])
     
     scheduler.start()
-    logger.info("Bot corriendo perfectamente. Libre de errores de inicialización.")
+    logger.info("Conexión directa establecida. Bot listo para operar de forma segura.")
     
-    # --- ARRANQUE INMEDIATO ---
-    asyncio.create_task(tarea_analisis_programada(telegram_app))
-    
-    await telegram_app.initialize()
-    await telegram_app.start_polling()
+    # Análisis instantáneo al encenderse hoy
+    await tarea_analisis_programada(bot_client)
     
     while True:
         await asyncio.sleep(3600)
