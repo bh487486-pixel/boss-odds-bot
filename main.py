@@ -1,60 +1,56 @@
 import os
-import asyncio
-import logging
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+import telebot
 
-# Registro de errores
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-
+# Jalamos tus variables de Render
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("¡Qué onda! Soy el bot oficial de BossOddsMX. Solo funciono enviando picks al canal.")
+# Inicializamos el bot
+bot = telebot.TeleBot(TOKEN)
 
-async def enviar_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message, "¡Qué onda! Soy el bot oficial de BossOddsMX. Solo funciono enviando picks al canal.")
+
+@bot.message_handler(commands=['pick'])
+def enviar_pick(message):
     try:
-        texto_recibido = " ".join(context.args)
+        # Obtenemos el texto después del comando /pick
+        texto_recibido = message.text.replace('/pick', '').strip()
+        
         if not texto_recibido:
-            await update.message.reply_text("Uso correcto: /pick Partido | Apuesta | Cuota | Stake | Análisis")
+            bot.reply_to(message, "Uso correcto:\n/pick Partido | Apuesta | Cuota | Stake | Análisis")
             return
         
-        # Separamos los datos
+        # Separamos los 5 datos por la barra |
         partido, apuesta, cuota, stake, analisis = [x.strip() for x in texto_recibido.split("|")]
         
-        # Estrellas de stake
+        # Convertimos el número de stake en estrellitas
         estrellas = "⭐" * int(stake) if stake.isdigit() else stake
 
-        # Formato oficial
+        # Armamos tu formato oficial
         mensaje_final = (
-            f"🔥 **BossOddsMX – Pick del Día**\n\n"
+            f"🔥 *BossOddsMX – Pick del Día*\n\n"
             f"Deporte: ⚽ Fútbol\n"
             f"Partido: {partido}\n"
             f"Pick: {apuesta}\n"
             f"Cuota: {cuota}\n"
             f"Stake: {estrellas}\n\n"
-            f"📊 **Análisis:**\n"
+            f"📊 *Análisis:*\n"
             f"{analisis}\n\n"
             f"¡Vamos con todo! 💰"
         )
         
-        bot = Bot(token=TOKEN)
-        await bot.send_message(chat_id=CHANNEL_ID, text=mensaje_final, parse_mode="Markdown")
-        await update.message.reply_text("¡Pick enviado al canal con éxito! 🚀")
+        # Mandamos el mensaje directo al canal usando formato Markdown
+        bot.send_message(chat_id=CHANNEL_ID, text=mensaje_final, parse_mode="Markdown")
+        bot.reply_to(message, "¡Pick enviado al canal con éxito! 🚀")
         
     except ValueError:
-        await update.message.reply_text("Error. Recuerda separar los 5 datos con '|'. Ejemplo:\n/pick Real Madrid vs Barca | Gana Madrid | 1.85 | 3 | Tienen mejor plantel.")
+        bot.reply_to(message, "Error. Recuerda separar los 5 datos con una barra '|'.\nEjemplo:\n/pick Real Madrid vs Barca | Gana Madrid | 1.85 | 3 | Tienen mejor plantel.")
     except Exception as e:
-        await update.message.reply_text(f"Hubo un error: {e}")
+        bot.reply_to(message, f"Hubo un error al enviar: {e}")
 
 if __name__ == '__main__':
-    # Inicializamos la aplicación
-    application = Application.builder().token(TOKEN).build()
-
-    # Añadimos comandos
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("pick", enviar_pick))
-
-    # Ejecutamos el bot de forma directa y nativa
-    application.run_polling(close_loop=False)
+    print("El bot de BossOddsMX está encendido...")
+    # El bot se queda escuchando de forma simple y estable
+    bot.infinity_polling()
