@@ -42,6 +42,22 @@ def obtener_picks_deporte(sport_key, markets):
         logger.error(f"Error de conexión con Odds API ({sport_key}): {e}")
         return []
 
+def obtener_marcadores(sport_key):
+    """Obtiene los marcadores en vivo y finales de la API."""
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "daysFrom": 1 # Trae los partidos de las últimas 24 horas
+    }
+    try:
+        response = requests.get(url, params=params, timeout=15)
+        if response.status_code == 200:
+            return response.json()
+        return []
+    except Exception as e:
+        logger.error(f"Error al conectar con Scores API ({sport_key}): {e}")
+        return []
+
 def procesar_cartelera_completa():
     candidatos = []
 
@@ -170,15 +186,37 @@ async def mandar_reporte_profit():
     if not picks_enviados_hoy:
         return
 
+    # 1. Descargamos los resultados oficiales del día
+    resultados_futbol = obtener_marcadores("soccer_uefa_champs_league") + obtener_marcadores("soccer_mexico_liga_mx") + obtener_marcadores("soccer_spl")
+    resultados_mlb = obtener_marcadores("baseball_mlb")
+    todos_los_resultados = resultados_futbol + resultados_mlb
+
     msg = (
         "📊 **BossOddsMX – Resumen de la Jornada** 📊\n\n"
-        "Cerramos las acciones de hoy. Estas fueron las jugadas que el sistema detectó con valor:\n\n"
+        "Cerramos las acciones de hoy. Estos fueron los marcadores oficiales de nuestras jugadas:\n\n"
     )
-    for i, pick in enumerate(picks_enviados_hoy, 1):
-        # Quitamos la palomita verde falsa. Solo mostramos lo que se jugó.
-        msg += f"{i}. {pick['partido']} ({pick['pick']}) -> Cuota {pick['cuota']:.2f}\n"
+    
+    # 2. Cruzamos los picks que mandamos con los marcadores reales
+    for pick in picks_enviados_hoy:
+        marcador_texto = "Marcador no disponible / Pospuesto ⏳"
         
-    msg += "\n¡Revisen sus boletos en sus casas de apuestas y cuéntenme cómo nos trató el mercado hoy! 📈"
+        for res in todos_los_resultados:
+            # Verificamos que sea el mismo partido
+            if res.get('home_team') in pick['partido'] and res.get('away_team') in pick['partido']:
+                if res.get('completed'):
+                    scores = res.get('scores')
+                    if scores and len(scores) == 2:
+                        # Formateamos el marcador: EquipoA 2 - 1 EquipoB
+                        marcador_texto = f"{scores[0]['name']} {scores[0]['score']} - {scores[1]['score']} {scores[1]['name']} 🏁"
+                else:
+                    marcador_texto = "Partido aún en juego ⏳"
+                break
+
+        msg += f"🔥 **{pick['partido']}**\n"
+        msg += f"Pick: {pick['pick']} (Cuota {pick['cuota']:.2f})\n"
+        msg += f"Resultado: {marcador_texto}\n\n"
+        
+    msg += "¡Revisen sus boletos y cuenten los verdes! Mañana volvemos con más valor. 📈💰"
     await enviar_mensaje_seguro(msg)
 
 async def mandar_buenas_noches():
@@ -190,7 +228,7 @@ async def mandar_buenas_noches():
     await enviar_mensaje_seguro(msg)
 
 async def main_loop():
-    logger.info("Bot BossOddsMX Iniciado. Monitoreando horario de CDMX...")
+    logger.info("Bot BossOddsMX Iniciado con API de Resultados. Monitoreando horario de CDMX...")
     while True:
         ahora = datetime.now(MX_TZ)
         
