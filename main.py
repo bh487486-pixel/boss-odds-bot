@@ -3,6 +3,7 @@ import requests
 import asyncio
 import logging
 import random
+import json
 from datetime import datetime, timezone, timedelta
 from telegram import Bot
 from telegram.error import TelegramError
@@ -23,23 +24,38 @@ REGIONS = "us,eu"
 # Huso Horario de México Centro (UTC-6)
 MX_TZ = timezone(timedelta(hours=-6))
 
-picks_enviados_hoy = []
+ARCHIVO_PICKS = "picks_hoy.json"
+
+# ==========================================
+# MEMORIA PERSISTENTE (JSON)
+# ==========================================
+def guardar_picks(picks):
+    try:
+        with open(ARCHIVO_PICKS, 'w', encoding='utf-8') as f:
+            json.dump(picks, f, ensure_ascii=False, indent=4)
+        logger.info("Picks del día guardados en memoria correctamente.")
+    except Exception as e:
+        logger.error(f"Error al guardar picks en JSON: {e}")
+
+def cargar_picks():
+    if os.path.exists(ARCHIVO_PICKS):
+        try:
+            with open(ARCHIVO_PICKS, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error al leer picks del JSON: {e}")
+    return []
 
 # ==========================================
 # LISTA DE LIGAS PRINCIPALES PERMITIDAS (ÉLITE)
 # ==========================================
 LIGAS_PERMITIDAS = [
-    # Fútbol Élite e Internacional
     "soccer_uefa_champions_league", "soccer_uefa_europa_league", 
     "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", 
     "soccer_germany_bundesliga", "soccer_france_ligue_1", "soccer_mexico_liga_mx",
-    # Béisbol Pro
     "baseball_mlb", "baseball_lmb",
-    # Básquetbol Pro
     "basketball_nba",
-    # Fútbol Americano Pro
     "americanfootball_nfl",
-    # Tenis Pro
     "tennis_atp_wimbledon", "tennis_atp_us_open", "tennis_atp_french_open", "tennis_atp_australian_open",
     "tennis_wta_wimbledon", "tennis_wta_us_open", "tennis_wta_french_open", "tennis_wta_australian_open",
     "tennis_atp_masters_1000", "tennis_wta_1000"
@@ -48,7 +64,6 @@ LIGAS_PERMITIDAS = [
 # ==========================================
 # FUNCIONES DE CONEXIÓN CON THE ODDS API
 # ==========================================
-
 def obtener_deportes_activos():
     url = "https://api.the-odds-api.com/v4/sports/"
     params = {"apiKey": ODDS_API_KEY}
@@ -102,16 +117,15 @@ def mapear_icono_deporte(sport_key):
 # ==========================================
 # LÓGICA DE PROCESAMIENTO
 # ==========================================
-
 def procesar_cartelera_completa():
     candidatos = []
     ligas_elite = obtener_deportes_activos()
     
     ahora_utc = datetime.now(timezone.utc)
-    limite_futuro_utc = ahora_utc + timedelta(hours=24) # 🕒 Estricto 24 horas máximo adelante
+    limite_futuro_utc = ahora_utc + timedelta(hours=24)
 
     if not ligas_elite:
-        logger.warning("No se detectaron llaves específicas de ligas élite activas. Usando filtro por grupo...")
+        logger.warning("No se detectaron ligas élite activas. Intentando respaldo general...")
         try:
             url = "https://api.the-odds-api.com/v4/sports/"
             res = requests.get(url, params={"apiKey": ODDS_API_KEY}, timeout=12).json()
@@ -130,7 +144,6 @@ def procesar_cartelera_completa():
             continue
 
         for partido in partidos:
-            # Filtro temporal estricto del día
             commence_time_raw = partido.get("commence_time")
             if commence_time_raw:
                 try:
@@ -138,7 +151,6 @@ def procesar_cartelera_completa():
                     if partido_tiempo_utc < ahora_utc or partido_tiempo_utc > limite_futuro_utc:
                         continue
                 except Exception as e:
-                    logger.error(f"Error al procesar fecha del partido: {e}")
                     continue
 
             partido_lower = f"{partido.get('home_team', '')} {partido.get('away_team', '')}".lower()
@@ -151,7 +163,11 @@ def procesar_cartelera_completa():
             markets = bookie.get("markets", [])
             if not markets: continue
             
+            pick_encontrado_partido = False # <-- FRENO PARA EVITAR DUPLICADOS DEL MISMO PARTIDO
+            
             for market in markets:
+                if pick_encontrado_partido: break # Rompe el bucle de mercados si ya sacamos un pick
+                
                 market_key = market.get("key")
                 outcomes = market.get("outcomes", [])
                 
@@ -180,7 +196,8 @@ def procesar_cartelera_completa():
                             "bookie": bookie.get("title", "Bet365"),
                             "sport_key": liga
                         })
-                        break
+                        pick_encontrado_partido = True
+                        break # Rompe el bucle de cuotas
     
     random.shuffle(candidatos)
     return candidatos[:6]
@@ -225,7 +242,6 @@ async def enviar_mensaje_seguro(texto):
 # ==========================================
 # EVALUACIÓN DE PICKS PARA EL PROFIT
 # ==========================================
-
 def evaluar_pick(pick_str, scores):
     try:
         score1 = float(scores[0]['score'])
@@ -259,13 +275,11 @@ def evaluar_pick(pick_str, scores):
                 
         return "❔ RESULTADO MANUAL"
     except Exception as e:
-        logger.error(f"No se pudo autoevaluar el pick: {e}")
         return "❔ REVISAR"
 
 # ==========================================
 # TAREAS PROGRAMADAS
 # ==========================================
-
 async def mandar_buenos_dias():
     msg = (
         "☀️ **¡Buenos días, familia de El Boss Mexa!** ☀️\n\n"
@@ -275,27 +289,24 @@ async def mandar_buenos_dias():
     await enviar_mensaje_seguro(msg)
 
 async def mandar_picks_del_dia():
-    global picks_enviados_hoy
-    
-    # 1️⃣ Primero se manda obligatoriamente el saludo matutino
     await mandar_buenos_dias()
-    await asyncio.sleep(4) # Espera pequeña para que no se encimen
+    await asyncio.sleep(4)
     
-    # 2️⃣ Se procesa y envía la cartelera
     picks_del_dia = procesar_cartelera_completa()
-    picks_enviados_hoy = picks_del_dia
+    guardar_picks(picks_del_dia) # <-- AQUÍ SE GUARDAN EN LA MEMORIA JSON
     
     if picks_del_dia:
         for pick in picks_del_dia:
             texto_formateado = construir_mensaje(pick)
             await enviar_mensaje_seguro(texto_formateado)
-            await asyncio.sleep(6) # Separación sana entre picks
+            await asyncio.sleep(6)
     else:
         await enviar_mensaje_seguro("⚠️ Los mercados principales no ofrecieron cuotas del día en este momento. Protegemos el bankroll. 🏦")
 
 async def mandar_reporte_profit():
-    global picks_enviados_hoy
+    picks_enviados_hoy = cargar_picks() # <-- LEE DE LA MEMORIA JSON
     if not picks_enviados_hoy:
+        logger.info("No hay picks registrados hoy para armar el profit.")
         return
 
     ligas_jugadas = list(set([pick['sport_key'] for pick in picks_enviados_hoy]))
@@ -340,16 +351,13 @@ async def mandar_buenas_noches():
     await enviar_mensaje_seguro(msg)
 
 # ==========================================
-# BUCLE PRINCIPAL CON REAJUSTE DE HORARIOS
+# BUCLE PRINCIPAL (SEGURO PARA PRODUCCIÓN)
 # ==========================================
-
 async def main_loop():
-    logger.info("Bot El Boss Mexa Iniciado. Lanzando ráfaga de prueba con saludo matutino incluido...")
+    logger.info("Bot El Boss Mexa Iniciado de manera segura. Esperando horarios programados...")
     
-    # ⚡ ACCIÓN INMEDIATA: Saluda y manda los 6 picks limpios de hoy justo al arrancar
-    await mandar_picks_del_dia()
-    
-    logger.info("Ráfaga y saludo enviados con éxito. El bot regresa a su ciclo de horarios.")
+    # ⚠️ Si quieres probar los picks justo al arrancar el servidor, descomenta la siguiente línea quitando el #:
+    # await mandar_picks_del_dia()
     
     while True:
         ahora = datetime.now(MX_TZ)
@@ -366,7 +374,7 @@ async def main_loop():
             
         # 🟢 Ciclo Diario de Mañana: Buenos días + 6 picks (8:30 AM)
         elif ahora.hour == 8 and ahora.minute == 30:
-            logger.info("Iniciando envío programado matutino (Saludo + Cartelera)...")
+            logger.info("Iniciando envío programado matutino...")
             await mandar_picks_del_dia()
             await asyncio.sleep(70)
             
