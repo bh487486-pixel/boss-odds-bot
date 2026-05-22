@@ -50,14 +50,12 @@ LIGAS_PERMITIDAS = [
 # ==========================================
 
 def obtener_deportes_activos():
-    """Consulta la API y filtra únicamente las ligas de primer nivel permitidas."""
     url = "https://api.the-odds-api.com/v4/sports/"
     params = {"apiKey": ODDS_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=12)
         if response.status_code == 200:
             deportes = response.json()
-            # Solo dejamos pasar si están explícitamente en nuestro catálogo de LIGAS_PERMITIDAS
             return [d['key'] for d in deportes if d.get('key') in LIGAS_PERMITIDAS and d.get('active')]
         return []
     except Exception as e:
@@ -108,8 +106,10 @@ def mapear_icono_deporte(sport_key):
 def procesar_cartelera_completa():
     candidatos = []
     ligas_elite = obtener_deportes_activos()
+    
+    ahora_utc = datetime.now(timezone.utc)
+    limite_futuro_utc = ahora_utc + timedelta(hours=24) # 🕒 Estricto 24 horas máximo adelante
 
-    # Si la API no reporta ligas específicas activas en su lista estricta, ampliamos al grupo base filtrando lo universitario
     if not ligas_elite:
         logger.warning("No se detectaron llaves específicas de ligas élite activas. Usando filtro por grupo...")
         try:
@@ -120,7 +120,6 @@ def procesar_cartelera_completa():
             return []
 
     for liga in ligas_elite:
-        # Bloqueo total de ligas universitarias de EUA (NCAA) basándonos en la clave de la liga
         if "ncaa" in liga.lower() or "championship" in liga.lower():
             continue
 
@@ -131,7 +130,17 @@ def procesar_cartelera_completa():
             continue
 
         for partido in partidos:
-            # Doble escudo: si se coló un equipo universitario en el nombre del partido, lo saltamos
+            # Filtro temporal estricto del día
+            commence_time_raw = partido.get("commence_time")
+            if commence_time_raw:
+                try:
+                    partido_tiempo_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    if partido_tiempo_utc < ahora_utc or partido_tiempo_utc > limite_futuro_utc:
+                        continue
+                except Exception as e:
+                    logger.error(f"Error al procesar fecha del partido: {e}")
+                    continue
+
             partido_lower = f"{partido.get('home_team', '')} {partido.get('away_team', '')}".lower()
             if any(uni in partido_lower for uni in ["state", "university", "ncaa", "fighting irish", "badgers", "cowboys", "seminoles", "longhorns"]):
                 continue
@@ -149,7 +158,6 @@ def procesar_cartelera_completa():
                 for o in outcomes:
                     cuota = o.get("price")
                     
-                    # Filtro de cuota estándar premium para ligas mayores (1.50 a 1.95)
                     if cuota and 1.50 <= cuota <= 1.95:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
@@ -195,7 +203,7 @@ def construir_mensaje(pick_data):
     analisis = generar_texto_analisis(pick_data['bookie'], cuota)
 
     mensaje = (
-        f"🔥 BossOddsMX – Pick del Día\n\n"
+        f"🔥 El Boss Mexa – Pick del Día\n\n"
         f"Deporte: {pick_data['deporte']}\n"
         f"Partido: {pick_data['partido']}\n"
         f"Pick: {pick_data['pick']}\n"
@@ -258,8 +266,22 @@ def evaluar_pick(pick_str, scores):
 # TAREAS PROGRAMADAS
 # ==========================================
 
+async def mandar_buenos_dias():
+    msg = (
+        "☀️ **¡Buenos días, familia de El Boss Mexa!** ☀️\n\n"
+        "Hoy es un excelente día para analizar el mercado, ganarle a las bookies y pintar la jornada completamente de verde. 🟢\n\n"
+        "Preparen sus bancas, a continuación les comparto la cartelera oficial con los 6 mejores picks seleccionados para el día de hoy. ¡Vamos con todo! 🚀🔥"
+    )
+    await enviar_mensaje_seguro(msg)
+
 async def mandar_picks_del_dia():
     global picks_enviados_hoy
+    
+    # 1️⃣ Primero se manda obligatoriamente el saludo matutino
+    await mandar_buenos_dias()
+    await asyncio.sleep(4) # Espera pequeña para que no se encimen
+    
+    # 2️⃣ Se procesa y envía la cartelera
     picks_del_dia = procesar_cartelera_completa()
     picks_enviados_hoy = picks_del_dia
     
@@ -267,9 +289,9 @@ async def mandar_picks_del_dia():
         for pick in picks_del_dia:
             texto_formateado = construir_mensaje(pick)
             await enviar_mensaje_seguro(texto_formateado)
-            await asyncio.sleep(5)
+            await asyncio.sleep(6) # Separación sana entre picks
     else:
-        await enviar_mensaje_seguro("⚠️ Los mercados principales no ofrecieron cuotas seguras en este momento. Protegemos el bankroll. 🏦")
+        await enviar_mensaje_seguro("⚠️ Los mercados principales no ofrecieron cuotas del día en este momento. Protegemos el bankroll. 🏦")
 
 async def mandar_reporte_profit():
     global picks_enviados_hoy
@@ -282,8 +304,8 @@ async def mandar_reporte_profit():
         todos_los_resultados += obtener_marcadores(liga)
 
     msg = (
-        "📊 **BossOddsMX – Resumen de la Jornada** 📊\n\n"
-        "Cerramos las acciones de hoy. Estos fueron los resultados de nuestros nuevos 6 picks estratégicos de ligas mayores:\n\n"
+        "📊 **El Boss Mexa – Resumen de la Jornada** 📊\n\n"
+        "Cerramos las acciones de hoy. Estos fueron los resultados de nuestros picks del día:\n\n"
     )
     
     for pick in picks_enviados_hoy:
@@ -312,30 +334,40 @@ async def mandar_reporte_profit():
 async def mandar_buenas_noches():
     msg = (
         "🌙 **¡Buenas noches, equipo!** 🌙\n\n"
-        "Cerramos las cortinas de hoy en BossOddsMX.\n\n"
+        "Cerramos las cortinas de hoy en El Boss Mexa.\n\n"
         "A descansar, que el bot se queda trabajando para traernos las mejores 6 oportunidades de las ligas más importantes mañana. ¡Éxito a todos! 💤💪"
     )
     await enviar_mensaje_seguro(msg)
 
+# ==========================================
+# BUCLE PRINCIPAL CON REAJUSTE DE HORARIOS
+# ==========================================
+
 async def main_loop():
-    global picks_enviados_hoy
-    logger.info("Bot BossOddsMX Iniciado. Lanzando ráfaga inmediata de picks de Ligas Mayores...")
+    logger.info("Bot El Boss Mexa Iniciado. Lanzando ráfaga de prueba con saludo matutino incluido...")
     
-    # ⚡ LANZAMIENTO INMEDIATO DE CORRECCIÓN (Solo se ejecuta una vez al prender el bot ahorita)
-    await enviar_mensaje_seguro("🔄 **Actualización de Cartelera Premium:** Reajustamos el sistema para enfocarnos exclusivamente en ligas de primer nivel. Aquí vienen los 6 picks oficiales de hoy:")
+    # ⚡ ACCIÓN INMEDIATA: Saluda y manda los 6 picks limpios de hoy justo al arrancar
     await mandar_picks_del_dia()
     
-    # Entra en bucle infinito monitoreando el reloj de CDMX
+    logger.info("Ráfaga y saludo enviados con éxito. El bot regresa a su ciclo de horarios.")
+    
     while True:
         ahora = datetime.now(MX_TZ)
         
-        # Saltamos los disparos de la mañana (8:20 y 8:30) porque YA los mandamos de golpe ahorita
+        # 🟢 Reporte de Profit (11:45 PM)
         if ahora.hour == 23 and ahora.minute == 45:
             await mandar_reporte_profit()
             await asyncio.sleep(70)
             
+        # 🟢 Mensaje de Buenas Noches (12:00 AM)
         elif ahora.hour == 0 and ahora.minute == 0:
             await mandar_buenas_noches()
+            await asyncio.sleep(70)
+            
+        # 🟢 Ciclo Diario de Mañana: Buenos días + 6 picks (8:30 AM)
+        elif ahora.hour == 8 and ahora.minute == 30:
+            logger.info("Iniciando envío programado matutino (Saludo + Cartelera)...")
+            await mandar_picks_del_dia()
             await asyncio.sleep(70)
             
         await asyncio.sleep(30)
