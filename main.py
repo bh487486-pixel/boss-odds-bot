@@ -25,6 +25,25 @@ MX_TZ = timezone(timedelta(hours=-6))
 
 picks_enviados_hoy = []
 
+# ==========================================
+# FUNCIONES DE CONEXIÓN CON THE ODDS API
+# ==========================================
+
+def obtener_deportes_activos():
+    """Consulta la API para obtener una lista de todos los deportes importantes activos hoy."""
+    url = "https://api.the-odds-api.com/v4/sports/"
+    params = {"apiKey": ODDS_API_KEY}
+    try:
+        response = requests.get(url, params=params, timeout=12)
+        if response.status_code == 200:
+            deportes = response.json()
+            grupos_importantes = ["Soccer", "Basketball", "Baseball", "American Football", "Tennis"]
+            return [d['key'] for d in deportes if d.get('group') in grupos_importantes and d.get('active')]
+        return []
+    except Exception as e:
+        logger.error(f"Error al obtener deportes activos: {e}")
+        return []
+
 def obtener_picks_deporte(sport_key, markets):
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
     params = {
@@ -34,7 +53,7 @@ def obtener_picks_deporte(sport_key, markets):
         "oddsFormat": "decimal"
     }
     try:
-        response = requests.get(url, params=params, timeout=15)
+        response = requests.get(url, params=params, timeout=12)
         if response.status_code == 200:
             return response.json()
         return []
@@ -43,98 +62,96 @@ def obtener_picks_deporte(sport_key, markets):
         return []
 
 def obtener_marcadores(sport_key):
-    """Obtiene los marcadores en vivo y finales de la API."""
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "daysFrom": 1 # Trae los partidos de las últimas 24 horas
-    }
+    params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
-        response = requests.get(url, params=params, timeout=15)
-        if response.status_code == 200:
-            return response.json()
+        response = requests.get(url, params=params, timeout=12)
+        if response.status_code == 200: return response.json()
         return []
     except Exception as e:
         logger.error(f"Error al conectar con Scores API ({sport_key}): {e}")
         return []
 
+def mapear_icono_deporte(sport_key):
+    """Asigna un emoji de manera dinámica según la liga."""
+    sport_key_lower = sport_key.lower()
+    if "soccer" in sport_key_lower: return "⚽ Fútbol"
+    if "baseball" in sport_key_lower: return "⚾ Béisbol"
+    if "basketball" in sport_key_lower: return "🏀 Básquetbol"
+    if "americanfootball" in sport_key_lower: return "🏈 Fútbol Americano"
+    if "tennis" in sport_key_lower: return "🎾 Tenis"
+    return "🏅 Deporte"
+
+# ==========================================
+# LÓGICA DE PROCESAMIENTO
+# ==========================================
+
 def procesar_cartelera_completa():
     candidatos = []
+    
+    ligas_dinamicas = obtener_deportes_activos()
 
-    # 1. FÚTBOL
-    partidos_futbol = obtener_picks_deporte("soccer_uefa_champs_league,soccer_mexico_liga_mx,soccer_spl", "h2h")
-    for partido in partidos_futbol:
-        bookmakers = partido.get("bookmakers", [])
-        if not bookmakers: continue
-        bookie = bookmakers[0]
-        markets = bookie.get("markets", [])
-        if not markets: continue
+    for liga in ligas_dinamicas:
+        mercados = "h2h,totals" if any(x in liga for x in ["baseball", "basketball", "americanfootball"]) else "h2h"
+        partidos = obtener_picks_deporte(liga, mercados)
         
-        outcomes = markets[0].get("outcomes", [])
-        for o in outcomes:
-            cuota = o.get("price")
-            # Filtro inteligente: Evitamos cuotas menores a 1.50 (mucho riesgo/poco valor) y mayores a 2.30 (improbables)
-            if 1.50 <= cuota <= 2.30:
-                candidatos.append({
-                    "deporte": "⚽ Fútbol",
-                    "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
-                    "pick": f"Gana {o.get('name')}",
-                    "cuota": cuota,
-                    "bookie": bookie.get("title", "Bet365")
-                })
-                break 
+        if not partidos:
+            continue
 
-    # 2. MLB
-    partidos_mlb = obtener_picks_deporte("baseball_mlb", "h2h,spreads,totals")
-    for partido in partidos_mlb:
-        bookmakers = partido.get("bookmakers", [])
-        if not bookmakers: continue
-        bookie = bookmakers[0]
-        markets = bookie.get("markets", [])
-        
-        for market in markets:
-            market_key = market.get("key")
-            outcomes = market.get("outcomes", [])
-            if market_key in ["spreads", "totals"]:
+        for partido in partidos:
+            bookmakers = partido.get("bookmakers", [])
+            if not bookmakers: continue
+            bookie = bookmakers[0]
+            markets = bookie.get("markets", [])
+            if not markets: continue
+            
+            for market in markets:
+                market_key = market.get("key")
+                outcomes = market.get("outcomes", [])
+                
                 for o in outcomes:
                     cuota = o.get("price")
-                    point = o.get("point")
                     
-                    if cuota and 1.60 <= cuota <= 2.20:
-                        if market_key == "spreads" and point and point < 0:
-                            tipo_pick = f"Hándicap {o.get('name')} ({point})"
-                        elif market_key == "totals" and point:
-                            tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {point} Carreras"
+                    if cuota and 1.50 <= cuota <= 1.95:
+                        nombre_deporte = mapear_icono_deporte(liga)
+                        
+                        if market_key == "h2h":
+                            tipo_pick = f"Gana {o.get('name')}"
+                        elif market_key == "totals":
+                            point = o.get("point")
+                            tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {point} Puntos/Carreras"
                         else:
                             continue
 
+                        if "baseball_lmb" in liga.lower():
+                            nombre_deporte = "⚾ Béisbol (LMB)"
+
                         candidatos.append({
-                            "deporte": "⚾ Béisbol MLB",
+                            "deporte": nombre_deporte,
                             "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
                             "pick": tipo_pick,
                             "cuota": cuota,
-                            "bookie": bookie.get("title", "Caliente")
+                            "bookie": bookie.get("title", "Bet365"),
+                            "sport_key": liga
                         })
-                        break
+                        break 
 
-    # Lógica de Diversificación: Mezclamos los picks elegibles para no mandar 5 del mismo deporte seguido
     random.shuffle(candidatos)
-    return candidatos[:5]
+    return candidatos[:6]
 
 def generar_texto_analisis(bookie, cuota):
-    """Genera un análisis aleatorio para que el bot no suene repetitivo."""
     plantillas = [
-        f"Nuestros algoritmos detectan una ligera ineficiencia (+EV) en {bookie}. La cuota de {cuota:.2f} tiene gran valor considerando el momento de forma actual.",
-        f"El flujo de dinero (Sharp Money) está respaldando esta línea en {bookie}. Tomamos la cuota de {cuota:.2f} antes de que el mercado la tire.",
-        f"Análisis estadístico puro. El modelo proyecta una alta probabilidad de acierto aquí, dejando la cuota de {cuota:.2f} con ventaja para nosotros.",
-        f"Encontramos valor en {bookie}. Las tendencias históricas recientes nos indican que esta cuota de {cuota:.2f} está mal ajustada por la casa de apuestas."
+        f"Análisis estadístico sólido. El modelo detecta una gran probabilidad de acierto, dejando la cuota de {cuota:.2f} con una ventaja real sobre la bookie.",
+        f"El flujo de dinero inteligente respalda sólidamente esta línea. Aseguramos esta cuota de {cuota:.2f} en {bookie} priorizando la probabilidad de cobro.",
+        f"Basado en las tendencias de rendimiento recientes, este pick fusiona valor (+EV) y un riesgo sumamente controlado.",
+        f"Línea protegida por las estadísticas de ambos equipos. {bookie} nos da una cuota de {cuota:.2f} que no podemos dejar pasar hoy."
     ]
     return random.choice(plantillas)
 
 def construir_mensaje(pick_data):
     cuota = pick_data["cuota"]
-    if cuota <= 1.70: stake = "⭐⭐⭐"
-    elif cuota <= 2.00: stake = "⭐⭐"
+    if cuota <= 1.65: stake = "⭐⭐⭐"
+    elif cuota <= 1.80: stake = "⭐⭐"
     else: stake = "⭐"
 
     analisis = generar_texto_analisis(pick_data['bookie'], cuota)
@@ -159,12 +176,59 @@ async def enviar_mensaje_seguro(texto):
     except TelegramError as e:
         logger.error(f"Error de Telegram: {e}")
 
+# ==========================================
+# EVALUACIÓN DE PICKS PARA EL PROFIT
+# ==========================================
+
+def evaluar_pick(pick_str, scores):
+    """Analiza el marcador final y determina si el pick se ganó, perdió o empató."""
+    try:
+        score1 = float(scores[0]['score'])
+        score2 = float(scores[1]['score'])
+        name1 = scores[0]['name']
+        name2 = scores[1]['name']
+        
+        # Evaluar ganador directo (H2H)
+        if "Gana" in pick_str:
+            team_picked = pick_str.replace("Gana ", "").strip()
+            winner = None
+            if score1 > score2: winner = name1
+            elif score2 > score1: winner = name2
+            
+            if winner == team_picked: return "🟢 GANADO"
+            elif winner is None: return "⚪ EMPATE / PUSH"
+            else: return "🔴 PERDIDO"
+                
+        # Evaluar Altas/Bajas
+        elif "Altas/Over" in pick_str or "Bajas/Under" in pick_str:
+            total_puntos = score1 + score2
+            partes = pick_str.split(" ")
+            linea = float(partes[1]) # Extrae el número, ej: "8.5"
+            
+            if "Altas/Over" in pick_str:
+                if total_puntos > linea: return "🟢 GANADO"
+                elif total_puntos < linea: return "🔴 PERDIDO"
+                else: return "⚪ PUSH"
+            elif "Bajas/Under" in pick_str:
+                if total_puntos < linea: return "🟢 GANADO"
+                elif total_puntos > linea: return "🔴 PERDIDO"
+                else: return "⚪ PUSH"
+                
+        return "❔ RESULTADO MANUAL"
+    except Exception as e:
+        logger.error(f"No se pudo autoevaluar el pick: {e}")
+        return "❔ REVISAR"
+
+# ==========================================
+# TAREAS PROGRAMADAS
+# ==========================================
+
 async def mandar_buenos_dias():
     msg = (
         "☀️ ¡Buenos días, familia de BossOddsMX! ☀️\n\n"
-        "La jornada de hoy está por comenzar y los mercados ya se están moviendo. "
-        "Nuestro sistema está filtrando toda la cartelera de Fútbol y MLB en busca del mejor valor (+EV).\n\n"
-        "Preparen las notificaciones, a las 8:30 AM cae el Top 5 de hoy. ¡Listos para facturar! 🟢💰"
+        "Nuestro sistema ha terminado de escanear la cartelera completa del mundo deportivo.\n\n"
+        "Hoy el algoritmo seleccionó lo mejor del mercado global enfocándose en la fusión perfecta: **Probabilidad Segura + Cuota de Valor (+EV)**. 📈\n\n"
+        "Preparen las notificaciones, a las 8:30 AM cae nuestro Top 6 de hoy. ¡Listos para cobrar! 🟢💰"
     )
     await enviar_mensaje_seguro(msg)
 
@@ -179,56 +243,56 @@ async def mandar_picks_del_dia():
             await enviar_mensaje_seguro(texto_formateado)
             await asyncio.sleep(5)
     else:
-        await enviar_mensaje_seguro("⚠️ Hoy los mercados están muy ajustados y el bot no encontró cuotas de valor seguro. Guardamos el bankroll para mañana. 🏦")
+        await enviar_mensaje_seguro("⚠️ Hoy los mercados no ofrecieron cuotas seguras en el rango establecido. Protegemos el bankroll. 🏦")
 
 async def mandar_reporte_profit():
     global picks_enviados_hoy
     if not picks_enviados_hoy:
         return
 
-    # 1. Descargamos los resultados oficiales del día
-    resultados_futbol = obtener_marcadores("soccer_uefa_champs_league") + obtener_marcadores("soccer_mexico_liga_mx") + obtener_marcadores("soccer_spl")
-    resultados_mlb = obtener_marcadores("baseball_mlb")
-    todos_los_resultados = resultados_futbol + resultados_mlb
+    ligas_jugadas = list(set([pick['sport_key'] for pick in picks_enviados_hoy]))
+    todos_los_resultados = []
+    for liga in ligas_jugadas:
+        todos_los_resultados += obtener_marcadores(liga)
 
     msg = (
         "📊 **BossOddsMX – Resumen de la Jornada** 📊\n\n"
-        "Cerramos las acciones de hoy. Estos fueron los marcadores oficiales de nuestras jugadas:\n\n"
+        "Cerramos las acciones de hoy. Estos fueron los resultados de nuestros 6 picks estratégicos:\n\n"
     )
     
-    # 2. Cruzamos los picks que mandamos con los marcadores reales
     for pick in picks_enviados_hoy:
         marcador_texto = "Marcador no disponible / Pospuesto ⏳"
+        estado_pick = "❔ Pendiente"
         
         for res in todos_los_resultados:
-            # Verificamos que sea el mismo partido
             if res.get('home_team') in pick['partido'] and res.get('away_team') in pick['partido']:
                 if res.get('completed'):
                     scores = res.get('scores')
                     if scores and len(scores) == 2:
-                        # Formateamos el marcador: EquipoA 2 - 1 EquipoB
                         marcador_texto = f"{scores[0]['name']} {scores[0]['score']} - {scores[1]['score']} {scores[1]['name']} 🏁"
+                        estado_pick = evaluar_pick(pick['pick'], scores)
                 else:
                     marcador_texto = "Partido aún en juego ⏳"
                 break
 
         msg += f"🔥 **{pick['partido']}**\n"
         msg += f"Pick: {pick['pick']} (Cuota {pick['cuota']:.2f})\n"
-        msg += f"Resultado: {marcador_texto}\n\n"
+        msg += f"Resultado: {marcador_texto}\n"
+        msg += f"Estatus: **{estado_pick}**\n\n"
         
-    msg += "¡Revisen sus boletos y cuenten los verdes! Mañana volvemos con más valor. 📈💰"
+    msg += "¡Revisen sus boletos! El análisis está dando frutos, mañana volvemos por más verdes. 📈💰"
     await enviar_mensaje_seguro(msg)
 
 async def mandar_buenas_noches():
     msg = (
         "🌙 **¡Buenas noches, equipo!** 🌙\n\n"
-        "Cerramos las cortinas por hoy. Gracias por confiar en el sistema de BossOddsMX.\n\n"
-        "Recuerden gestionar bien su stake. A descansar, que mañana volvemos desde temprano a buscar ineficiencias en las bookies. ¡Hasta mañana! 💤💪"
+        "Cerramos las cortinas de hoy en BossOddsMX.\n\n"
+        "A descansar, que el bot se queda trabajando para traernos las mejores 6 oportunidades de mañana. ¡Éxito a todos! 💤💪"
     )
     await enviar_mensaje_seguro(msg)
 
 async def main_loop():
-    logger.info("Bot BossOddsMX Iniciado con API de Resultados. Monitoreando horario de CDMX...")
+    logger.info("Bot BossOddsMX Dinámico y Evaluador Iniciado. Monitoreando horario de CDMX...")
     while True:
         ahora = datetime.now(MX_TZ)
         
