@@ -26,41 +26,39 @@ MX_TZ = timezone(timedelta(hours=-6))
 picks_enviados_hoy = []
 
 # ==========================================
+# LISTA DE LIGAS PRINCIPALES PERMITIDAS (ÉLITE)
+# ==========================================
+LIGAS_PERMITIDAS = [
+    # Fútbol Élite e Internacional
+    "soccer_uefa_champions_league", "soccer_uefa_europa_league", 
+    "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", 
+    "soccer_germany_bundesliga", "soccer_france_ligue_1", "soccer_mexico_liga_mx",
+    # Béisbol Pro
+    "baseball_mlb", "baseball_lmb",
+    # Básquetbol Pro
+    "basketball_nba",
+    # Fútbol Americano Pro
+    "americanfootball_nfl",
+    # Tenis Pro
+    "tennis_atp_wimbledon", "tennis_atp_us_open", "tennis_atp_french_open", "tennis_atp_australian_open",
+    "tennis_wta_wimbledon", "tennis_wta_us_open", "tennis_wta_french_open", "tennis_wta_australian_open",
+    "tennis_atp_masters_1000", "tennis_wta_1000"
+]
+
+# ==========================================
 # FUNCIONES DE CONEXIÓN CON THE ODDS API
 # ==========================================
 
-def obtener_deportes_activos(incluir_secundarias=False):
-    """Consulta la API para obtener ligas activas. Si incluir_secundarias es True, expande el radar."""
+def obtener_deportes_activos():
+    """Consulta la API y filtra únicamente las ligas de primer nivel permitidas."""
     url = "https://api.the-odds-api.com/v4/sports/"
     params = {"apiKey": ODDS_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=12)
         if response.status_code == 200:
             deportes = response.json()
-            
-            # Plan A: Ligas Principales
-            grupos_top = ["Soccer", "Basketball", "Baseball", "American Football", "Tennis"]
-            
-            # Si faltan picks, el bot aceptará estas ligas secundarias conocidas (Championship, Segunda, Copas, etc.)
-            palabras_clave_secundarias = ["championship", "segunda", "serie_b", "league_one", "bundesliga_2", "euroleague", "lnbp"]
-            
-            filtrados = []
-            for d in deportes:
-                if not d.get('active'):
-                    continue
-                
-                key_lower = d.get('key', '').lower()
-                grupo = d.get('group')
-                
-                # Filtrado base por grupo deportivo importante (dejando fuera Hockey)
-                if grupo in grupos_top:
-                    if not incluir_secundarias:
-                        # En el primer intento omitimos ligas que explícitamente se vean muy secundarias
-                        if any(pc in key_lower for pc in palabras_clave_secundarias):
-                            continue
-                    filtrados.append(d['key'])
-                    
-            return filtrados
+            # Solo dejamos pasar si están explícitamente en nuestro catálogo de LIGAS_PERMITIDAS
+            return [d['key'] for d in deportes if d.get('key') in LIGAS_PERMITIDAS and d.get('active')]
         return []
     except Exception as e:
         logger.error(f"Error al obtener deportes activos: {e}")
@@ -107,17 +105,37 @@ def mapear_icono_deporte(sport_key):
 # LÓGICA DE PROCESAMIENTO
 # ==========================================
 
-def recolectar_de_ligas(ligas, cuota_min, cuota_max):
-    """Bloque de código optimizado para extraer candidatos de una lista de ligas."""
-    lista_candidatos = []
-    for liga in ligas:
+def procesar_cartelera_completa():
+    candidatos = []
+    ligas_elite = obtener_deportes_activos()
+
+    # Si la API no reporta ligas específicas activas en su lista estricta, ampliamos al grupo base filtrando lo universitario
+    if not ligas_elite:
+        logger.warning("No se detectaron llaves específicas de ligas élite activas. Usando filtro por grupo...")
+        try:
+            url = "https://api.the-odds-api.com/v4/sports/"
+            res = requests.get(url, params={"apiKey": ODDS_API_KEY}, timeout=12).json()
+            ligas_elite = [d['key'] for d in res if d.get('group') in ["Soccer", "Basketball", "Baseball", "American Football", "Tennis"] and d.get('active')]
+        except:
+            return []
+
+    for liga in ligas_elite:
+        # Bloqueo total de ligas universitarias de EUA (NCAA) basándonos en la clave de la liga
+        if "ncaa" in liga.lower() or "championship" in liga.lower():
+            continue
+
         mercados = "h2h,totals" if any(x in liga for x in ["baseball", "basketball", "americanfootball"]) else "h2h"
-        partidos = obtener_picks_deporte(liga, mercados)
+        partidos = obtener_picks_deporte(liga, markets=mercados)
         
         if not partidos:
             continue
 
         for partido in partidos:
+            # Doble escudo: si se coló un equipo universitario en el nombre del partido, lo saltamos
+            partido_lower = f"{partido.get('home_team', '')} {partido.get('away_team', '')}".lower()
+            if any(uni in partido_lower for uni in ["state", "university", "ncaa", "fighting irish", "badgers", "cowboys", "seminoles", "longhorns"]):
+                continue
+
             bookmakers = partido.get("bookmakers", [])
             if not bookmakers: continue
             bookie = bookmakers[0]
@@ -131,8 +149,8 @@ def recolectar_de_ligas(ligas, cuota_min, cuota_max):
                 for o in outcomes:
                     cuota = o.get("price")
                     
-                    # Filtro de cuota dinámico según la importancia de la liga
-                    if cuota and cuota_min <= cuota <= cuota_max:
+                    # Filtro de cuota estándar premium para ligas mayores (1.50 a 1.95)
+                    if cuota and 1.50 <= cuota <= 1.95:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
                         if market_key == "h2h":
@@ -146,7 +164,7 @@ def recolectar_de_ligas(ligas, cuota_min, cuota_max):
                         if "baseball_lmb" in liga.lower():
                             nombre_deporte = "⚾ Béisbol (LMB)"
 
-                        lista_candidatos.append({
+                        candidatos.append({
                             "deporte": nombre_deporte,
                             "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
                             "pick": tipo_pick,
@@ -155,24 +173,7 @@ def recolectar_de_ligas(ligas, cuota_min, cuota_max):
                             "sport_key": liga
                         })
                         break
-    return lista_candidatos
-
-def procesar_cartelera_completa():
-    # INTENTO 1: Ligas Top con filtro estándar (1.50 - 1.95)
-    ligas_top = obtener_deportes_activos(incluir_secundarias=False)
-    candidatos = recolectar_de_ligas(ligas_top, 1.50, 1.95)
     
-    # Si no juntamos los 6 picks, activamos el Plan B de contingencia inteligente
-    if len(candidatos) < 6:
-        logger.info(f"Cartelera Top floja ({len(candidatos)} picks). Activando Plan B con ligas secundarias conocidas...")
-        ligas_secundarias = obtener_deportes_activos(incluir_secundarias=True)
-        # Filtramos solo las que no procesamos antes
-        nuevas_ligas = [l for l in ligas_secundarias if l not in ligas_top]
-        
-        # Para ligas secundarias, apretamos el filtro a cuotas más seguras (1.40 - 1.75)
-        candidatos_plan_b = recolectar_de_ligas(nuevas_ligas, 1.40, 1.75)
-        candidatos.extend(candidatos_plan_b)
-
     random.shuffle(candidatos)
     return candidatos[:6]
 
@@ -218,7 +219,6 @@ async def enviar_mensaje_seguro(texto):
 # ==========================================
 
 def evaluar_pick(pick_str, scores):
-    """Analiza el marcador final y determina si el pick se ganó, perdió o empató."""
     try:
         score1 = float(scores[0]['score'])
         score2 = float(scores[1]['score'])
@@ -258,15 +258,6 @@ def evaluar_pick(pick_str, scores):
 # TAREAS PROGRAMADAS
 # ==========================================
 
-async def mandar_buenos_dias():
-    msg = (
-        "☀️ ¡Buenos días, familia de BossOddsMX! ☀️\n\n"
-        "Nuestro sistema ha terminado de escanear la cartelera completa del mundo deportivo.\n\n"
-        "Hoy el algoritmo seleccionó lo mejor del mercado global enfocándose en la fusión perfecta: **Probabilidad Segura + Cuota de Valor (+EV)**. 📈\n\n"
-        "Preparen las notificaciones, a las 8:30 AM cae nuestro Top 6 de hoy. ¡Listos para cobrar! 🟢💰"
-    )
-    await enviar_mensaje_seguro(msg)
-
 async def mandar_picks_del_dia():
     global picks_enviados_hoy
     picks_del_dia = procesar_cartelera_completa()
@@ -278,7 +269,7 @@ async def mandar_picks_del_dia():
             await enviar_mensaje_seguro(texto_formateado)
             await asyncio.sleep(5)
     else:
-        await enviar_mensaje_seguro("⚠️ Hoy los mercados no ofrecieron cuotas seguras en el rango establecido. Protegemos el bankroll. 🏦")
+        await enviar_mensaje_seguro("⚠️ Los mercados principales no ofrecieron cuotas seguras en este momento. Protegemos el bankroll. 🏦")
 
 async def mandar_reporte_profit():
     global picks_enviados_hoy
@@ -292,7 +283,7 @@ async def mandar_reporte_profit():
 
     msg = (
         "📊 **BossOddsMX – Resumen de la Jornada** 📊\n\n"
-        "Cerramos las actions de hoy. Estos fueron los resultados de nuestros 6 picks estratégicos:\n\n"
+        "Cerramos las acciones de hoy. Estos fueron los resultados de nuestros nuevos 6 picks estratégicos de ligas mayores:\n\n"
     )
     
     for pick in picks_enviados_hoy:
@@ -315,31 +306,31 @@ async def mandar_reporte_profit():
         msg += f"Resultado: {marcador_texto}\n"
         msg += f"Estatus: **{estado_pick}**\n\n"
         
-    msg += "¡Revisen sus boletos! El análisis está dando frutos, mañana volvemos por más verdes. 📈💰"
+    msg += "¡Revisen sus boletos! El análisis real está dando frutos, mañana volvemos por más verdes. 📈💰"
     await enviar_mensaje_seguro(msg)
 
 async def mandar_buenas_noches():
     msg = (
         "🌙 **¡Buenas noches, equipo!** 🌙\n\n"
         "Cerramos las cortinas de hoy en BossOddsMX.\n\n"
-        "A descansar, que el bot se queda trabajando para traernos las mejores 6 oportunidades de mañana. ¡Éxito a todos! 💤💪"
+        "A descansar, que el bot se queda trabajando para traernos las mejores 6 oportunidades de las ligas más importantes mañana. ¡Éxito a todos! 💤💪"
     )
     await enviar_mensaje_seguro(msg)
 
 async def main_loop():
-    logger.info("Bot BossOddsMX Inteligencia de Contingencia Iniciado. Monitoreando horario de CDMX...")
+    global picks_enviados_hoy
+    logger.info("Bot BossOddsMX Iniciado. Lanzando ráfaga inmediata de picks de Ligas Mayores...")
+    
+    # ⚡ LANZAMIENTO INMEDIATO DE CORRECCIÓN (Solo se ejecuta una vez al prender el bot ahorita)
+    await enviar_mensaje_seguro("🔄 **Actualización de Cartelera Premium:** Reajustamos el sistema para enfocarnos exclusivamente en ligas de primer nivel. Aquí vienen los 6 picks oficiales de hoy:")
+    await mandar_picks_del_dia()
+    
+    # Entra en bucle infinito monitoreando el reloj de CDMX
     while True:
         ahora = datetime.now(MX_TZ)
         
-        if ahora.hour == 8 and ahora.minute == 20:
-            await mandar_buenos_dias()
-            await asyncio.sleep(70)
-            
-        elif ahora.hour == 8 and ahora.minute == 30:
-            await mandar_picks_del_dia()
-            await asyncio.sleep(70)
-            
-        elif ahora.hour == 23 and ahora.minute == 45:
+        # Saltamos los disparos de la mañana (8:20 y 8:30) porque YA los mandamos de golpe ahorita
+        if ahora.hour == 23 and ahora.minute == 45:
             await mandar_reporte_profit()
             await asyncio.sleep(70)
             
