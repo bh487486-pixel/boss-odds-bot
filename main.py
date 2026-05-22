@@ -29,16 +29,38 @@ picks_enviados_hoy = []
 # FUNCIONES DE CONEXIÓN CON THE ODDS API
 # ==========================================
 
-def obtener_deportes_activos():
-    """Consulta la API para obtener una lista de todos los deportes importantes activos hoy."""
+def obtener_deportes_activos(incluir_secundarias=False):
+    """Consulta la API para obtener ligas activas. Si incluir_secundarias es True, expande el radar."""
     url = "https://api.the-odds-api.com/v4/sports/"
     params = {"apiKey": ODDS_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=12)
         if response.status_code == 200:
             deportes = response.json()
-            grupos_importantes = ["Soccer", "Basketball", "Baseball", "American Football", "Tennis"]
-            return [d['key'] for d in deportes if d.get('group') in grupos_importantes and d.get('active')]
+            
+            # Plan A: Ligas Principales
+            grupos_top = ["Soccer", "Basketball", "Baseball", "American Football", "Tennis"]
+            
+            # Si faltan picks, el bot aceptará estas ligas secundarias conocidas (Championship, Segunda, Copas, etc.)
+            palabras_clave_secundarias = ["championship", "segunda", "serie_b", "league_one", "bundesliga_2", "euroleague", "lnbp"]
+            
+            filtrados = []
+            for d in deportes:
+                if not d.get('active'):
+                    continue
+                
+                key_lower = d.get('key', '').lower()
+                grupo = d.get('group')
+                
+                # Filtrado base por grupo deportivo importante (dejando fuera Hockey)
+                if grupo in grupos_top:
+                    if not incluir_secundarias:
+                        # En el primer intento omitimos ligas que explícitamente se vean muy secundarias
+                        if any(pc in key_lower for pc in palabras_clave_secundarias):
+                            continue
+                    filtrados.append(d['key'])
+                    
+            return filtrados
         return []
     except Exception as e:
         logger.error(f"Error al obtener deportes activos: {e}")
@@ -73,7 +95,6 @@ def obtener_marcadores(sport_key):
         return []
 
 def mapear_icono_deporte(sport_key):
-    """Asigna un emoji de manera dinámica según la liga."""
     sport_key_lower = sport_key.lower()
     if "soccer" in sport_key_lower: return "⚽ Fútbol"
     if "baseball" in sport_key_lower: return "⚾ Béisbol"
@@ -86,12 +107,10 @@ def mapear_icono_deporte(sport_key):
 # LÓGICA DE PROCESAMIENTO
 # ==========================================
 
-def procesar_cartelera_completa():
-    candidatos = []
-    
-    ligas_dinamicas = obtener_deportes_activos()
-
-    for liga in ligas_dinamicas:
+def recolectar_de_ligas(ligas, cuota_min, cuota_max):
+    """Bloque de código optimizado para extraer candidatos de una lista de ligas."""
+    lista_candidatos = []
+    for liga in ligas:
         mercados = "h2h,totals" if any(x in liga for x in ["baseball", "basketball", "americanfootball"]) else "h2h"
         partidos = obtener_picks_deporte(liga, mercados)
         
@@ -112,7 +131,8 @@ def procesar_cartelera_completa():
                 for o in outcomes:
                     cuota = o.get("price")
                     
-                    if cuota and 1.50 <= cuota <= 1.95:
+                    # Filtro de cuota dinámico según la importancia de la liga
+                    if cuota and cuota_min <= cuota <= cuota_max:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
                         if market_key == "h2h":
@@ -126,7 +146,7 @@ def procesar_cartelera_completa():
                         if "baseball_lmb" in liga.lower():
                             nombre_deporte = "⚾ Béisbol (LMB)"
 
-                        candidatos.append({
+                        lista_candidatos.append({
                             "deporte": nombre_deporte,
                             "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
                             "pick": tipo_pick,
@@ -134,7 +154,24 @@ def procesar_cartelera_completa():
                             "bookie": bookie.get("title", "Bet365"),
                             "sport_key": liga
                         })
-                        break 
+                        break
+    return lista_candidatos
+
+def procesar_cartelera_completa():
+    # INTENTO 1: Ligas Top con filtro estándar (1.50 - 1.95)
+    ligas_top = obtener_deportes_activos(incluir_secundarias=False)
+    candidatos = recolectar_de_ligas(ligas_top, 1.50, 1.95)
+    
+    # Si no juntamos los 6 picks, activamos el Plan B de contingencia inteligente
+    if len(candidatos) < 6:
+        logger.info(f"Cartelera Top floja ({len(candidatos)} picks). Activando Plan B con ligas secundarias conocidas...")
+        ligas_secundarias = obtener_deportes_activos(incluir_secundarias=True)
+        # Filtramos solo las que no procesamos antes
+        nuevas_ligas = [l for l in ligas_secundarias if l not in ligas_top]
+        
+        # Para ligas secundarias, apretamos el filtro a cuotas más seguras (1.40 - 1.75)
+        candidatos_plan_b = recolectar_de_ligas(nuevas_ligas, 1.40, 1.75)
+        candidatos.extend(candidatos_plan_b)
 
     random.shuffle(candidatos)
     return candidatos[:6]
@@ -188,7 +225,6 @@ def evaluar_pick(pick_str, scores):
         name1 = scores[0]['name']
         name2 = scores[1]['name']
         
-        # Evaluar ganador directo (H2H)
         if "Gana" in pick_str:
             team_picked = pick_str.replace("Gana ", "").strip()
             winner = None
@@ -199,11 +235,10 @@ def evaluar_pick(pick_str, scores):
             elif winner is None: return "⚪ EMPATE / PUSH"
             else: return "🔴 PERDIDO"
                 
-        # Evaluar Altas/Bajas
         elif "Altas/Over" in pick_str or "Bajas/Under" in pick_str:
             total_puntos = score1 + score2
             partes = pick_str.split(" ")
-            linea = float(partes[1]) # Extrae el número, ej: "8.5"
+            linea = float(partes[1])
             
             if "Altas/Over" in pick_str:
                 if total_puntos > linea: return "🟢 GANADO"
@@ -257,7 +292,7 @@ async def mandar_reporte_profit():
 
     msg = (
         "📊 **BossOddsMX – Resumen de la Jornada** 📊\n\n"
-        "Cerramos las acciones de hoy. Estos fueron los resultados de nuestros 6 picks estratégicos:\n\n"
+        "Cerramos las actions de hoy. Estos fueron los resultados de nuestros 6 picks estratégicos:\n\n"
     )
     
     for pick in picks_enviados_hoy:
@@ -292,7 +327,7 @@ async def mandar_buenas_noches():
     await enviar_mensaje_seguro(msg)
 
 async def main_loop():
-    logger.info("Bot BossOddsMX Dinámico y Evaluador Iniciado. Monitoreando horario de CDMX...")
+    logger.info("Bot BossOddsMX Inteligencia de Contingencia Iniciado. Monitoreando horario de CDMX...")
     while True:
         ahora = datetime.now(MX_TZ)
         
