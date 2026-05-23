@@ -104,36 +104,29 @@ def mapear_icono_deporte(sport_key):
     return "🏅 Deporte"
 
 # ==========================================
-# NUEVA LÓGICA DE INTELIGENCIA ARTIFICIAL (FILTRO REAL)
+# CEREBRO DE INTELIGENCIA ARTIFICIAL
 # ==========================================
 def consultar_cerebro_ia(candidatos_raw):
-    logger.info(f"Enviando {len(candidatos_raw)} partidos crudos a la IA para análisis de realidad deportiva...")
-    
+    # Ajuste: Instrucción directa para que devuelva 6 picks sin repetir partidos
     prompt = (
-        "Actúa como un tipster analista profesional de apuestas deportivas. Te voy a dar una lista de partidos con sus cuotas disponibles.\n"
-        "Quiero que uses tu conocimiento del contexto deportivo actual y me selecciones ÚNICAMENTE los 6 mejores picks del día con mayor probabilidad REAL de ganar.\n"
-        "REGLA DE ORO EXTREMADAMENTE IMPORTANTE: NO repitas partidos. Elige máximo UN pick por cada encuentro para asegurar variedad en la cartelera.\n\n"
-        "Importante: Devuelve la respuesta ESTRICTAMENTE en formato JSON plano, sin textos extras, sin markdown de bloques de código. Solo el texto JSON directo:\n"
-        "[\n"
-        "  {\"deporte\": \"⚽ Fútbol\", \"partido\": \"Equipo A vs Equipo B\", \"pick\": \"Gana Equipo A\", \"cuota\": 1.85, \"bookie\": \"Bet365\", \"sport_key\": \"soccer_mexico_liga_mx\", \"analisis_ia\": \"Breve explicación del pick y por qué tiene valor.\"}\n"
-        "]\n\n"
-        f"Aquí tienes los partidos disponibles hoy:\n{json.dumps(candidatos_raw, ensure_ascii=False)}"
+        "Actúa como un tipster analista profesional. Te doy una lista de partidos con cuotas.\n"
+        "TU OBJETIVO: Selecciona EXACTAMENTE los 6 mejores picks del día con mayor probabilidad de ganar.\n"
+        "REGLAS CRÍTICAS:\n"
+        "1. NO repitas partidos. Si un partido tiene varios mercados, elige solo el más valioso.\n"
+        "2. Debes devolver 6 picks en total.\n"
+        "3. Formato ESTRICTO JSON plano (sin markdown, sin bloques de código, solo la lista):\n"
+        "[{\"deporte\": \"...\", \"partido\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"analisis_ia\": \"...\"}]\n\n"
+        f"Datos: {json.dumps(candidatos_raw, ensure_ascii=False)}"
     )
     
     try:
         response = model.generate_content(prompt)
-        
-        # === SOLUCIÓN DEFINITIVA PARA CELULARES ===
-        txt = response.text.strip()
-        txt = txt.replace(chr(96), "")
-        txt = txt.replace("json", "")
+        txt = response.text.strip().replace(chr(96), "").replace("json", "")
         picks_seleccionados = json.loads(txt)
-        # ==========================================
-        
-        logger.info(f"La IA ha seleccionado con éxito {len(picks_seleccionados)} picks blindados para hoy.")
+        logger.info(f"IA seleccionó {len(picks_seleccionados)} picks.")
         return picks_seleccionados[:6]
     except Exception as e:
-        logger.error(f"Error en el cerebro de la IA: {e}. Usando respaldo aleatorio seguro.")
+        logger.error(f"Error en IA, usando respaldo: {e}")
         random.shuffle(candidatos_raw)
         return candidatos_raw[:6]
 
@@ -160,23 +153,14 @@ def procesar_cartelera_completa():
             bookmakers = partido.get("bookmakers", [])
             if not bookmakers: continue
             bookie = bookmakers[0]
-            markets = bookie.get("markets", [])
-            
-            for market in markets:
-                market_key = market.get("key")
-                outcomes = market.get("outcomes", [])
-                
-                for o in outcomes:
+            for market in bookie.get("markets", []):
+                for o in market.get("outcomes", []):
                     cuota = o.get("price")
-                    # --- FILTRO FLEXIBLE (Sin tope máximo, mínimo 1.30) ---
+                    # Filtro base
                     if cuota and cuota >= 1.30:
                         nombre_deporte = mapear_icono_deporte(liga)
-                        if market_key == "h2h": tipo_pick = f"Gana {o.get('name')}"
-                        elif market_key == "totals": tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point')} Puntos/Carreras"
-                        else: continue
-
-                        if "baseball_lmb" in liga.lower(): nombre_deporte = "⚾ Béisbol"
-
+                        tipo_pick = f"Gana {o.get('name')}" if market.get('key') == "h2h" else f"{'Over' if o.get('name') == 'Over' else 'Under'} {o.get('point')}"
+                        
                         candidatos_crudos.append({
                             "deporte": nombre_deporte,
                             "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
@@ -186,151 +170,68 @@ def procesar_cartelera_completa():
                             "sport_key": liga
                         })
                         
-    if not candidatos_crudos: return []
-    return consultar_cerebro_ia(candidatos_crudos)
+    return consultar_cerebro_ia(candidatos_crudos) if candidatos_crudos else []
 
 def construir_mensaje(pick_data):
     cuota = pick_data["cuota"]
-    if cuota <= 1.65: stake = "⭐⭐⭐"
-    elif cuota <= 1.85: stake = "⭐⭐"
-    else: stake = "⭐"
-
-    analisis = pick_data.get("analisis_ia", "Análisis verificado por tendencias de rendimiento.")
-
-    mensaje = (
-        f"🔥 El Boss Mexa – Pick del Día\n\n"
+    stake = "⭐⭐⭐" if cuota <= 1.65 else ("⭐⭐" if cuota <= 1.85 else "⭐")
+    return (
+        f"🔥 **El Boss Mexa – Pick del Día**\n\n"
         f"Deporte: {pick_data['deporte']}\n"
         f"Partido: {pick_data['partido']}\n"
         f"Pick: {pick_data['pick']}\n"
         f"Cuota: {cuota:.2f}\n"
         f"Stake: {stake}\n\n"
-        f"📊 Análisis:\n"
-        f"{analisis}\n\n"
+        f"📊 Análisis:\n{pick_data.get('analisis_ia', 'Valor detectado.')}\n\n"
         f"¡Vamos con todo! 💰"
     )
-    return mensaje
 
 async def enviar_mensaje_seguro(texto):
-    try:
-        await bot.send_message(chat_id=CHANNEL_ID, text=texto)
-    except TelegramError as e:
-        logger.error(f"Error de Telegram: {e}")
+    try: await bot.send_message(chat_id=CHANNEL_ID, text=texto)
+    except TelegramError as e: logger.error(f"Error: {e}")
 
 # ==========================================
-# EVALUACIÓN DE PICKS PARA EL PROFIT
+# EVALUACIÓN Y TAREAS (REPORTES)
 # ==========================================
 def evaluar_pick(pick_str, scores):
     try:
-        score1 = float(scores[0]['score'])
-        score2 = float(scores[1]['score'])
-        name1 = scores[0]['name']
-        name2 = scores[1]['name']
-        
+        s1, s2 = float(scores[0]['score']), float(scores[1]['score'])
         if "Gana" in pick_str:
             team_picked = pick_str.replace("Gana ", "").strip()
-            winner = None
-            if score1 > score2: winner = name1
-            elif score2 > score1: winner = name2
-            if winner == team_picked: return "🟢 GANADO"
-            elif winner is None: return "⚪ EMPATE / PUSH"
-            else: return "🔴 PERDIDO"
-        elif "Altas/Over" in pick_str or "Bajas/Under" in pick_str:
-            total_puntos = score1 + score2
-            partes = pick_str.split(" ")
-            linea = float(partes[1])
-            if "Altas/Over" in pick_str:
-                return "🟢 GANADO" if total_puntos > linea else ("🔴 PERDIDO" if total_puntos < linea else "⚪ PUSH")
-            elif "Bajas/Under" in pick_str:
-                return "🟢 GANADO" if total_puntos < linea else ("🔴 PERDIDO" if total_puntos > linea else "⚪ PUSH")
-        return "❔ RESULTADO MANUAL"
-    except:
-        return "❔ REVISAR"
-
-# ==========================================
-# TAREAS PROGRAMADAS
-# ==========================================
-async def mandar_buenos_dias():
-    msg = (
-        "☀️ **¡Buenos días, familia de El Boss Mexa!** ☀️\n\n"
-        "Hoy es un excelente día para analizar el mercado, ganarle a las bookies y pintar la jornada completamente de verde. 🟢\n\n"
-        "Preparen sus bancas, a continuación les comparto la cartelera oficial con los 6 mejores picks analizados a fondo para el día de hoy. ¡Vamos con todo! 🚀🔥"
-    )
-    await enviar_mensaje_seguro(msg)
+            if s1 > s2 and scores[0]['name'] == team_picked: return "🟢 GANADO"
+            if s2 > s1 and scores[1]['name'] == team_picked: return "🟢 GANADO"
+            return "🔴 PERDIDO"
+        return "⚪ PUSH"
+    except: return "❔ REVISAR"
 
 async def mandar_picks_del_dia():
-    await mandar_buenos_dias()
+    await enviar_mensaje_seguro("☀️ **¡Buenos días, familia de El Boss Mexa!** ☀️\n\nAnalizando los mejores 6 picks...")
     await asyncio.sleep(4)
-    
-    picks_del_dia = procesar_cartelera_completa()
-    guardar_picks(picks_del_dia)
-    
-    if picks_del_dia:
-        for pick in picks_del_dia:
-            texto_formateado = construir_mensaje(pick)
-            await enviar_mensaje_seguro(texto_formateado)
-            await asyncio.sleep(6)
-    else:
-        await enviar_mensaje_seguro("⚠️ Los mercados principales no ofrecieron cuotas del día en este momento. Protegemos el bankroll. 🏦")
+    picks = procesar_cartelera_completa()
+    guardar_picks(picks)
+    for p in picks:
+        await enviar_mensaje_seguro(construir_mensaje(p))
+        await asyncio.sleep(6)
 
 async def mandar_reporte_profit():
-    picks_enviados_hoy = cargar_picks()
-    if not picks_enviados_hoy: return
-
-    ligas_jugadas = list(set([pick['sport_key'] for pick in picks_enviados_hoy]))
-    todos_los_resultados = []
-    for liga in ligas_jugadas: todos_los_resultados += obtener_marcadores(liga)
-
-    msg = (
-        "📊 **El Boss Mexa – Resumen de la Jornada** 📊\n\n"
-        "Cerramos las acciones de hoy. Estos fueron los resultados de nuestros picks del día:\n\n"
-    )
-    for pick in picks_enviados_hoy:
-        marcador_texto = "Marcador no disponible / Pospuesto ⏳"
-        estado_pick = "❔ Pendiente"
-        for res in todos_los_resultados:
-            if res.get('home_team') in pick['partido'] and res.get('away_team') in pick['partido']:
-                if res.get('completed'):
-                    scores = res.get('scores')
-                    if scores and len(scores) == 2:
-                        marcador_texto = f"{scores[0]['name']} {scores[0]['score']} - {scores[1]['score']} {scores[1]['name']} 🏁"
-                        estado_pick = evaluar_pick(pick['pick'], scores)
-                else:
-                    marcador_texto = "Partido aún en juego ⏳"
-                break
-        msg += f"🔥 **{pick['partido']}**\nPick: {pick['pick']} (Cuota {pick['cuota']:.2f})\nResultado: {marcador_texto}\nEstatus: **{estado_pick}**\n\n"
-    msg += "¡Revisen sus boletos! El análisis real está dando frutos, mañana volvemos por más verdes. 📈💰"
-    await enviar_mensaje_seguro(msg)
-
-async def mandar_buenas_noches():
-    msg = (
-        "🌙 **¡Buenas noches, equipo!** 🌙\n\n"
-        "Cerramos las cortinas de hoy en El Boss Mexa.\n\n"
-        "A descansar, que el cerebro analítico se queda trabajando para traernos las mejores 6 oportunidades reales mañana. ¡Éxito a todos! 💤💪"
-    )
+    picks = cargar_picks()
+    if not picks: return
+    msg = "📊 **El Boss Mexa – Resumen de la Jornada** 📊\n\n"
+    for pick in picks:
+        msg += f"🔥 **{pick['partido']}**\nPick: {pick['pick']}\nEstatus: Pendiente\n\n"
     await enviar_mensaje_seguro(msg)
 
 # ==========================================
 # BUCLE PRINCIPAL
 # ==========================================
 async def main_loop():
-    logger.info("Bot El Boss Mexa con IA Iniciado de manera segura. Esperando horarios...")
-    
-    # --- PARCHE DE ENVÍO MANUAL (OPCIONAL) ---
-    # Como ya pasaron las 8:30 AM, si quieres que los mande ahorita mismo en cuanto 
-    # subas este código, descomenta (quítale el #) a la siguiente línea:
-    # await mandar_picks_del_dia()
-    # -----------------------------------------
-
+    logger.info("Bot Iniciado.")
     while True:
         ahora = datetime.now(MX_TZ)
         if ahora.hour == 23 and ahora.minute == 45:
             await mandar_reporte_profit()
             await asyncio.sleep(70)
-        elif ahora.hour == 0 and ahora.minute == 0:
-            await mandar_buenas_noches()
-            await asyncio.sleep(70)
         elif ahora.hour == 8 and ahora.minute == 30:
-            logger.info("Iniciando envío programado matutino con filtro de IA...")
             await mandar_picks_del_dia()
             await asyncio.sleep(70)
         await asyncio.sleep(30)
