@@ -107,7 +107,6 @@ def mapear_icono_deporte(sport_key):
 # CEREBRO DE INTELIGENCIA ARTIFICIAL
 # ==========================================
 def consultar_cerebro_ia(candidatos_raw):
-    # Ajuste: Instrucción directa para que devuelva 6 picks sin repetir partidos
     prompt = (
         "Actúa como un tipster analista profesional. Te doy una lista de partidos con cuotas.\n"
         "TU OBJETIVO: Selecciona EXACTAMENTE los 6 mejores picks del día con mayor probabilidad de ganar.\n"
@@ -205,7 +204,7 @@ def evaluar_pick(pick_str, scores):
     except: return "❔ REVISAR"
 
 async def mandar_picks_del_dia():
-    await enviar_mensaje_seguro("☀️ **¡Buenos días, familia de El Boss Mexa!** ☀️\n\nAnalizando los mejores 6 picks...")
+    await enviar_mensaje_seguro("☀️ **¡Buenos días, familia de El Boss Mexa!** ☀️\n\nAnalizando los mejores 6 picks para la jornada...")
     await asyncio.sleep(4)
     picks = procesar_cartelera_completa()
     guardar_picks(picks)
@@ -225,7 +224,13 @@ async def mandar_reporte_profit():
 # BUCLE PRINCIPAL
 # ==========================================
 async def main_loop():
-    logger.info("Bot Iniciado.")
+    logger.info("Bot Iniciado. Lanzando los picks iniciales de inmediato...")
+    
+    # 🚀 DISPARO INMEDIATO AL CARGAR EL CÓDIGO
+    await mandar_picks_del_dia()
+    logger.info("Picks iniciales enviados. Entrando al ciclo de horarios normales...")
+
+    # 🕒 CICLO NORMAL DE HORARIOS
     while True:
         ahora = datetime.now(MX_TZ)
         if ahora.hour == 23 and ahora.minute == 45:
