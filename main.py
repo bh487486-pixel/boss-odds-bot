@@ -63,7 +63,7 @@ LIGAS_PERMITIDAS = [
 ]
 
 def obtener_deportes_activos():
-    url = "https://api.the-odds-api.com/v4/sports/"
+    url = "[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/)"
     params = {"apiKey": ODDS_API_KEY}
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -76,7 +76,7 @@ def obtener_deportes_activos():
         return []
 
 def obtener_picks_deporte(sport_key, markets):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/"
     params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -86,7 +86,7 @@ def obtener_picks_deporte(sport_key, markets):
         return []
 
 def obtener_marcadores(sport_key):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/scores/"
     params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -122,13 +122,13 @@ def consultar_cerebro_ia(candidatos_raw):
     try:
         response = model.generate_content(prompt)
         
-        # === SOLUCIÓN: Líneas cortas para que el celular no las rompa al pegar ===
+        # === SOLUCIÓN DEFINITIVA PARA CELULARES ===
+        # chr(96) es el carácter del acento grave (`). Lo usamos para no escribirlo.
         txt = response.text.strip()
-        txt = txt.replace("```json", "")
-        txt = txt.replace("
-```", "")
+        txt = txt.replace(chr(96), "")
+        txt = txt.replace("json", "")
         picks_seleccionados = json.loads(txt)
-        # =========================================================================
+        # ==========================================
         
         logger.info(f"La IA ha seleccionado con éxito {len(picks_seleccionados)} picks blindados para hoy.")
         return picks_seleccionados[:6]
