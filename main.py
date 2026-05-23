@@ -20,10 +20,10 @@ CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configurar el cerebro de Gemini
+# Configurar el cerebro de Gemini (Actualizado al modelo vigente)
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 else:
     logger.error("¡ALERTA! No se encontró la GEMINI_API_KEY.")
 
@@ -31,6 +31,23 @@ bot = Bot(token=TELEGRAM_TOKEN)
 REGIONS = "us,eu"
 MX_TZ = timezone(timedelta(hours=-6))
 ARCHIVO_PICKS = "picks_hoy.json"
+ARCHIVO_LOG_ENVIO = "ultimo_envio.txt"
+
+# ==========================================
+# CANDADO ANTI-DUPLICADOS POR DÍA
+# ==========================================
+def ya_se_envio_hoy():
+    hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
+    if os.path.exists(ARCHIVO_LOG_ENVIO):
+        with open(ARCHIVO_LOG_ENVIO, "r") as f:
+            if f.read().strip() == hoy:
+                return True
+    return False
+
+def marcar_enviado_hoy():
+    hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
+    with open(ARCHIVO_LOG_ENVIO, "w") as f:
+        f.write(hoy)
 
 # ==========================================
 # MEMORIA PERSISTENTE (JSON)
@@ -107,7 +124,6 @@ def mapear_icono_deporte(sport_key):
 # CEREBRO IA CON FILTRO ESTRICTO ANTI-DUPLICADOS
 # ==========================================
 def consultar_cerebro_ia(candidatos_raw):
-    # Pedimos 10 picks para tener margen de maniobra si la IA repite
     prompt = (
         "Actúa como un tipster analista profesional de apuestas deportivas.\n"
         "TU OBJETIVO: Selecciona los 10 mejores picks del día con mayor probabilidad de ganar de la lista proporcionada.\n"
@@ -119,32 +135,29 @@ def consultar_cerebro_ia(candidatos_raw):
     )
     
     picks_finales_limpios = []
-    partidos_vistos = set() # El cadenero: guarda los partidos ya elegidos
+    partidos_vistos = set()
 
     try:
         response = model.generate_content(prompt)
         txt = response.text.strip().replace(chr(96), "").replace("json", "")
         picks_seleccionados = json.loads(txt)
         
-        # Filtro estricto en Python
         for pick in picks_seleccionados:
             nombre_partido = pick.get('partido')
             if nombre_partido and nombre_partido not in partidos_vistos:
                 picks_finales_limpios.append(pick)
                 partidos_vistos.add(nombre_partido)
             
-            # Nos detenemos en cuanto tengamos exactamente 6 únicos
             if len(picks_finales_limpios) == 6:
                 break
                 
-        logger.info(f"IA y filtro aplicados. Enviando {len(picks_finales_limpios)} picks únicos.")
+        logger.info(f"IA y filtro aplicados con éxito. Preparados {len(picks_finales_limpios)} picks únicos.")
         return picks_finales_limpios
 
     except Exception as e:
         logger.error(f"Error en IA, usando respaldo aleatorio con filtro estricto: {e}")
         random.shuffle(candidatos_raw)
         
-        # Filtro estricto para el respaldo
         for pick in candidatos_raw:
             nombre_partido = pick.get('partido')
             if nombre_partido and nombre_partido not in partidos_vistos:
@@ -187,7 +200,7 @@ def procesar_cartelera_completa():
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    if cuota and cuota >= 1.30: # Filtro bajado a 1.30 sin límite superior
+                    if cuota and cuota >= 1.30:
                         nombre_deporte = mapear_icono_deporte(liga)
                         if market_key == "h2h": tipo_pick = f"Gana {o.get('name')}"
                         elif market_key == "totals": tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point')} Puntos/Carreras"
@@ -276,6 +289,10 @@ async def mandar_buenos_dias():
     await enviar_mensaje_seguro(msg)
 
 async def mandar_picks_del_dia():
+    if ya_se_envio_hoy():
+        logger.info("Los picks de hoy ya fueron enviados previamente. Bloqueando duplicados.")
+        return
+
     await mandar_buenos_dias()
     await asyncio.sleep(4)
     
@@ -287,6 +304,7 @@ async def mandar_picks_del_dia():
             texto_formateado = construir_mensaje(pick)
             await enviar_mensaje_seguro(texto_formateado)
             await asyncio.sleep(6)
+        marcar_enviado_hoy()
     else:
         await enviar_mensaje_seguro("⚠️ Los mercados principales no ofrecieron cuotas del día en este momento. Protegemos el bankroll. 🏦")
 
@@ -331,13 +349,9 @@ async def mandar_buenas_noches():
 # BUCLE PRINCIPAL
 # ==========================================
 async def main_loop():
-    logger.info("Iniciando Bot El Boss Mexa. Ejecutando la orden inmediata de Picks...")
-    
-    # 🚀 ACCIÓN INMEDIATA: Manda los 6 picks en cuanto prendas o actualices el código
-    await mandar_picks_del_dia()
-    logger.info("Picks iniciales enviados correctamente. Entrando al ciclo de horarios normales.")
+    logger.info("Bot El Boss Mexa con IA (Gemini 1.5 Flash) Iniciado en horario normal. Esperando tareas programadas...")
 
-    # 🕒 CICLO NORMAL: Se queda vigilando los horarios para las siguientes tareas
+    # 🕒 CICLO EN HORARIOS FIJOS NORMALES (Sin disparos automáticos)
     while True:
         ahora = datetime.now(MX_TZ)
         if ahora.hour == 23 and ahora.minute == 45:
@@ -347,7 +361,7 @@ async def main_loop():
             await mandar_buenas_noches()
             await asyncio.sleep(70)
         elif ahora.hour == 8 and ahora.minute == 30:
-            logger.info("Iniciando envío programado matutino con filtro de IA...")
+            logger.info("Iniciando envío programado matutino...")
             await mandar_picks_del_dia()
             await asyncio.sleep(70)
         await asyncio.sleep(30)
