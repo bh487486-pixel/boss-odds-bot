@@ -115,15 +115,18 @@ def consultar_cerebro_ia(candidatos_raw):
         "Quiero que uses tu conocimiento del contexto deportivo actual (bajas, rachas de equipos, importancia del partido, dinámicas de juego reales) "
         "y me selecciones ÚNICAMENTE los 6 mejores picks del día con mayor probabilidad REAL de ganar (no te bases solo en el número de la cuota, busca realidades, evita trampas).\n\n"
         "Importante: Devuelve la respuesta ESTRICTAMENTE en formato JSON plano, que sea una lista de objetos con exactamente esta estructura, "
-        "sin textos extras, sin markdown de bloques de código de tipo ```json. Solo el texto JSON directo:\n"
-        '[\n  {"deporte": "⚽ Fútbol", "partido": "Equipo A vs Equipo B", "pick": "Gana Equipo A", "cuota": 1.85, "bookie": "Bet365", "sport_key": "soccer_mexico_liga_mx", "analisis_ia": "Breve explicación del pick y por qué tiene valor."}\n]\n\n'
+        "sin textos extras, sin markdown de bloques de código. Solo el texto JSON directo:\n"
+        "[\n"
+        "  {\"deporte\": \"⚽ Fútbol\", \"partido\": \"Equipo A vs Equipo B\", \"pick\": \"Gana Equipo A\", \"cuota\": 1.85, \"bookie\": \"Bet365\", \"sport_key\": \"soccer_mexico_liga_mx\", \"analisis_ia\": \"Breve explicación del pick y por qué tiene valor.\"}\n"
+        "]\n\n"
         f"Aquí tienes los partidos disponibles hoy:\n{json.dumps(candidatos_raw, ensure_ascii=False)}"
     )
     
     try:
         response = model.generate_content(prompt)
-        texto_limpio = response.text.strip().replace("
-```json", "").replace("```", "")
+        # Línea corregida para evitar errores de sintaxis en el celular
+        texto_limpio = response.text.strip().replace('```json', '').replace('
+```', '')
         picks_seleccionados = json.loads(texto_limpio)
         logger.info(f"La IA ha seleccionado con éxito {len(picks_seleccionados)} picks blindados para hoy.")
         return picks_seleccionados[:6]
@@ -163,7 +166,7 @@ def procesar_cartelera_completa():
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    if cuota and 1.45 <= cuota <= 2.20: # Rango abierto para más valor
+                    if cuota and 1.45 <= cuota <= 2.20:
                         nombre_deporte = mapear_icono_deporte(liga)
                         if market_key == "h2h": tipo_pick = f"Gana {o.get('name')}"
                         elif market_key == "totals": tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point')} Puntos/Carreras"
