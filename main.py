@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import json
+import sys
 from datetime import datetime, timezone, timedelta
 from telegram import Bot
 from telegram.error import TelegramError
@@ -20,12 +21,13 @@ CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configurar el cerebro de Gemini (Actualizado al modelo vigente)
+# Configurar el cerebro de Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
 else:
-    logger.error("¡ALERTA! No se encontró la GEMINI_API_KEY.")
+    logger.error("¡ALERTA! No se encontró la GEMINI_API_KEY. El bot se detendrá.")
+    sys.exit(1)
 
 bot = Bot(token=TELEGRAM_TOKEN)
 REGIONS = "us,eu"
@@ -172,8 +174,9 @@ def consultar_cerebro_ia(candidatos_raw):
 def procesar_cartelera_completa():
     candidatos_crudos = []
     ligas_elite = obtener_deportes_activos()
-    ahora_utc = datetime.now(timezone.utc)
-    limite_futuro_utc = ahora_utc + timedelta(hours=24)
+    
+    ahora_mx = datetime.now(MX_TZ)
+    fecha_hoy_mx = ahora_mx.date()
 
     for liga in ligas_elite:
         mercados = "h2h,totals" if any(x in liga for x in ["baseball", "basketball", "americanfootball"]) else "h2h"
@@ -186,7 +189,10 @@ def procesar_cartelera_completa():
             if commence_time_raw:
                 try:
                     partido_tiempo_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                    if partido_tiempo_utc < ahora_utc or partido_tiempo_utc > limite_futuro_utc: continue
+                    partido_tiempo_mx = partido_tiempo_utc.astimezone(MX_TZ)
+                    
+                    if partido_tiempo_mx.date() != fecha_hoy_mx: 
+                        continue
                 except: continue
 
             bookmakers = partido.get("bookmakers", [])
@@ -200,7 +206,8 @@ def procesar_cartelera_completa():
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    if cuota and cuota >= 1.30:
+                    # AJUSTE: Rango de seguridad entre 1.30 y 4.00
+                    if cuota and 1.30 <= cuota <= 4.00:
                         nombre_deporte = mapear_icono_deporte(liga)
                         if market_key == "h2h": tipo_pick = f"Gana {o.get('name')}"
                         elif market_key == "totals": tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point')} Puntos/Carreras"
@@ -244,8 +251,8 @@ def construir_mensaje(pick_data):
 async def enviar_mensaje_seguro(texto):
     try:
         await bot.send_message(chat_id=CHANNEL_ID, text=texto)
-    except TelegramError as e:
-        logger.error(f"Error de Telegram: {e}")
+    except Exception as e:
+        logger.error(f"Error al enviar mensaje a Telegram: {e}")
 
 # ==========================================
 # EVALUACIÓN DE PICKS PARA EL PROFIT
@@ -310,7 +317,9 @@ async def mandar_picks_del_dia():
 
 async def mandar_reporte_profit():
     picks_enviados_hoy = cargar_picks()
-    if not picks_enviados_hoy: return
+    if not picks_enviados_hoy: 
+        logger.warning("No hay picks registrados en el JSON para evaluar hoy.")
+        return
 
     ligas_jugadas = list(set([pick['sport_key'] for pick in picks_enviados_hoy]))
     todos_los_resultados = []
@@ -346,25 +355,53 @@ async def mandar_buenas_noches():
     await enviar_mensaje_seguro(msg)
 
 # ==========================================
-# BUCLE PRINCIPAL
+# BUCLE PRINCIPAL (Blindado con Flags)
 # ==========================================
 async def main_loop():
-    logger.info("Bot El Boss Mexa con IA (Gemini 1.5 Flash) Iniciado en horario normal. Esperando tareas programadas...")
+    logger.info("Bot El Boss Mexa con IA (Gemini 1.5 Flash) Iniciado correctamente. Sistema de Flags activo.")
 
-    # 🕒 CICLO EN HORARIOS FIJOS NORMALES (Sin disparos automáticos)
+    # Control de ejecuciones diarias para evitar fallos por saltos de segundos
+    enviado_profit = False
+    enviado_noches = False
+    enviado_picks = False
+    dia_actual = datetime.now(MX_TZ).date()
+
     while True:
-        ahora = datetime.now(MX_TZ)
-        if ahora.hour == 23 and ahora.minute == 45:
-            await mandar_reporte_profit()
-            await asyncio.sleep(70)
-        elif ahora.hour == 0 and ahora.minute == 0:
-            await mandar_buenas_noches()
-            await asyncio.sleep(70)
-        elif ahora.hour == 8 and ahora.minute == 30:
-            logger.info("Iniciando envío programado matutino...")
-            await mandar_picks_del_dia()
-            await asyncio.sleep(70)
-        await asyncio.sleep(30)
+        try:
+            ahora = datetime.now(MX_TZ)
+            
+            # Si cambió el día, reiniciamos las banderas de control
+            if ahora.date() != dia_actual:
+                dia_actual = ahora.date()
+                enviado_profit = False
+                enviado_noches = False
+                enviado_picks = False
+                logger.info(f"Nuevo día detectado ({dia_actual}). Banderas de envío reiniciadas.")
+
+            # 1. REPORTE PROFIT (Rango 11:45 PM a 11:50 PM)
+            if ahora.hour == 23 and 45 <= ahora.minute <= 50 and not enviado_profit:
+                logger.info("Ejecutando tarea programada: Reporte Profit...")
+                await mandar_reporte_profit()
+                enviado_profit = True
+
+            # 2. BUENAS NOCHES (Rango 12:00 AM a 12:05 AM)
+            elif ahora.hour == 0 and 0 <= ahora.minute <= 5 and not enviado_noches:
+                logger.info("Ejecutando tarea programada: Buenas Noches...")
+                await mandar_buenas_noches()
+                enviado_noches = True
+
+            # 3. PICKS DEL DÍA (Rango 8:30 AM a 8:35 AM)
+            elif ahora.hour == 8 and 30 <= ahora.minute <= 35 and not enviado_picks:
+                logger.info("Ejecutando tarea programada: Envío matutino de picks...")
+                await mandar_picks_del_dia()
+                enviado_picks = True
+            
+            # Revisión constante cada 30 segundos, sin congelar el bot con sleeps largos
+            await asyncio.sleep(30)
+            
+        except Exception as e:
+            logger.error(f"Error detectado en el reloj interno, reiniciando ciclo: {e}")
+            await asyncio.sleep(30)
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
