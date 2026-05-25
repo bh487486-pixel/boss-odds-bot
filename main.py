@@ -132,7 +132,7 @@ def consultar_cerebro_ia(candidatos_raw):
         "REGLAS CRÍTICAS:\n"
         "1. NO repitas partidos. Múltiples picks del mismo partido están prohibidos.\n"
         "2. Formato ESTRICTO JSON plano (sin markdown, sin bloques de código):\n"
-        "[{\"deporte\": \"...\", \"partido\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"analisis_ia\": \"...\"}]\n\n"
+        "[{\"deporte\": \"...\", \"partido\": \"...\", \"fecha_hora\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"analisis_ia\": \"...\"}]\n\n"
         f"Datos: {json.dumps(candidatos_raw, ensure_ascii=False)}"
     )
     
@@ -179,17 +179,22 @@ def procesar_cartelera_completa():
     fecha_hoy_mx = ahora_mx.date()
 
     for liga in ligas_elite:
-        mercados = "h2h,totals" if any(x in liga for x in ["baseball", "basketball", "americanfootball"]) else "h2h"
+        # AJUSTE 3: Abrimos el espectro a Ganador, Totales y Hándicaps (spreads) para todos
+        mercados = "h2h,totals,spreads"
         partidos = obtener_picks_deporte(liga, markets=mercados)
         
         if not partidos: continue
 
         for partido in partidos:
             commence_time_raw = partido.get("commence_time")
+            fecha_hora_str = "Horario por confirmar"
+            
             if commence_time_raw:
                 try:
                     partido_tiempo_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
                     partido_tiempo_mx = partido_tiempo_utc.astimezone(MX_TZ)
+                    # AJUSTE: Capturamos la hora exacta
+                    fecha_hora_str = partido_tiempo_mx.strftime("%I:%M %p")
                     
                     if partido_tiempo_mx.date() != fecha_hoy_mx: 
                         continue
@@ -206,11 +211,19 @@ def procesar_cartelera_completa():
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    # AJUSTE: Rango de seguridad entre 1.30 y 4.00
+                    # Rango de seguridad entre 1.30 y 4.00
                     if cuota and 1.30 <= cuota <= 4.00:
                         nombre_deporte = mapear_icono_deporte(liga)
-                        if market_key == "h2h": tipo_pick = f"Gana {o.get('name')}"
-                        elif market_key == "totals": tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point')} Puntos/Carreras"
+                        
+                        # AJUSTE 3: Manejo de los 3 mercados
+                        if market_key == "h2h": 
+                            tipo_pick = f"Gana {o.get('name')}"
+                        elif market_key == "totals": 
+                            tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point')} Pts/Goles/Carreras"
+                        elif market_key == "spreads":
+                            punto = o.get('point', 0)
+                            signo = "+" if punto > 0 else ""
+                            tipo_pick = f"Hándicap {o.get('name')} {signo}{punto}"
                         else: continue
 
                         if "baseball_lmb" in liga.lower(): nombre_deporte = "⚾ Béisbol"
@@ -218,6 +231,7 @@ def procesar_cartelera_completa():
                         candidatos_crudos.append({
                             "deporte": nombre_deporte,
                             "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
+                            "fecha_hora": fecha_hora_str,
                             "pick": tipo_pick,
                             "cuota": cuota,
                             "bookie": bookie.get("title", "Bet365"),
@@ -239,6 +253,7 @@ def construir_mensaje(pick_data):
         f"🔥 El Boss Mexa – Pick del Día\n\n"
         f"Deporte: {pick_data['deporte']}\n"
         f"Partido: {pick_data['partido']}\n"
+        f"⏰ Horario: {pick_data.get('fecha_hora', 'N/A')} (Hora MX)\n"
         f"Pick: {pick_data['pick']}\n"
         f"Cuota: {cuota:.2f}\n"
         f"Stake: {stake}\n\n"
@@ -272,6 +287,7 @@ def evaluar_pick(pick_str, scores):
             if winner == team_picked: return "🟢 GANADO"
             elif winner is None: return "⚪ EMPATE / PUSH"
             else: return "🔴 PERDIDO"
+            
         elif "Altas/Over" in pick_str or "Bajas/Under" in pick_str:
             total_puntos = score1 + score2
             partes = pick_str.split(" ")
@@ -280,6 +296,21 @@ def evaluar_pick(pick_str, scores):
                 return "🟢 GANADO" if total_puntos > linea else ("🔴 PERDIDO" if total_puntos < linea else "⚪ PUSH")
             elif "Bajas/Under" in pick_str:
                 return "🟢 GANADO" if total_puntos < linea else ("🔴 PERDIDO" if total_puntos > linea else "⚪ PUSH")
+                
+        # AJUSTE 3: Evaluar los nuevos picks de Hándicap automáticamente
+        elif "Hándicap" in pick_str:
+            partes = pick_str.replace("Hándicap ", "").rsplit(" ", 1)
+            if len(partes) == 2:
+                equipo_h = partes[0].strip()
+                linea_h = float(partes[1])
+                score_equipo = score1 if equipo_h == name1 else (score2 if equipo_h == name2 else None)
+                score_rival = score2 if equipo_h == name1 else (score1 if equipo_h == name2 else None)
+                
+                if score_equipo is not None and score_rival is not None:
+                    if score_equipo + linea_h > score_rival: return "🟢 GANADO"
+                    elif score_equipo + linea_h < score_rival: return "🔴 PERDIDO"
+                    else: return "⚪ PUSH"
+                    
         return "❔ RESULTADO MANUAL"
     except:
         return "❔ REVISAR"
