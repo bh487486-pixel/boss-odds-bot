@@ -224,7 +224,10 @@ def procesar_cartelera_completa(es_septimo=False):
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    if cuota and 1.30 <= cuota <= 2.80:
+                    # ==========================================
+                    # AJUSTE NUEVO DE CUOTAS AMPLIDAS (1.25 a 2.90)
+                    # ==========================================
+                    if cuota and 1.25 <= cuota <= 2.90:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
                         if market_key == "h2h": 
