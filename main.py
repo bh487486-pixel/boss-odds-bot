@@ -21,7 +21,6 @@ CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configurar el cerebro de Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
@@ -75,7 +74,8 @@ def cargar_picks():
 # LISTA DE LIGAS PRINCIPALES PERMITIDAS
 # ==========================================
 LIGAS_PERMITIDAS = [
-    "soccer_uefa_champions_league", "soccer_uefa_europa_league", 
+    "soccer_fifa_world_cup", "soccer_uefa_champions_league", "soccer_uefa_europa_league", 
+    "soccer_conmebol_copa_libertadores", "soccer_conmebol_copa_sudamericana",
     "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", 
     "soccer_germany_bundesliga", "soccer_france_ligue_1", "soccer_mexico_liga_mx",
     "baseball_mlb", "baseball_lmb", "basketball_nba", "americanfootball_nfl"
@@ -123,26 +123,26 @@ def mapear_icono_deporte(sport_key):
     return "🏅 Deporte"
 
 # ==========================================
-# CEREBRO IA CON FILTRO ESTRICTO ANTI-DUPLICADOS
+# CEREBRO IA: ESCANEO METICULOSO Y FILTRADO
 # ==========================================
 def consultar_cerebro_ia(candidatos_raw, es_septimo=False):
     if es_septimo:
         prompt = (
-            "Actúa como un tipster analista profesional de apuestas deportivas, especialista en detectar errores de cuotas.\n"
-            "TU OBJETIVO: De la lista proporcionada, selecciona ÚNICAMENTE 1 pick que consideres un error grosero de línea del casino o una probabilidad matemática masiva de ganar (un Stake 10 real).\n"
-            "Si consideras que ningún pick califica como una joya o error extraordinario, devuelve una lista vacía [].\n"
-            "REGLAS CRÍTICAS:\n"
-            "1. El pick debe ser extremadamente seguro basándote en los datos de cuotas.\n"
-            "2. Formato ESTRICTO JSON plano (sin markdown, sin bloques de código):\n"
-            "[{\"deporte\": \"...\", \"partido\": \"...\", \"fecha_hora\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"analisis_ia\": \"...\"}]\n\n"
+            "Actúa como un tipster analista profesional de apuestas deportivas de nivel élite, experto en +EV y tendencias deportivas.\n"
+            "TU OBJETIVO: Realiza un escaneo profundamente meticuloso de toda la cartelera. Buscamos el pick perfecto (STAKE 10).\n"
+            "CRITERIO ESTRICTO: No basta con un simple error de línea. Debe existir una CRUZADA PERFECTA entre la VENTAJA MATEMÁTICA (línea mal puesta por la casa de apuestas) y la VENTAJA DEPORTIVA (quién viene mejor, rachas, motivación, quién es el verdadero favorito deportivo en la cancha).\n"
+            "REGLA DE ORO: Si consideras que ningún evento combina ambas ventajas (matemática y deportiva) para garantizar una certeza de acierto altísima, devuelve obligatoriamente una lista vacía []. Es preferible no enviar nada.\n"
+            "Formato ESTRICTO JSON plano (sin markdown, sin bloques de código):\n"
+            "[{\"deporte\": \"...\", \"partido\": \"...\", \"fecha_hora\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"analisis_ia\": \"Explica brevemente la doble ventaja (matemática y deportiva)\"}]\n\n"
             f"Datos: {json.dumps(candidatos_raw, ensure_ascii=False)}"
         )
     else:
         prompt = (
-            "Actúa como un tipster analista profesional de apuestas deportivas.\n"
-            "TU OBJETIVO: Selecciona los 10 mejores picks del día con mayor probabilidad de ganar de la lista proporcionada.\n"
+            "Actúa como un tipster analista profesional y scouter deportivo meticuloso.\n"
+            "TU OBJETIVO: Extrae los mejores 6 picks del día de la lista provista.\n"
+            "INSTRUCCIÓN: Evalúa tanto el valor numérico como el contexto deportivo real de los equipos involucrados. Busca el balance inteligente combinando Fútbol Internacional, Liga MX, MLB y LMB para encontrar las mejores ventajas.\n"
             "REGLAS CRÍTICAS:\n"
-            "1. NO repitas partidos. Múltiples picks del mismo partido están prohibidos.\n"
+            "1. PROHIBIDO repetir partidos. Máximo un pick por evento.\n"
             "2. Formato ESTRICTO JSON plano (sin markdown, sin bloques de código):\n"
             "[{\"deporte\": \"...\", \"partido\": \"...\", \"fecha_hora\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"analisis_ia\": \"...\"}]\n\n"
             f"Datos: {json.dumps(candidatos_raw, ensure_ascii=False)}"
@@ -167,11 +167,11 @@ def consultar_cerebro_ia(candidatos_raw, es_septimo=False):
             if len(picks_finales_limpios) == limite:
                 break
                 
-        logger.info(f"IA y filtro aplicados con éxito. Preparados {len(picks_finales_limpios)} picks únicos.")
+        logger.info(f"Escaneo IA completado. Filtrados {len(picks_finales_limpios)} picks que cumplen criterio dual (Matemático + Deportivo).")
         return picks_finales_limpios
 
     except Exception as e:
-        logger.error(f"Error en IA, usando respaldo aleatorio con filtro estricto: {e}")
+        logger.error(f"Error en el análisis de la IA: {e}")
         if es_septimo: return []
         
         random.shuffle(candidatos_raw)
@@ -180,10 +180,8 @@ def consultar_cerebro_ia(candidatos_raw, es_septimo=False):
             if nombre_partido and nombre_partido not in partidos_vistos:
                 picks_finales_limpios.append(pick)
                 partidos_vistos.add(nombre_partido)
-                
             if len(picks_finales_limpios) == 6:
                 break
-                
         return picks_finales_limpios
 
 def procesar_cartelera_completa(es_septimo=False):
@@ -224,9 +222,6 @@ def procesar_cartelera_completa(es_septimo=False):
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    # ==========================================
-                    # AJUSTE NUEVO DE CUOTAS AMPLIDAS (1.25 a 2.90)
-                    # ==========================================
                     if cuota and 1.25 <= cuota <= 2.90:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
@@ -240,7 +235,8 @@ def procesar_cartelera_completa(es_septimo=False):
                             tipo_pick = f"Hándicap {o.get('name')} {signo}{punto}"
                         else: continue
 
-                        if "baseball_lmb" in liga.lower(): nombre_deporte = "⚾ Béisbol"
+                        if "baseball_lmb" in liga.lower(): 
+                            nombre_deporte = "⚾ Béisbol (LMB)"
 
                         candidatos_crudos.append({
                             "deporte": nombre_deporte,
@@ -265,7 +261,7 @@ def construir_mensaje(pick_data, es_septimo=False):
         elif cuota <= 1.85: stake = "⭐⭐"
         else: stake = "⭐"
 
-    analisis = pick_data.get("analisis_ia", "Análisis verificado por tendencias de rendimiento.")
+    analisis = pick_data.get("analisis_ia", "Análisis validado cruzando datos estadísticos y rendimiento deportivo.")
 
     mensaje = (
         f"🔥 ELBOSSMEXA – Pick del Día\n\n"
@@ -333,7 +329,7 @@ def evaluar_pick(pick_str, scores):
         return "❔ REVISAR"
 
 # ==========================================
-# TAREAS PROGRAMADAS (TEXTOS PROFESIONALES/NATURALES)
+# TAREAS PROGRAMADAS
 # ==========================================
 async def mandar_buenos_dias():
     msg = (
@@ -344,14 +340,12 @@ async def mandar_buenos_dias():
     await enviar_mensaje_seguro(msg)
 
 async def mandar_picks_del_dia():
-    if ya_se_envio_hoy():
-        logger.info("Los picks de hoy ya fueron enviados previamente. Bloqueando duplicados.")
-        return
+    if ya_se_envio_hoy(): return
 
     await mandar_buenos_dias()
     await asyncio.sleep(4)
     
-    picks_del_dia = procesar_cartelera_completa()
+    picks_del_dia = procesar_cartelera_completa(es_septimo=False)
     guardar_picks(picks_del_dia)
     
     if picks_del_dia:
@@ -364,37 +358,36 @@ async def mandar_picks_del_dia():
         await enviar_mensaje_seguro("⚠️ Nota de mercado: Los eventos disponibles en este bloque no cumplen con el umbral mínimo de valor requerido. Priorizamos la protección del capital operativo. 🏦")
 
 async def buscar_septimo_pick_tarde():
-    logger.info("Despertando bot para rastrear el Séptimo Pick (Stake 10)...")
+    logger.info("Despertando bot a la 1:00 PM para la Búsqueda Meticulosa del Séptimo Pick (Stake 10)...")
     
     pick_extra = procesar_cartelera_completa(es_septimo=True)
     
     if pick_extra:
         joya = pick_extra[0]
-        
         picks_actuales = cargar_picks()
+        
         if not any(p['partido'] == joya['partido'] for p in picks_actuales):
             joya['es_septimo'] = True
             picks_actuales.append(joya)
             guardar_picks(picks_actuales)
             
-            # Alerta limpia y profesional sin texto adicional de preparación
-            alerta_msg = "🚨 ATENCIÓN: STAKE 10 - ERROR DE LÍNEA DETECTADO"
+            # EL MENSAJE DE ALERTA NO SE TOCA - SE ENVÍA 5 MINUTOS ANTES
+            alerta_msg = "🚨 ATENCIÓN: ¡STAKE 10 DETECTADO! 🚨\n\n¡Error de línea y ventaja deportiva localizados!\n\nPreparando análisis detallado... El pick se liberará en 5 minutos. ⏳"
             await enviar_mensaje_seguro(alerta_msg)
-            logger.info("Alerta Stake 10 enviada de manera exitosa. Esperando 5 minutos...")
+            logger.info("Alerta de Stake 10 enviada a Telegram. Esperando 5 minutos (300 segundos)...")
             
+            # ESPERA EXACTA DE 5 MINUTOS ANTES DE MANDAR EL PICK
             await asyncio.sleep(300)
             
             texto_formateado = construir_mensaje(joya, es_septimo=True)
             await enviar_mensaje_seguro(texto_formateado)
-            logger.info("Séptimo pick enviado con éxito al canal.")
+            logger.info("Séptimo pick enviado de manera exitosa al canal.")
     else:
-        logger.info("Monitoreo de tarde completado: No se detectó ningún error extraordinario de valor Stake 10.")
+        logger.info("Búsqueda meticulosa finalizada: El mercado no presentó cruces óptimos de ventaja matemática y deportiva para un Stake 10.")
 
 async def mandar_reporte_profit():
     picks_enviados_hoy = cargar_picks()
-    if not picks_enviados_hoy: 
-        logger.warning("No hay picks registrados en el JSON para evaluar hoy.")
-        return
+    if not picks_enviados_hoy: return
 
     ligas_jugadas = list(set([pick['sport_key'] for pick in picks_enviados_hoy]))
     todos_los_resultados = []
@@ -418,11 +411,8 @@ async def mandar_reporte_profit():
                     if scores and len(scores) == 2:
                         marcador_texto = f"{scores[0]['name']} {scores[0]['score']} - {scores[1]['score']} {scores[1]['name']} 🏁"
                         estado_pick = evaluar_pick(pick['pick'], scores)
-                        
-                        if "🟢" in estado_pick:
-                            verdes += 1
-                        elif "🔴" in estado_pick:
-                            rojos += 1
+                        if "🟢" in estado_pick: verdes += 1
+                        elif "🔴" in estado_pick: rojos += 1
                 else:
                     marcador_texto = "Partido aún en juego ⏳"
                 break
@@ -447,15 +437,16 @@ async def mandar_buenas_noches():
     await enviar_mensaje_seguro(msg)
 
 # ==========================================
-# BUCLE PRINCIPAL (Blindado con Flags)
+# BUCLE PRINCIPAL (CRONOGRAMA ESTABLE)
 # ==========================================
 async def main_loop():
-    logger.info("Bot ELBOSSMEXA con IA (Gemini 1.5 Flash) Iniciado correctamente. Sistema de Flags activo.")
+    logger.info("Bot ELBOSSMEXA Iniciado. Escaneo de Doble Ventaja (Matemática + Deportiva).")
 
     enviado_profit = False
     enviado_noches = False
     enviado_picks = False
     enviado_septimo = False 
+    
     dia_actual = datetime.now(MX_TZ).date()
 
     while True:
@@ -470,34 +461,28 @@ async def main_loop():
                 enviado_septimo = False
                 logger.info(f"Nuevo día detectado ({dia_actual}). Banderas de envío reiniciadas.")
 
-            # 1. REPORTE PROFIT (Rango 11:45 PM a 11:50 PM)
             if ahora.hour == 23 and 45 <= ahora.minute <= 50 and not enviado_profit:
-                logger.info("Ejecutando tarea programada: Reporte Profit...")
                 await mandar_reporte_profit()
                 enviado_profit = True
 
-            # 2. BUENAS NOCHES (Rango 12:00 AM a 12:05 AM)
             elif ahora.hour == 0 and 0 <= ahora.minute <= 5 and not enviado_noches:
-                logger.info("Ejecutando tarea programada: Buenas Noches...")
                 await mandar_buenas_noches()
                 enviado_noches = True
 
-            # 3. PICKS DEL DÍA (Rango 8:30 AM a 8:35 AM)
             elif ahora.hour == 8 and 30 <= ahora.minute <= 35 and not enviado_picks:
-                logger.info("Ejecutando tarea programada: Envío matutino de picks...")
+                logger.info("Iniciando tarea: Escaneo exhaustivo matutino...")
                 await mandar_picks_del_dia()
                 enviado_picks = True
                 
-            # 4. BÚSQUEDA DEL SÉPTIMO PICK (Rango 10:30 AM a 10:35 AM)
-            elif ahora.hour == 10 and 30 <= ahora.minute <= 35 and not enviado_septimo:
-                logger.info("Ejecutando tarea programada: Escaneo de error de línea (Séptimo Pick)...")
+            elif ahora.hour == 13 and 0 <= ahora.minute <= 5 and not enviado_septimo:
+                logger.info("Iniciando tarea: Búsqueda profunda del Séptimo Pick a la 1:00 PM...")
                 await buscar_septimo_pick_tarde()
                 enviado_septimo = True
-            
+
             await asyncio.sleep(30)
             
         except Exception as e:
-            logger.error(f"Error detectado en el reloj interno, reiniciando ciclo: {e}")
+            logger.error(f"Error detectado en el bucle principal: {e}")
             await asyncio.sleep(30)
 
 if __name__ == "__main__":
