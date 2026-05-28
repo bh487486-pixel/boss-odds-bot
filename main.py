@@ -192,8 +192,8 @@ def procesar_cartelera_completa(es_septimo=False):
     fecha_hoy_mx = ahora_mx.date()
 
     for liga in ligas_elite:
-        mercados = "h2h,totals,spreads"
-        partidos = obtener_picks_deporte(liga, markets=markets)
+        # CORRECCIÓN DE ERROR EN LÍNEA 196: Definición explícita del string de mercados
+        partidos = obtener_picks_deporte(liga, markets="h2h,totals,spreads")
         
         if not partidos: continue
 
@@ -214,15 +214,15 @@ def procesar_cartelera_completa(es_septimo=False):
             bookmakers = partido.get("bookmakers", [])
             if not bookmakers: continue
             bookie = bookmakers[0]
-            markets = bookie.get("markets", [])
+            markets_list = bookie.get("markets", [])
             
-            for market in markets:
-                market_key = market.get("key")
-                outcomes = market.get("outcomes", [])
+            for m in markets_list:
+                market_key = m.get("key")
+                outcomes = m.get("outcomes", [])
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    # CORRECCIÓN DE RANGO: Ajustado estrictamente de 1.25 a 3.00 por solicitud del usuario
+                    # RANGO SOLICITADO: Ajustado estrictamente de 1.25 a 3.00
                     if cuota and 1.25 <= cuota <= 3.00:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
@@ -467,7 +467,7 @@ async def main_loop():
 
     enviado_profit = False
     enviado_noches = False
-    enviado_picks = True # Marcado True inicialmente para evitar doble envío matutino en el arranque
+    enviado_picks = True
     enviado_septimo = False 
     
     dia_actual = datetime.now(MX_TZ).date()
@@ -489,7 +489,7 @@ async def main_loop():
                 await mandar_reporte_profit()
                 enviado_profit = True
 
-            # 2. Mesoaje de cierre (12:00 AM - 12:05 AM)
+            # 2. Mensaje de cierre (12:00 AM - 12:05 AM)
             elif ahora.hour == 0 and 0 <= ahora.minute <= 5 and not enviado_noches:
                 await mandar_buenas_noches()
                 enviado_noches = True
