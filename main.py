@@ -77,7 +77,7 @@ LIGAS_FUTBOL = [
 ]
 
 def obtener_picks_deporte(sport_key, markets):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/"
     params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -86,7 +86,7 @@ def obtener_picks_deporte(sport_key, markets):
     except: return []
 
 def obtener_marcadores(sport_key):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/scores/"
     params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -126,8 +126,8 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_3"):
 
     try:
         response = model.generate_content(prompt_completo)
-        txt = response.text.strip().replace("```json", "").replace("
-```", "").strip()
+        # Línea corregida y consolidada para evitar errores de sintaxis
+        txt = response.text.strip().replace("```json", "").replace("```", "").strip()
         picks_seleccionados = json.loads(txt)
         
         limite = 3 if modo_bloque == "bloque_3" else 1
@@ -265,7 +265,6 @@ async def ejecutar_septimo_pick():
         actuales.append(pick_data)
         guardar_picks(actuales)
         
-        # ALERTA DE STAKE 10 AJUSTADA
         alerta_msg = (
             "🚨 STAKE 10 DETECTADO 🚨\n\n"
             "Se ha detectado nuestra jugada fuerte de la tarde. Probabilidad e inteligencia "
