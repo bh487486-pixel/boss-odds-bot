@@ -127,31 +127,38 @@ def mapear_icono_deporte(sport_key):
 # ==========================================
 def consultar_cerebro_ia(candidatos_raw, modo_bloque="seis_picks"):
     if modo_bloque == "seis_picks":
-        prompt = (
-            "Analiza y elige los 6 mejores picks únicos. Reglas estricta:\n"
-            "1. Prioridad máxima a Béisbol (MLB y LMB) si están disponibles.\n"
-            "2. Intercala partidos de Fútbol Europeo o NBA para dar variedad.\n"
-            "3. Si no hay fútbol/NBA, llena los 6 con MLB/LMB.\n"
-            "4. Asigna Stake del 1 al 8 según probabilidad.\n"
-            "Devuelve solo JSON plano, sin markdown: "
-            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
-        )
+        p1 = "Analiza y elige los 6 mejores picks únicos. Reglas estricta:\n"
+        p2 = "1. Prioridad máxima a Béisbol (MLB y LMB).\n"
+        p3 = "2. Intercala partidos de Fútbol Europeo o NBA para dar variedad.\n"
+        p4 = "3. Si no hay fútbol/NBA, llena los 6 con MLB/LMB.\n"
+        p5 = "4. Asigna Stake del 1 al 8 según probabilidad.\n"
+        p6 = "Devuelve solo JSON plano, sin markdown: "
+        p7 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
+        p8 = "\"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
+        prompt = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8
     else:
-        prompt = (
-            "Selecciona únicamente el pick más seguro del día (Confianza 85%-90%).\n"
-            "Asigna obligatoriamente Stake 9 o 10.\n"
-            "Devuelve solo un objeto en JSON plano, sin markdown: "
-            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 10, \"analisis_ia\": \"\"}]"
-        )
+        p1 = "Selecciona únicamente el pick más seguro del día (Confianza 85%-90%).\n"
+        p2 = "Asigna obligatoriamente Stake 9 o 10.\n"
+        p3 = "Devuelve solo un objeto en JSON plano, sin markdown: "
+        p4 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
+        p5 = "\"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 10, \"analisis_ia\": \"\"}]"
+        prompt = p1 + p2 + p3 + p4 + p5
 
-    prompt += f"\n\nDatos: {json.dumps(candidatos_raw, ensure_ascii=False)}"
+    datos_json = json.dumps(candidatos_raw, ensure_ascii=False)
+    prompt_completo = prompt + "\n\nDatos: " + datos_json
     picks_finales_limpios = []
     partidos_vistos = set()
 
     try:
-        response = model.generate_content(prompt)
-        txt = response.text.strip().replace("```json", "").replace("
-```", "").strip()
+        response = model.generate_content(prompt_completo)
+        
+        # Limpieza de texto dividida para evitar cortes al copiar
+        txt = response.text
+        txt = txt.strip()
+        txt = txt.replace("```json", "")
+        txt = txt.replace("```", "")
+        txt = txt.strip()
+        
         picks_seleccionados = json.loads(txt)
         
         limite = 6 if modo_bloque == "seis_picks" else 1
@@ -244,19 +251,18 @@ def construir_mensaje(pick_data):
     estrellas = "⭐" * int(stk_num)
     analisis = pick_data.get("analisis_ia", "Análisis verificado por tendencias.")
 
-    mensaje = (
-        f"🔥 El Boss Mexa – Pick del Día\n\n"
-        f"Deporte: {pick_data['deporte']}\n"
-        f"Partido: {pick_data['partido']}\n"
-        f"⏰ Horario: {pick_data.get('fecha_hora', 'N/A')} (Hora MX)\n"
-        f"Pick: {pick_data['pick']}\n"
-        f"Cuota: {pick_data['cuota']:.2f}\n"
-        f"Stake: {estrellas} (Stake {stk_num})\n\n"
-        f"📊 Análisis:\n"
-        f"{analisis}\n\n"
-        f"¡Vamos con todo! 💰"
-    )
-    return mensaje
+    m1 = "🔥 El Boss Mexa – Pick del Día\n\n"
+    m2 = f"Deporte: {pick_data['deporte']}\n"
+    m3 = f"Partido: {pick_data['partido']}\n"
+    m4 = f"⏰ Horario: {pick_data.get('fecha_hora', 'N/A')} (Hora MX)\n"
+    m5 = f"Pick: {pick_data['pick']}\n"
+    m6 = f"Cuota: {pick_data['cuota']:.2f}\n"
+    m7 = f"Stake: {estrellas} (Stake {stk_num})\n\n"
+    m8 = "📊 Análisis:\n"
+    m9 = f"{analisis}\n\n"
+    m10 = "¡Vamos con todo! 💰"
+    
+    return m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9 + m10
 
 async def enviar_mensaje_seguro(texto):
     try:
@@ -312,10 +318,7 @@ def evaluar_pick(pick_str, scores):
 # TAREAS PROGRAMADAS
 # ==========================================
 async def mandar_buenos_dias():
-    msg = (
-        "☀️ **¡Buenos días, familia de El Boss Mexa!** ☀️\n\n"
-        "Arrancamos la jornada. Preparen sus bancas, a continuación les comparto los 6 picks analizados a fondo para el día de hoy. ¡Vamos por esos verdes! 🚀"
-    )
+    msg = "☀️ **¡Buenos días, familia de El Boss Mexa!** ☀️\n\nArrancamos la jornada. Preparen sus bancas, a continuación les comparto los 6 picks analizados a fondo para el día de hoy. ¡Vamos por esos verdes! 🚀"
     await enviar_mensaje_seguro(msg)
 
 async def mandar_picks_del_dia():
@@ -346,7 +349,8 @@ async def mandar_septimo_pick():
         actuales.append(pick_data)
         guardar_picks(actuales)
         
-        await enviar_mensaje_seguro("🔥 **¡MÁXIMA ALERTA - SÉPTIMO PICK VIP!** 🔥\n\nDetectamos una oportunidad de valor matemático extremo (Probabilidad estimada: 85%-90%).")
+        alerta = "🔥 **¡MÁXIMA ALERTA - SÉPTIMO PICK VIP!** 🔥\n\nDetectamos una oportunidad de valor matemático extremo (Probabilidad estimada: 85%-90%)."
+        await enviar_mensaje_seguro(alerta)
         await asyncio.sleep(3)
         texto_formateado = construir_mensaje(pick_data)
         await enviar_mensaje_seguro(texto_formateado)
@@ -366,10 +370,7 @@ async def mandar_reporte_profit():
     perdidos = 0
     total_evaluados = 0
 
-    msg = (
-        "📊 **El Boss Mexa – Resumen de la Jornada** 📊\n\n"
-        "Cerramos las actions del día contando nuestro Séptimo Pick VIP. Resultados oficiales:\n\n"
-    )
+    msg = "📊 **El Boss Mexa – Resumen de la Jornada** 📊\n\nCerramos las acciones del día contando nuestro Séptimo Pick VIP. Resultados oficiales:\n\n"
     
     for pick in picks_totales:
         marcador_texto = "Marcador no disponible / Pospuesto ⏳"
@@ -398,10 +399,7 @@ async def mandar_reporte_profit():
     marcar_enviado_hoy()
 
 async def mandar_buenas_noches():
-    msg = (
-        "🌙 **¡Buenas noches, equipo!** 🌙\n\n"
-        "Finalizan las actividades por hoy. El sistema analítico entra en reposo absoluto para buscar el valor mañana temprano. ¡A descansar! 💤"
-    )
+    msg = "🌙 **¡Buenas noches, equipo!** 🌙\n\nFinalizan las actividades por hoy. El sistema analítico entra en reposo absoluto para buscar el valor mañana temprano. ¡A descansar! 💤"
     await enviar_mensaje_seguro(msg)
 
 # ==========================================
