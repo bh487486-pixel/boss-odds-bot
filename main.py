@@ -100,9 +100,9 @@ def obtener_deportes_activos():
         logger.error(f"Error al obtener deportes: {e}")
         return []
 
-def obtener_picks_deporte(sport_key, markets):
+def obtener_picks_deporte(sport_key, markets_val):
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
+    params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets_val, "oddsFormat": "decimal"}
     try:
         response = requests.get(url, params=params, timeout=12)
         if response.status_code == 200: return response.json()
@@ -198,7 +198,7 @@ def procesar_cartelera_completa(es_septimo=False):
     fecha_hoy_mx = ahora_mx.date()
 
     for liga in ligas_elite:
-        partidos = obtener_picks_deporte(liga, markets="h2h,totals,spreads")
+        partidos = obtener_picks_deporte(liga, "h2h,totals,spreads")
         
         if not partidos: continue
 
@@ -227,7 +227,6 @@ def procesar_cartelera_completa(es_septimo=False):
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    # RANGO DE CUOTAS AJUSTADO: 1.15 A 4.00
                     if cuota and 1.15 <= cuota <= 4.00:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
@@ -262,7 +261,6 @@ def procesar_cartelera_completa(es_septimo=False):
         logger.warning(f"La IA devolvió menos de 6 picks. Activando autorelleno estratégico.")
         partidos_vistos = set(p['partido'] for p in picks_elegidos)
         
-        # Ordenar por cercanía a 1.80 para autorelleno balanceado
         candidatos_crudos.sort(key=lambda x: abs(x['cuota'] - 1.80))
         
         for cand in candidatos_crudos:
@@ -467,7 +465,7 @@ async def main_loop():
 
     enviado_profit = False
     enviado_noches = False
-    enviado_picks = False # Cambiado a False para esperar las 10:00 AM
+    enviado_picks = False 
     enviado_septimo = False 
     
     dia_actual = datetime.now(MX_TZ).date()
@@ -492,8 +490,9 @@ async def main_loop():
                 await mandar_buenas_noches()
                 enviado_noches = True
 
-            elif ahora.hour == 10 and 0 <= ahora.minute <= 5 and not enviado_picks:
-                logger.info("Iniciando Escaneo exhaustivo matutino (10:00 AM)...")
+            # AJUSTADO A LAS 11:00 AM
+            elif ahora.hour == 11 and 0 <= ahora.minute <= 5 and not enviado_picks:
+                logger.info("Iniciando Escaneo exhaustivo matutino (11:00 AM)...")
                 await mandar_picks_del_dia()
                 enviado_picks = True
                 
