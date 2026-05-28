@@ -198,7 +198,6 @@ def procesar_cartelera_completa(es_septimo=False):
     fecha_hoy_mx = ahora_mx.date()
 
     for liga in ligas_elite:
-        # AQUÍ ESTÁ EL FIX DEFINITIVO (MERCADOS EXPLÍCITOS COMO TEXTO)
         partidos = obtener_picks_deporte(liga, markets="h2h,totals,spreads")
         
         if not partidos: continue
@@ -228,7 +227,8 @@ def procesar_cartelera_completa(es_septimo=False):
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    if cuota and 1.25 <= cuota <= 3.00:
+                    # RANGO DE CUOTAS AJUSTADO: 1.15 A 4.00
+                    if cuota and 1.15 <= cuota <= 4.00:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
                         if market_key == "h2h": 
@@ -262,6 +262,7 @@ def procesar_cartelera_completa(es_septimo=False):
         logger.warning(f"La IA devolvió menos de 6 picks. Activando autorelleno estratégico.")
         partidos_vistos = set(p['partido'] for p in picks_elegidos)
         
+        # Ordenar por cercanía a 1.80 para autorelleno balanceado
         candidatos_crudos.sort(key=lambda x: abs(x['cuota'] - 1.80))
         
         for cand in candidatos_crudos:
@@ -462,14 +463,11 @@ async def mandar_buenas_noches():
 # ==========================================
 async def main_loop():
     logger.info("Bot Iniciado. Escaneo de Doble Ventaja (Matemática + Deportiva).")
-
-    logger.info("🚨 Forzando envío inmediato de arranque...")
-    await mandar_picks_del_dia(forzar_envio=True)
-    logger.info("✅ Envío de arranque completado. Entrando al cronograma normal.")
+    logger.info("✅ Sistema en espera del horario programado.")
 
     enviado_profit = False
     enviado_noches = False
-    enviado_picks = True
+    enviado_picks = False # Cambiado a False para esperar las 10:00 AM
     enviado_septimo = False 
     
     dia_actual = datetime.now(MX_TZ).date()
