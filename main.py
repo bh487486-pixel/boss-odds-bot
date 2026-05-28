@@ -193,7 +193,7 @@ def procesar_cartelera_completa(es_septimo=False):
 
     for liga in ligas_elite:
         mercados = "h2h,totals,spreads"
-        partidos = obtener_picks_deporte(liga, markets=mercados)
+        partidos = obtener_picks_deporte(liga, markets=markets)
         
         if not partidos: continue
 
@@ -222,8 +222,8 @@ def procesar_cartelera_completa(es_septimo=False):
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    # AJUSTE DE RANGO: De 1.15 a 4.00 para tener muchas opciones de respaldo
-                    if cuota and 1.15 <= cuota <= 4.00:
+                    # CORRECCIÓN DE RANGO: Ajustado estrictamente de 1.25 a 3.00 por solicitud del usuario
+                    if cuota and 1.25 <= cuota <= 3.00:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
                         if market_key == "h2h": 
@@ -251,15 +251,12 @@ def procesar_cartelera_completa(es_septimo=False):
                         
     if not candidatos_crudos: return []
     
-    # Consulta a la IA con los datos filtrados
     picks_elegidos = consultar_cerebro_ia(candidatos_crudos, es_septimo=es_septimo)
     
-    # RESPALDO MATUTINO AUTOMÁTICO (Fallback)
     if not es_septimo and len(picks_elegidos) < 6:
         logger.warning(f"La IA solo devolvió {len(picks_elegidos)} picks. Activando autorelleno estratégico para asegurar los 6 picks.")
         partidos_vistos = set(p['partido'] for p in picks_elegidos)
         
-        # Ordenamos los candidatos restantes acercándonos a la cuota 1.80 como base de estabilidad
         candidatos_crudos.sort(key=lambda x: abs(x['cuota'] - 1.80))
         
         for cand in candidatos_crudos:
@@ -285,7 +282,7 @@ def construir_mensaje(pick_data, es_septimo=False):
     analisis = pick_data.get("analisis_ia", "Análisis validado cruzando datos estadísticos y rendimiento deportivo.")
 
     mensaje = (
-        f"🔥 ELBOSSMEXA – Pick del Día\n\n"
+        f"🔥 BossOddsMX – Pick del Día\n\n"
         f"Deporte: {pick_data['deporte']}\n"
         f"Partido: {pick_data['partido']}\n"
         f"⏰ Horario: {pick_data.get('fecha_hora', 'N/A')} (Hora MX)\n"
@@ -361,7 +358,6 @@ async def mandar_buenos_dias():
     await enviar_mensaje_seguro(msg)
 
 async def mandar_picks_del_dia(forzar_envio=False):
-    # Si no estamos forzando el envío y ya se envió hoy, salimos
     if not forzar_envio and ya_se_envio_hoy(): return
 
     await mandar_buenos_dias()
@@ -380,7 +376,7 @@ async def mandar_picks_del_dia(forzar_envio=False):
         await enviar_mensaje_seguro("⚠️ Nota de mercado: Los eventos disponibles en este bloque no cumplen con el umbral mínimo de valor requerido. Priorizamos la protección del capital operativo. 🏦")
 
 async def buscar_septimo_pick_tarde():
-    logger.info("Despertando bot a la 1:00 PM para la Búsqueda Meticulosa del Séptimo Pick (Stake 10)...")
+    logger.info("Despertando bot a las 1:30 PM para la Búsqueda Meticulosa del Séptimo Pick (Stake 10)...")
     
     pick_extra = procesar_cartelera_completa(es_septimo=True)
     
@@ -471,7 +467,7 @@ async def main_loop():
 
     enviado_profit = False
     enviado_noches = False
-    enviado_picks = True # Lo marcamos como true para que no vuelva a mandarlos si cayera a las 8:30 AM
+    enviado_picks = True # Marcado True inicialmente para evitar doble envío matutino en el arranque
     enviado_septimo = False 
     
     dia_actual = datetime.now(MX_TZ).date()
@@ -488,21 +484,25 @@ async def main_loop():
                 enviado_septimo = False
                 logger.info(f"Nuevo día detectado ({dia_actual}). Banderas de envío reiniciadas.")
 
+            # 1. Reporte de ganancias (11:45 PM - 11:50 PM)
             if ahora.hour == 23 and 45 <= ahora.minute <= 50 and not enviado_profit:
                 await mandar_reporte_profit()
                 enviado_profit = True
 
+            # 2. Mesoaje de cierre (12:00 AM - 12:05 AM)
             elif ahora.hour == 0 and 0 <= ahora.minute <= 5 and not enviado_noches:
                 await mandar_buenas_noches()
                 enviado_noches = True
 
-            elif ahora.hour == 8 and 30 <= ahora.minute <= 35 and not enviado_picks:
-                logger.info("Iniciando tarea: Escaneo exhaustivo matutino...")
+            # 3. Bloque Principal de 6 Picks del Día (10:00 AM - 10:05 AM)
+            elif ahora.hour == 10 and 0 <= ahora.minute <= 5 and not enviado_picks:
+                logger.info("Iniciando tarea: Escaneo exhaustivo matutino (10:00 AM)...")
                 await mandar_picks_del_dia()
                 enviado_picks = True
                 
-            elif ahora.hour == 13 and 0 <= ahora.minute <= 5 and not enviado_septimo:
-                logger.info("Iniciando tarea: Búsqueda profunda del Séptimo Pick a la 1:00 PM...")
+            # 4. Búsqueda profunda del Séptimo Pick (1:30 PM - 1:35 PM)
+            elif ahora.hour == 13 and 30 <= ahora.minute <= 35 and not enviado_septimo:
+                logger.info("Iniciando tarea: Búsqueda profunda del Séptimo Pick a las 1:30 PM...")
                 await buscar_septimo_pick_tarde()
                 enviado_septimo = True
 
