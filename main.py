@@ -7,7 +7,6 @@ import json
 import sys
 from datetime import datetime, timezone, timedelta
 from telegram import Bot
-from telegram.error import TelegramError
 import google.generativeai as genai
 
 # ==========================================
@@ -21,12 +20,19 @@ CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-else:
-    logger.error("¡ALERTA! No se encontró la GEMINI_API_KEY. El bot se detendrá.")
+# Validación de variables de entorno críticas
+variables_faltantes = []
+if not TELEGRAM_TOKEN: variables_faltantes.append("TELEGRAM_TOKEN")
+if not CHANNEL_ID: variables_faltantes.append("TELEGRAM_CHANNEL_ID")
+if not ODDS_API_KEY: variables_faltantes.append("ODDS_API_KEY")
+if not GEMINI_API_KEY: variables_faltantes.append("GEMINI_API_KEY")
+
+if variables_faltantes:
+    logger.error(f"¡ALERTA CRÍTICA! Faltan estas variables en Render: {', '.join(variables_faltantes)}")
     sys.exit(1)
+
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 bot = Bot(token=TELEGRAM_TOKEN)
 REGIONS = "us,eu"
@@ -131,16 +137,16 @@ def consultar_cerebro_ia(candidatos_raw, es_septimo=False):
             "Actúa como un tipster analista profesional de apuestas deportivas de nivel élite, experto en +EV y tendencias deportivas.\n"
             "TU OBJETIVO: Realiza un escaneo profundamente meticuloso de toda la cartelera. Buscamos el pick perfecto (STAKE 10).\n"
             "CRITERIO ESTRICTO: No basta con un simple error de línea. Debe existir una CRUZADA PERFECTA entre la VENTAJA MATEMÁTICA (línea mal puesta por la casa de apuestas) y la VENTAJA DEPORTIVA (quién viene mejor, rachas, motivación, quién es el verdadero favorito deportivo en la cancha).\n"
-            "REGLA DE ORO: Si consideras que ningún evento combina ambas ventajas (matemática y deportiva) para garantizar una certeza de acierto altísima, devuelve obligatoriamente una lista vacía []. Es preferible no enviar nada.\n"
+            "REGLA DE ORO: Si consideras que ningún evento combina ambas ventajas para garantizar certeza de acierto altísima, devuelve obligatoriamente una lista vacía [].\n"
             "Formato ESTRICTO JSON plano (sin markdown, sin bloques de código):\n"
-            "[{\"deporte\": \"...\", \"partido\": \"...\", \"fecha_hora\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"analisis_ia\": \"Explica brevemente la doble ventaja (matemática y deportiva)\"}]\n\n"
+            "[{\"deporte\": \"...\", \"partido\": \"...\", \"fecha_hora\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"analisis_ia\": \"Explica la doble ventaja\"}]\n\n"
             f"Datos: {json.dumps(candidatos_raw, ensure_ascii=False)}"
         )
     else:
         prompt = (
             "Actúa como un tipster analista profesional y scouter deportivo meticuloso.\n"
             "TU OBJETIVO: Extrae los mejores 6 picks del día de la lista provista.\n"
-            "INSTRUCCIÓN: Evalúa tanto el valor numérico como el contexto deportivo real de los equipos involucrados. Busca el balance inteligente combinando Fútbol Internacional, Liga MX, MLB y LMB para encontrar las mejores ventajas.\n"
+            "INSTRUCCIÓN: Evalúa el valor numérico y contexto deportivo. Busca balance inteligente (Fútbol, MLB, etc).\n"
             "REGLAS CRÍTICAS:\n"
             "1. PROHIBIDO repetir partidos. Máximo un pick por evento.\n"
             "2. Formato ESTRICTO JSON plano (sin markdown, sin bloques de código):\n"
@@ -167,7 +173,7 @@ def consultar_cerebro_ia(candidatos_raw, es_septimo=False):
             if len(picks_finales_limpios) == limite:
                 break
                 
-        logger.info(f"Escaneo IA completado. Filtrados {len(picks_finales_limpios)} picks que cumplen criterio dual (Matemático + Deportivo).")
+        logger.info(f"Escaneo IA completado. Filtrados {len(picks_finales_limpios)} picks.")
         return picks_finales_limpios
 
     except Exception as e:
@@ -192,7 +198,7 @@ def procesar_cartelera_completa(es_septimo=False):
     fecha_hoy_mx = ahora_mx.date()
 
     for liga in ligas_elite:
-        # CORRECCIÓN DE ERROR EN LÍNEA 196: Definición explícita del string de mercados
+        # AQUÍ ESTÁ EL FIX DEFINITIVO (MERCADOS EXPLÍCITOS COMO TEXTO)
         partidos = obtener_picks_deporte(liga, markets="h2h,totals,spreads")
         
         if not partidos: continue
@@ -222,7 +228,6 @@ def procesar_cartelera_completa(es_septimo=False):
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    # RANGO SOLICITADO: Ajustado estrictamente de 1.25 a 3.00
                     if cuota and 1.25 <= cuota <= 3.00:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
@@ -254,7 +259,7 @@ def procesar_cartelera_completa(es_septimo=False):
     picks_elegidos = consultar_cerebro_ia(candidatos_crudos, es_septimo=es_septimo)
     
     if not es_septimo and len(picks_elegidos) < 6:
-        logger.warning(f"La IA solo devolvió {len(picks_elegidos)} picks. Activando autorelleno estratégico para asegurar los 6 picks.")
+        logger.warning(f"La IA devolvió menos de 6 picks. Activando autorelleno estratégico.")
         partidos_vistos = set(p['partido'] for p in picks_elegidos)
         
         candidatos_crudos.sort(key=lambda x: abs(x['cuota'] - 1.80))
@@ -376,7 +381,7 @@ async def mandar_picks_del_dia(forzar_envio=False):
         await enviar_mensaje_seguro("⚠️ Nota de mercado: Los eventos disponibles en este bloque no cumplen con el umbral mínimo de valor requerido. Priorizamos la protección del capital operativo. 🏦")
 
 async def buscar_septimo_pick_tarde():
-    logger.info("Despertando bot a las 1:30 PM para la Búsqueda Meticulosa del Séptimo Pick (Stake 10)...")
+    logger.info("Despertando bot a las 1:30 PM para la Búsqueda Meticulosa del Séptimo Pick...")
     
     pick_extra = procesar_cartelera_completa(es_septimo=True)
     
@@ -391,15 +396,15 @@ async def buscar_septimo_pick_tarde():
             
             alerta_msg = "🚨 ATENCIÓN: ¡STAKE 10 DETECTADO! 🚨\n\n¡Error de línea y ventaja deportiva localizados!\n\nPreparando análisis detallado... El pick se liberará en 5 minutos. ⏳"
             await enviar_mensaje_seguro(alerta_msg)
-            logger.info("Alerta de Stake 10 enviada a Telegram. Esperando 5 minutos (300 segundos)...")
+            logger.info("Alerta enviada. Esperando 5 minutos...")
             
             await asyncio.sleep(300)
             
             texto_formateado = construir_mensaje(joya, es_septimo=True)
             await enviar_mensaje_seguro(texto_formateado)
-            logger.info("Séptimo pick enviado de manera exitosa al canal.")
+            logger.info("Séptimo pick enviado de manera exitosa.")
     else:
-        logger.info("Búsqueda meticulosa finalizada: El mercado no presentó cruces óptimos de ventaja matemática y deportiva para un Stake 10.")
+        logger.info("El mercado no presentó cruces óptimos para un Stake 10 hoy.")
 
 async def mandar_reporte_profit():
     picks_enviados_hoy = cargar_picks()
@@ -413,8 +418,8 @@ async def mandar_reporte_profit():
     rojos = 0
 
     msg = (
-        "📊 **ELBOSSMEXA – Resumen Técnico de la Jornada** 📊\n\n"
-        "Finalizan las acciones en la cartelera de hoy. Presentamos el desglose oficial de resultados obtenidos por nuestro sistema analítico:\n\n"
+        "📊 **Resumen Técnico de la Jornada** 📊\n\n"
+        "Finalizan las acciones en la cartelera de hoy. Presentamos el desglose oficial de resultados:\n\n"
     )
     
     for pick in picks_enviados_hoy:
@@ -441,27 +446,24 @@ async def mandar_reporte_profit():
         porcentaje_efectividad = (verdes / total_evaluados) * 100
         msg += f"📊 **Efectividad de la Jornada:** {porcentaje_efectividad:.1f}% ({verdes} verdes / {rojos} rojos)\n\n"
     
-    msg += "Verifiquen sus estados de cuenta. El análisis estratégico basado en valor sigue demostrando consistencia. Mañana continuaremos con el plan de trabajo. 📈💰"
+    msg += "Verifiquen sus estados de cuenta. Mañana continuaremos con el plan de trabajo. 📈💰"
     await enviar_mensaje_seguro(msg)
 
 async def mandar_buenas_noches():
     msg = (
         "🌙 **Buenas noches, equipo.** 🌙\n\n"
         "Damos por concluida la actividad operativa de este día.\n\n"
-        "El sistema automatizado entrará en fase de reposo y reactivará los algoritmos de filtrado durante la madrugada para identificar las mejores ventanas de oportunidad para la cartelera de mañana. Que tengan un excelente descanso. 💤💪"
+        "El sistema automatizado entrará en fase de reposo y reactivará los algoritmos durante la madrugada. Que tengan un excelente descanso. 💤💪"
     )
     await enviar_mensaje_seguro(msg)
 
 # ==========================================
-# BUCLE PRINCIPAL (CRONOGRAMA ESTABLE)
+# BUCLE PRINCIPAL
 # ==========================================
 async def main_loop():
-    logger.info("Bot ELBOSSMEXA Iniciado. Escaneo de Doble Ventaja (Matemática + Deportiva).")
+    logger.info("Bot Iniciado. Escaneo de Doble Ventaja (Matemática + Deportiva).")
 
-    # ==============================================================
-    # ENVÍO INMEDIATO AL ARRANCAR (IGNORANDO EL HORARIO POR ÚNICA VEZ)
-    # ==============================================================
-    logger.info("🚨 Forzando el envío inmediato de los 6 picks para compensar el horario...")
+    logger.info("🚨 Forzando envío inmediato de arranque...")
     await mandar_picks_del_dia(forzar_envio=True)
     logger.info("✅ Envío de arranque completado. Entrando al cronograma normal.")
 
@@ -482,34 +484,30 @@ async def main_loop():
                 enviado_noches = False
                 enviado_picks = False
                 enviado_septimo = False
-                logger.info(f"Nuevo día detectado ({dia_actual}). Banderas de envío reiniciadas.")
+                logger.info(f"Nuevo día detectado ({dia_actual}). Banderas reiniciadas.")
 
-            # 1. Reporte de ganancias (11:45 PM - 11:50 PM)
             if ahora.hour == 23 and 45 <= ahora.minute <= 50 and not enviado_profit:
                 await mandar_reporte_profit()
                 enviado_profit = True
 
-            # 2. Mensaje de cierre (12:00 AM - 12:05 AM)
             elif ahora.hour == 0 and 0 <= ahora.minute <= 5 and not enviado_noches:
                 await mandar_buenas_noches()
                 enviado_noches = True
 
-            # 3. Bloque Principal de 6 Picks del Día (10:00 AM - 10:05 AM)
             elif ahora.hour == 10 and 0 <= ahora.minute <= 5 and not enviado_picks:
-                logger.info("Iniciando tarea: Escaneo exhaustivo matutino (10:00 AM)...")
+                logger.info("Iniciando Escaneo exhaustivo matutino (10:00 AM)...")
                 await mandar_picks_del_dia()
                 enviado_picks = True
                 
-            # 4. Búsqueda profunda del Séptimo Pick (1:30 PM - 1:35 PM)
             elif ahora.hour == 13 and 30 <= ahora.minute <= 35 and not enviado_septimo:
-                logger.info("Iniciando tarea: Búsqueda profunda del Séptimo Pick a las 1:30 PM...")
+                logger.info("Iniciando Búsqueda profunda del Séptimo Pick a las 1:30 PM...")
                 await buscar_septimo_pick_tarde()
                 enviado_septimo = True
 
             await asyncio.sleep(30)
             
         except Exception as e:
-            logger.error(f"Error detectado en el bucle principal: {e}")
+            logger.error(f"Error en el bucle principal: {e}")
             await asyncio.sleep(30)
 
 if __name__ == "__main__":
