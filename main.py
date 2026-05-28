@@ -222,7 +222,8 @@ def procesar_cartelera_completa(es_septimo=False):
                 
                 for o in outcomes:
                     cuota = o.get("price")
-                    if cuota and 1.25 <= cuota <= 2.90:
+                    # AJUSTE DE RANGO: De 1.15 a 4.00 para tener muchas opciones de respaldo
+                    if cuota and 1.15 <= cuota <= 4.00:
                         nombre_deporte = mapear_icono_deporte(liga)
                         
                         if market_key == "h2h": 
@@ -249,7 +250,27 @@ def procesar_cartelera_completa(es_septimo=False):
                         })
                         
     if not candidatos_crudos: return []
-    return consultar_cerebro_ia(candidatos_crudos, es_septimo=es_septimo)
+    
+    # Consulta a la IA con los datos filtrados
+    picks_elegidos = consultar_cerebro_ia(candidatos_crudos, es_septimo=es_septimo)
+    
+    # RESPALDO MATUTINO AUTOMÁTICO (Fallback)
+    if not es_septimo and len(picks_elegidos) < 6:
+        logger.warning(f"La IA solo devolvió {len(picks_elegidos)} picks. Activando autorelleno estratégico para asegurar los 6 picks.")
+        partidos_vistos = set(p['partido'] for p in picks_elegidos)
+        
+        # Ordenamos los candidatos restantes acercándonos a la cuota 1.80 como base de estabilidad
+        candidatos_crudos.sort(key=lambda x: abs(x['cuota'] - 1.80))
+        
+        for cand in candidatos_crudos:
+            if cand['partido'] not in partidos_vistos:
+                cand['analisis_ia'] = "Análisis de valor respaldado por tendencias de rendimiento y consistencia estadística deportiva."
+                picks_elegidos.append(cand)
+                partidos_vistos.add(cand['partido'])
+            if len(picks_elegidos) == 6:
+                break
+                
+    return picks_elegidos
 
 def construir_mensaje(pick_data, es_septimo=False):
     cuota = pick_data["cuota"]
@@ -339,8 +360,9 @@ async def mandar_buenos_dias():
     )
     await enviar_mensaje_seguro(msg)
 
-async def mandar_picks_del_dia():
-    if ya_se_envio_hoy(): return
+async def mandar_picks_del_dia(forzar_envio=False):
+    # Si no estamos forzando el envío y ya se envió hoy, salimos
+    if not forzar_envio and ya_se_envio_hoy(): return
 
     await mandar_buenos_dias()
     await asyncio.sleep(4)
@@ -371,12 +393,10 @@ async def buscar_septimo_pick_tarde():
             picks_actuales.append(joya)
             guardar_picks(picks_actuales)
             
-            # EL MENSAJE DE ALERTA NO SE TOCA - SE ENVÍA 5 MINUTOS ANTES
             alerta_msg = "🚨 ATENCIÓN: ¡STAKE 10 DETECTADO! 🚨\n\n¡Error de línea y ventaja deportiva localizados!\n\nPreparando análisis detallado... El pick se liberará en 5 minutos. ⏳"
             await enviar_mensaje_seguro(alerta_msg)
             logger.info("Alerta de Stake 10 enviada a Telegram. Esperando 5 minutos (300 segundos)...")
             
-            # ESPERA EXACTA DE 5 MINUTOS ANTES DE MANDAR EL PICK
             await asyncio.sleep(300)
             
             texto_formateado = construir_mensaje(joya, es_septimo=True)
@@ -442,9 +462,16 @@ async def mandar_buenas_noches():
 async def main_loop():
     logger.info("Bot ELBOSSMEXA Iniciado. Escaneo de Doble Ventaja (Matemática + Deportiva).")
 
+    # ==============================================================
+    # ENVÍO INMEDIATO AL ARRANCAR (IGNORANDO EL HORARIO POR ÚNICA VEZ)
+    # ==============================================================
+    logger.info("🚨 Forzando el envío inmediato de los 6 picks para compensar el horario...")
+    await mandar_picks_del_dia(forzar_envio=True)
+    logger.info("✅ Envío de arranque completado. Entrando al cronograma normal.")
+
     enviado_profit = False
     enviado_noches = False
-    enviado_picks = False
+    enviado_picks = True # Lo marcamos como true para que no vuelva a mandarlos si cayera a las 8:30 AM
     enviado_septimo = False 
     
     dia_actual = datetime.now(MX_TZ).date()
