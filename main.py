@@ -128,25 +128,20 @@ def mapear_icono_deporte(sport_key):
 def consultar_cerebro_ia(candidatos_raw, modo_bloque="seis_picks"):
     if modo_bloque == "seis_picks":
         prompt = (
-            "Actúa como un tipster analista profesional. Selecciona los 6 mejores picks de la lista.\n"
-            "REGLAS DE PRIORIZACIÓN DE LIGAS:\n"
-            "1. PRIORIDAD MÁXIMA: Debes priorizar los partidos de Béisbol (MLB y LMB). Si hay disponibilidad, dale fuerte peso en la cartelera combinándolos (ej. 3 de MLB y 3 de LMB, o de forma salteada).\n"
-            "2. VARIEDAD SALTEADA: Si existen partidos de Fútbol Europeo o NBA, inclúyelos de forma intercalada para que la cartelera sea variada y no sature de un solo deporte.\n"
-            "3. ESCASEZ: Si de plano NO hay fútbol o NBA activos, llena la cartelera de 6 picks usando exclusivamente MLB y LMB.\n"
-            "4. REGLAS CRÍTICAS: NO repitas partidos. Asigna un STAKE de 1 a 8 según la probabilidad matemática real.\n"
-            "5. Devuelve ESTRICTO JSON plano (sin markdown, sin ```):\n"
-            "[{\"deporte\": \"...\", \"partido\": \"...\", \"fecha_hora\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"stake_num\": 5, \"analisis_ia\": \"...\"}]"
+            "Analiza y elige los 6 mejores picks únicos. Reglas estricta:\n"
+            "1. Prioridad máxima a Béisbol (MLB y LMB) si están disponibles.\n"
+            "2. Intercala partidos de Fútbol Europeo o NBA para dar variedad.\n"
+            "3. Si no hay fútbol/NBA, llena los 6 con MLB/LMB.\n"
+            "4. Asigna Stake del 1 al 8 según probabilidad.\n"
+            "Devuelve solo JSON plano, sin markdown: "
+            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
         )
-    else:  # Modo SÉPTIMO PICK STAKE 10 / 9
+    else:
         prompt = (
-            "Actúa como un tipster profesional analizando apuestas de ALTA CONFIANZA (+EV).\n"
-            "TU OBJETIVO: Selecciona el PICK MÁS SEGURO DEL DÍA (Mínimo 85% a 90% de probabilidad matemática/deportiva).\n"
-            "REGLAS:\n"
-            "1. Puedes priorizar MLB o LMB si muestran un valor estadístico brutal, pero está abierto a Fútbol Europeo o NBA si la probabilidad es casi infalible.\n"
-            "2. Debe calificar como STAKE 10 o STAKE 9.\n"
-            "3. Devuelve ESTRICTO JSON plano (sin markdown, sin 
-```) de un solo objeto dentro de una lista:\n"
-            "[{\"deporte\": \"...\", \"partido\": \"...\", \"fecha_hora\": \"...\", \"pick\": \"...\", \"cuota\": 0.0, \"bookie\": \"...\", \"sport_key\": \"...\", \"stake_num\": 10, \"analisis_ia\": \"...\"}]"
+            "Selecciona únicamente el pick más seguro del día (Confianza 85%-90%).\n"
+            "Asigna obligatoriamente Stake 9 o 10.\n"
+            "Devuelve solo un objeto en JSON plano, sin markdown: "
+            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 10, \"analisis_ia\": \"\"}]"
         )
 
     prompt += f"\n\nDatos: {json.dumps(candidatos_raw, ensure_ascii=False)}"
@@ -155,7 +150,8 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="seis_picks"):
 
     try:
         response = model.generate_content(prompt)
-        txt = response.text.strip().replace("```json", "").replace("```", "").strip()
+        txt = response.text.strip().replace("```json", "").replace("
+```", "").strip()
         picks_seleccionados = json.loads(txt)
         
         limite = 6 if modo_bloque == "seis_picks" else 1
@@ -372,7 +368,7 @@ async def mandar_reporte_profit():
 
     msg = (
         "📊 **El Boss Mexa – Resumen de la Jornada** 📊\n\n"
-        "Cerramos las acciones del día contando nuestro Séptimo Pick VIP. Resultados oficiales:\n\n"
+        "Cerramos las actions del día contando nuestro Séptimo Pick VIP. Resultados oficiales:\n\n"
     )
     
     for pick in picks_totales:
@@ -434,17 +430,17 @@ async def main_loop():
                 enviado_septimo = False
                 logger.info(f"Día reiniciado: {dia_actual}.")
 
-            # 08:30 AM - Mensaje de Buenos Días Separado
+            # 08:30 AM - Mensaje de Buenos Días
             if ahora.hour == 8 and 30 <= ahora.minute <= 35 and not enviado_buenos_dias:
                 await mandar_buenos_dias()
                 enviado_buenos_dias = True
 
-            # 11:30 AM - Envío Exclusivo de los 6 Picks de Golpe
+            # 11:30 AM - Envío Exclusivo de los 6 Picks
             elif ahora.hour == 11 and 30 <= ahora.minute <= 35 and not enviado_picks:
                 await mandar_picks_del_dia()
                 enviado_picks = True
 
-            # 02:00 PM - Séptimo Pick VIP (Stake 10)
+            # 02:00 PM - Séptimo Pick VIP
             elif ahora.hour == 14 and 0 <= ahora.minute <= 5 and not enviado_septimo:
                 await mandar_septimo_pick()
                 enviado_septimo = True
