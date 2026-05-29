@@ -65,7 +65,7 @@ LIGAS_PERMITIDAS = [
 ]
 
 def obtener_picks_deporte(sport_key, markets):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/"
     params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -75,7 +75,7 @@ def obtener_picks_deporte(sport_key, markets):
         return []
 
 def obtener_marcadores(sport_key):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/scores/"
     params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -119,8 +119,10 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
 
     try:
         response = model.generate_content(prompt_completo)
-        txt = response.text.strip().replace("```json", "").replace("
-```", "").strip()
+        # ==============================================================
+        # AQUÍ ESTÁ LA LÍNEA REPARADA: TODO EN UNA SOLA LÍNEA SIN SALTOS
+        # ==============================================================
+        txt = response.text.strip().replace("```json", "").replace("```", "").strip()
         picks_seleccionados = json.loads(txt)
         
         for pick in picks_seleccionados:
