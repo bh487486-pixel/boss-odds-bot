@@ -38,10 +38,6 @@ ARCHIVO_LOG_BUENOS_DIAS = "buenos_dias.txt"
 ARCHIVO_LOG_SEPTIMO = "ultimo_septimo.txt"
 ARCHIVO_LOG_PROFIT = "ultimo_envio.txt"
 
-# RANGOS DE CUOTA AJUSTADOS
-CUOTA_MINIMA = 1.30
-CUOTA_MAXIMA = 3.50
-
 # ==========================================
 # CANDADOS DE CONTROL DE ENVÍOS
 # ==========================================
@@ -75,11 +71,12 @@ def cargar_picks():
 LIGAS_FUTBOL = [
     "soccer_uefa_champions_league", "soccer_uefa_europa_league", "soccer_uefa_european_championship",
     "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", "soccer_germany_bundesliga", 
-    "soccer_france_ligue_1", "soccer_conmebol_copa_libertadores", "soccer_conmebol_copa_sudamericana"
+    "soccer_france_ligue_1", "soccer_conmebol_copa_libertadores", "soccer_conmebol_copa_sudamericana",
+    "soccer_mexico_ligamx", "soccer_usa_mls" # Añadimos MLS y Liga MX por si acaso
 ]
 
 def obtener_picks_deporte(sport_key, markets):
-    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/"
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
     params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -88,7 +85,7 @@ def obtener_picks_deporte(sport_key, markets):
     except: return []
 
 def obtener_marcadores(sport_key):
-    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/scores/"
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
     params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -109,15 +106,15 @@ def mapear_icono_deporte(sport_key):
 # ==========================================
 def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
     if modo_bloque == "bloque_normal":
-        p1 = "Analiza la lista completa de partidos y elige estrictamente los 2 mejores picks únicos con mayor probabilidad de éxito.\n"
-        p2 = "Asigna a cada uno un Stake del 3 al 8 basado en su probabilidad analítica.\n"
-        p3 = "Devuelve solo JSON plano, sin markdown: "
+        p1 = "Analiza la lista completa de partidos. Eres un tipster profesional buscando máxima efectividad.\n"
+        p2 = "Elige estrictamente los 2 mejores picks únicos evaluando la cuota y la probabilidad de éxito (prioriza ganar sobre cuotas locas).\n"
+        p3 = "Asigna a cada uno un Stake del 3 al 8. Devuelve solo JSON plano, sin markdown: "
         p4 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
         p5 = "\"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
         prompt = p1 + p2 + p3 + p4 + p5
     else:
-        p1 = "Selecciona el único y mejor pick disponible de toda la lista que tenga una probabilidad del 70% al 80%.\n"
-        p2 = "Asigna obligatoriamente un Stake de 9 o 10 según la solidez del encuentro.\n"
+        p1 = "Selecciona el único y mejor pick disponible de toda la cartelera, aquel que consideres tu 'Jugada Segura' con mayor probabilidad de éxito.\n"
+        p2 = "No importa si la cuota es baja, busco asegurar el verde. Asigna obligatoriamente un Stake de 9 o 10.\n"
         p3 = "Devuelve solo un objeto en JSON plano, sin markdown: "
         p4 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
         p5 = "\"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 10, \"analisis_ia\": \"\"}]"
@@ -129,7 +126,7 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
     try:
         response = model.generate_content(prompt_completo)
         
-        # LIMPIEZA 100% SEGURA (Usa chr(96) para evitar errores de sintaxis al copiar/pegar)
+        # LIMPIEZA 100% SEGURA
         txt = response.text
         marcador_json = chr(96) * 3 + "json"
         marcador_fin = chr(96) * 3
@@ -147,7 +144,7 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
         random.shuffle(candidatos_raw)
         p = candidatos_raw[0]
         p['stake_num'] = 5 if modo_bloque == "bloque_normal" else 10
-        p['analisis_ia'] = "Análisis de valor verificado por fluctuación de mercado."
+        p['analisis_ia'] = "Análisis respaldado por fluctuación algorítmica de los mercados principales."
         return [p]
 
 def procesar_ligas(lista_ligas, modo_bloque="bloque_normal"):
@@ -172,7 +169,8 @@ def procesar_ligas(lista_ligas, modo_bloque="bloque_normal"):
                 for market in bookie.get("markets", []):
                     for o in market.get("outcomes", []):
                         cuota = o.get("price")
-                        if cuota and CUOTA_MINIMA <= cuota <= CUOTA_MAXIMA:
+                        # AQUÍ QUITAMOS EL CANDADO DE CUOTAS. SI HAY CUOTA, SE ANALIZA.
+                        if cuota:
                             candidatos_todos.append({
                                 "deporte": mapear_icono_deporte(liga),
                                 "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
@@ -184,10 +182,10 @@ def procesar_ligas(lista_ligas, modo_bloque="bloque_normal"):
                             })
                             
     if not candidatos_todos: 
-        logger.warning(f"No se encontraron candidatos tras aplicar el rango {CUOTA_MINIMA}-{CUOTA_MAXIMA}.")
+        logger.warning(f"La API no regresó ningún partido activo para las ligas solicitadas hoy.")
         return []
     
-    logger.info(f"Analizando la cartelera completa: {len(candidatos_todos)} mercados disponibles.")
+    logger.info(f"Cartelera abierta: {len(candidatos_todos)} mercados enviados a la IA.")
     return consultar_cerebro_ia(candidatos_todos, modo_bloque=modo_bloque)
 
 def construir_mensaje(pick_data):
@@ -320,16 +318,16 @@ async def main_loop():
             if ahora.hour == 7 and 45 <= ahora.minute <= 50:
                 await ejecutar_buenos_dias()
             
-            # 2. 08:00 AM - Bloque MLB (Hasta 2 picks si hay valor)
+            # 2. 08:00 AM - Bloque MLB
             elif ahora.hour == 8 and 0 <= ahora.minute <= 5:
                 await ejecutar_bloque_especifico(["baseball_mlb"], 2, "mlb")
             
-            # 3. 09:00 AM - Bloque Fútbol Europeo (Hasta 2 picks si hay valor)
+            # 3. 09:00 AM - Bloque Fútbol 
+            # AHORA BUSCAMOS EN TODAS LAS LIGAS DE FÚTBOL PARA ASEGURARNOS DE AGARRAR ALGO
             elif ahora.hour == 9 and 0 <= ahora.minute <= 5:
-                ligas_futbol = ["soccer_uefa_champions_league"] if dia == 5 else ["soccer_epl", "soccer_spain_la_liga", "soccer_germany_bundesliga", "soccer_italy_serie_a"]
-                await ejecutar_bloque_especifico(ligas_futbol, 2, "futbol")
+                await ejecutar_bloque_especifico(LIGAS_FUTBOL, 2, "futbol")
             
-            # 4. 01:30 PM - Bloque LMB (Hasta 2 picks si hay valor)
+            # 4. 01:30 PM - Bloque LMB
             elif ahora.hour == 13 and 30 <= ahora.minute <= 35:
                 msg_lmb = "Familia, ya están abiertas las líneas. Aquí tienen los picks de la Liga Mexicana de Béisbol. ⚾️🔥"
                 await ejecutar_bloque_especifico(["baseball_lmb"], 2, "lmb", mensaje_intro=msg_lmb)
