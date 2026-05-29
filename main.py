@@ -42,7 +42,7 @@ LIGAS_TODAS = LIGAS_FUTBOL + LIGAS_BEISBOL + ["tennis_atp_wimbledon", "basketbal
 # 3. EXTRACCIÓN DE DATOS (DEL DÍA)
 # ==========================================
 def obtener_mercados(sport_key):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/?apiKey={ODDS_API_KEY}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/?apiKey={ODDS_API_KEY}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
     try:
         res = requests.get(url, timeout=15)
         if res.status_code == 200:
@@ -114,8 +114,8 @@ def analizar_con_ia(cartelera, cantidad, es_stake_10=False):
 
     try:
         respuesta = model.generate_content(prompt)
-        texto = respuesta.text.strip().replace("```json", "").replace("
-```", "")
+        # ESTA ES LA LÍNEA QUE SE HABÍA ROTO. YA ESTÁ EN UNA SOLA LÍNEA LIMPIA.
+        texto = respuesta.text.strip().replace("```json", "").replace("```", "")
         return json.loads(texto)
     except Exception as e:
         logger.error(f"Error de Gemini al procesar picks: {e}")
