@@ -110,7 +110,7 @@ def mapear_icono_deporte(sport_key):
 def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
     if modo_bloque == "bloque_normal":
         p1 = "Analiza la lista completa de partidos y elige estrictamente los 2 mejores picks únicos con mayor probabilidad de éxito.\n"
-        p2 = f"Asigna a cada uno un Stake del 3 al 8 basado en su probabilidad analítica.\n"
+        p2 = "Asigna a cada uno un Stake del 3 al 8 basado en su probabilidad analítica.\n"
         p3 = "Devuelve solo JSON plano, sin markdown: "
         p4 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
         p5 = "\"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
@@ -128,12 +128,20 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
 
     try:
         response = model.generate_content(prompt_completo)
-        txt = response.text.replace("```json", "").replace("
-```", "").strip()
-        picks_seleccionados = json.loads(txt)
         
+        # LIMPIEZA COMPLETAMENTE SEGURA Y CORREGIDA SINTÁCTICAMENTE
+        txt = response.text.strip()
+        if txt.startswith("```"):
+            txt = txt.split("\n", 1)[1]
+        if txt.endswith("
+```"):
+            txt = txt.rsplit("\n", 1)[0]
+        txt = txt.strip()
+        
+        picks_seleccionados = json.loads(txt)
         limite = 2 if modo_bloque == "bloque_normal" else 1
         return picks_seleccionados[:limite]
+        
     except Exception as e:
         logger.error(f"Fallo en cerebro IA: {e}")
         random.shuffle(candidatos_raw)
@@ -306,7 +314,7 @@ async def main_loop():
     while True:
         try:
             ahora = datetime.now(MX_TZ)
-            dia = ahora.weekday() # 0=Lun, 5=Sab, 6=Dom
+            dia = ahora.weekday() # 0=Lun, 4=Vie, 5=Sab, 6=Dom
             
             # 1. 07:45 AM - Mensaje Obligatorio de Buenos Días
             if ahora.hour == 7 and 45 <= ahora.minute <= 50:
@@ -318,7 +326,8 @@ async def main_loop():
             
             # 3. 09:00 AM - Bloque Fútbol Europeo (Hasta 2 picks si hay valor)
             elif ahora.hour == 9 and 0 <= ahora.minute <= 5:
-                ligas_futbol = ["soccer_uefa_champions_league"] if dia == 5 else ["soccer_epl", "soccer_spain_la_liga"]
+                # Si es sábado usa Champions, si no usa las ligas principales comerciales
+                ligas_futbol = ["soccer_uefa_champions_league"] if dia == 5 else ["soccer_epl", "soccer_spain_la_liga", "soccer_germany_bundesliga", "soccer_italy_serie_a"]
                 await ejecutar_bloque_especifico(ligas_futbol, 2, "futbol")
             
             # 4. 01:30 PM - Bloque LMB (Hasta 2 picks si hay valor)
