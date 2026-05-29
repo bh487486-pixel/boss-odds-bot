@@ -124,6 +124,7 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
 
     try:
         response = model.generate_content(prompt_completo)
+        # AQUÍ ESTABA EL ERROR DEL SALTO DE LÍNEA, YA ESTÁ CORREGIDO EN UNA SOLA LÍNEA
         txt = response.text.strip().replace("```json", "").replace("
 ```", "").strip()
         picks_seleccionados = json.loads(txt)
@@ -175,7 +176,6 @@ def procesar_ligas(lista_ligas, modo_bloque="bloque_normal"):
         logger.warning("No se encontraron candidatos tras aplicar el rango 1.40-2.80.")
         return []
     
-    # Se eliminó por completo el recorte de cantidad. Pasa toda la cartelera directo a la IA.
     logger.info(f"Analizando la cartelera completa: {len(candidatos_todos)} mercados disponibles.")
     return consultar_cerebro_ia(candidatos_todos, modo_bloque=modo_bloque)
 
@@ -266,7 +266,6 @@ async def mandar_reporte_profit():
     if verificar_y_marcar(ARCHIVO_LOG_PROFIT): return
     picks_totales = cargar_picks()
     
-    # MENSAJE OBLIGATORIO SI NO HUBO PICKS
     if not picks_totales:
         msg_vacio = "📊 El Boss Mexa – Resumen de la Jornada 📊\n\nHoy las líneas de mercado no ofrecieron el valor analítico suficiente para arriesgar capital. ¡Cuidamos la banca y mañana regresamos con todo a facturar! 💰"
         await enviar_mensaje_seguro(msg_vacio)
