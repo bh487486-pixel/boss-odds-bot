@@ -42,7 +42,7 @@ LIGAS_TODAS = LIGAS_FUTBOL + LIGAS_BEISBOL + ["tennis_atp_wimbledon", "basketbal
 # 3. EXTRACCIÓN DE DATOS (DEL DÍA)
 # ==========================================
 def obtener_mercados(sport_key):
-    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/?apiKey={ODDS_API_KEY}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/?apiKey={ODDS_API_KEY}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
     try:
         res = requests.get(url, timeout=15)
         if res.status_code == 200:
@@ -100,9 +100,9 @@ def analizar_con_ia(cartelera, cantidad, es_stake_10=False):
     DEVUELVE ESTRICTAMENTE UN ARREGLO JSON CON ESTA ESTRUCTURA (SIN MARKDOWN NI TEXTO EXTRA):
     [
       {
-        "deporte": "⚽ Fútbol (o ⚾ Béisbol, etc)",
+        "deporte": "⚾ Béisbol",
         "partido": "Equipo A vs Equipo B",
-        "pick": "Tu predicción exacta (Ej. Gana Equipo A, Over 2.5, Hándicap -1.5)",
+        "pick": "Tu predicción exacta (Ej. Gana Equipo A, Over 8.5, Hándicap -1.5)",
         "cuota": 1.85,
         "stake": 3, 
         "analisis": "Análisis estadístico profesional de 2 líneas justificando el valor."
@@ -114,8 +114,8 @@ def analizar_con_ia(cartelera, cantidad, es_stake_10=False):
 
     try:
         respuesta = model.generate_content(prompt)
-        # ESTA ES LA LÍNEA QUE SE HABÍA ROTO. YA ESTÁ EN UNA SOLA LÍNEA LIMPIA.
-        texto = respuesta.text.strip().replace("```json", "").replace("```", "")
+        texto = respuesta.text.strip().replace("```json", "").replace("
+```", "")
         return json.loads(texto)
     except Exception as e:
         logger.error(f"Error de Gemini al procesar picks: {e}")
@@ -169,16 +169,24 @@ async def disparar_bloque(nombre, ligas, cantidad, mensaje_intro=None, es_stake_
 async def loop_principal():
     logger.info("Sistema EL BOSS MEXA V2.0 Iniciado y esperando horarios.")
     
+    # ========================================================
+    # 🔥 DISPARO DE PRUEBA INMEDIATO AL ARRANCAR 🔥
+    # ========================================================
+    logger.info("Fuerza bruta activada: Buscando picks de béisbol (LMB/MLB) para enviar ya mismo...")
+    msg_prueba = "Familia, aquí tienen las líneas de béisbol para romper el mercado hoy. ¡A cobrar de una vez! ⚾🔥"
+    await disparar_bloque("Prueba Forzada", ["baseball_lmb", "baseball_mlb"], 2, mensaje_intro=msg_prueba)
+    # ========================================================
+
     bloques_ejecutados = {
         "buenos_dias": None, "mlb": None, "futbol": None, 
         "lmb": None, "stake10": None, "reporte": None
     }
 
     while True:
-        ahora = datetime.now(MX_TZ)
-        fecha_str = ahora.strftime("%Y-%m-%d")
-
         try:
+            ahora = datetime.now(MX_TZ)
+            fecha_str = ahora.strftime("%Y-%m-%d")
+
             # 07:45 AM
             if ahora.hour == 7 and 45 <= ahora.minute <= 50 and bloques_ejecutados["buenos_dias"] != fecha_str:
                 msg = "¡Buenos días, Familia! ☀️ Arrancamos una nueva jornada de análisis deportivo. En breve salen las primeras jugadas del día. ¡A facturar hoy! 💸"
@@ -191,7 +199,7 @@ async def loop_principal():
                 bloques_ejecutados["mlb"] = fecha_str
 
             # 09:00 AM
-            elif ahora.hour == 9 and 0 <= ahora.minute <= 5 and bloques_ejecutados["futbol"] != fecha_str:
+            elif Presidential_Hour := (ahora.hour == 9 and 0 <= ahora.minute <= 5 and bloques_ejecutados["futbol"] != fecha_str):
                 await disparar_bloque("Fútbol M", LIGAS_FUTBOL, 2)
                 bloques_ejecutados["futbol"] = fecha_str
 
