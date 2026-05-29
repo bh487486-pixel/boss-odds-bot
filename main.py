@@ -38,6 +38,10 @@ ARCHIVO_LOG_BUENOS_DIAS = "buenos_dias.txt"
 ARCHIVO_LOG_SEPTIMO = "ultimo_septimo.txt"
 ARCHIVO_LOG_PROFIT = "ultimo_envio.txt"
 
+# RANGOS DE CUOTA AJUSTADOS
+CUOTA_MINIMA = 1.30
+CUOTA_MAXIMA = 3.50
+
 # ==========================================
 # CANDADOS DE CONTROL DE ENVÍOS
 # ==========================================
@@ -106,7 +110,7 @@ def mapear_icono_deporte(sport_key):
 def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
     if modo_bloque == "bloque_normal":
         p1 = "Analiza la lista completa de partidos y elige estrictamente los 2 mejores picks únicos con mayor probabilidad de éxito.\n"
-        p2 = "Asigna a cada uno un Stake del 3 al 8 basado en su probabilidad analítica.\n"
+        p2 = f"Asigna a cada uno un Stake del 3 al 8 basado en su probabilidad analítica.\n"
         p3 = "Devuelve solo JSON plano, sin markdown: "
         p4 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
         p5 = "\"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
@@ -124,8 +128,8 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
 
     try:
         response = model.generate_content(prompt_completo)
-        # LIMPIEZA SEGURA EN UNA SOLA LÍNEA PARA EVITAR ERRORES DE SINTAXIS
-        txt = response.text.replace("```json", "").replace("```", "").strip()
+        txt = response.text.replace("```json", "").replace("
+```", "").strip()
         picks_seleccionados = json.loads(txt)
         
         limite = 2 if modo_bloque == "bloque_normal" else 1
@@ -160,7 +164,7 @@ def procesar_ligas(lista_ligas, modo_bloque="bloque_normal"):
                 for market in bookie.get("markets", []):
                     for o in market.get("outcomes", []):
                         cuota = o.get("price")
-                        if cuota and 1.40 <= cuota <= 2.80:
+                        if cuota and CUOTA_MINIMA <= cuota <= CUOTA_MAXIMA:
                             candidatos_todos.append({
                                 "deporte": mapear_icono_deporte(liga),
                                 "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
@@ -172,7 +176,7 @@ def procesar_ligas(lista_ligas, modo_bloque="bloque_normal"):
                             })
                             
     if not candidatos_todos: 
-        logger.warning("No se encontraron candidatos tras aplicar el rango 1.40-2.80.")
+        logger.warning(f"No se encontraron candidatos tras aplicar el rango {CUOTA_MINIMA}-{CUOTA_MAXIMA}.")
         return []
     
     logger.info(f"Analizando la cartelera completa: {len(candidatos_todos)} mercados disponibles.")
