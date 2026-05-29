@@ -65,7 +65,8 @@ LIGAS_PERMITIDAS = [
 ]
 
 def obtener_picks_deporte(sport_key, markets):
-    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/"
+    # URL limpiada de hipervínculos corruptos
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
     params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -75,7 +76,8 @@ def obtener_picks_deporte(sport_key, markets):
         return []
 
 def obtener_marcadores(sport_key):
-    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/scores/"
+    # URL limpiada de hipervínculos corruptos
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
     params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -119,9 +121,6 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
 
     try:
         response = model.generate_content(prompt_completo)
-        # ==============================================================
-        # AQUÍ ESTÁ LA LÍNEA REPARADA: TODO EN UNA SOLA LÍNEA SIN SALTOS
-        # ==============================================================
         txt = response.text.strip().replace("```json", "").replace("```", "").strip()
         picks_seleccionados = json.loads(txt)
         
@@ -193,8 +192,9 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                                 tipo_pick = f"Hándicap {o.get('name')} {signo}{punto}"
                             else: continue
 
+                            # LÍNEA CORREGIDA: Asignación limpia del deporte sin operador morsa
                             candidatos_crudos.append({
-                                "deporte": name_dep := nombre_deporte,
+                                "deporte": nombre_deporte,
                                 "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
                                 "fecha_hora": fecha_hora_str,
                                 "pick": tipo_pick,
