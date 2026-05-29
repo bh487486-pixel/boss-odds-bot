@@ -35,8 +35,6 @@ ARCHIVO_PICKS = "picks_hoy.json"
 
 # Candados diarios
 ARCHIVO_LOG_BUENOS_DIAS = "buenos_dias.txt"
-ARCHIVO_LOG_MLB = "bloque_mlb.txt"
-ARCHIVO_LOG_LMB = "bloque_lmb.txt"
 ARCHIVO_LOG_SEPTIMO = "ultimo_septimo.txt"
 ARCHIVO_LOG_PROFIT = "ultimo_envio.txt"
 
@@ -77,7 +75,7 @@ LIGAS_FUTBOL = [
 ]
 
 def obtener_picks_deporte(sport_key, markets):
-    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/"
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
     params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -86,7 +84,7 @@ def obtener_picks_deporte(sport_key, markets):
     except: return []
 
 def obtener_marcadores(sport_key):
-    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/scores/"
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
     params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -105,16 +103,16 @@ def mapear_icono_deporte(sport_key):
 # ==========================================
 # CEREBRO IA: SELECCIÓN EXCLUSIVA DE PICKS
 # ==========================================
-def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_3"):
-    if modo_bloque == "bloque_3":
-        p1 = "Analiza y elige estrictamente los 3 mejores picks únicos de la lista proporcionada.\n"
+def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
+    if modo_bloque == "bloque_normal":
+        p1 = "Analiza la lista completa de partidos y elige estrictamente los 2 mejores picks únicos con mayor probabilidad de éxito.\n"
         p2 = "Asigna a cada uno un Stake del 3 al 8 basado en su probabilidad analítica.\n"
         p3 = "Devuelve solo JSON plano, sin markdown: "
         p4 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
         p5 = "\"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
         prompt = p1 + p2 + p3 + p4 + p5
     else:
-        p1 = "Selecciona el mejor pick disponible de toda la lista que tenga una probabilidad del 70% al 80%.\n"
+        p1 = "Selecciona el único y mejor pick disponible de toda la lista que tenga una probabilidad del 70% al 80%.\n"
         p2 = "Asigna obligatoriamente un Stake de 9 o 10 según la solidez del encuentro.\n"
         p3 = "Devuelve solo un objeto en JSON plano, sin markdown: "
         p4 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
@@ -126,21 +124,21 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_3"):
 
     try:
         response = model.generate_content(prompt_completo)
-        # Línea corregida y consolidada para evitar errores de sintaxis
-        txt = response.text.strip().replace("```json", "").replace("```", "").strip()
+        txt = response.text.strip().replace("```json", "").replace("
+```", "").strip()
         picks_seleccionados = json.loads(txt)
         
-        limite = 3 if modo_bloque == "bloque_3" else 1
+        limite = 2 if modo_bloque == "bloque_normal" else 1
         return picks_seleccionados[:limite]
     except Exception as e:
         logger.error(f"Fallo en cerebro IA: {e}")
         random.shuffle(candidatos_raw)
         p = candidatos_raw[0]
-        p['stake_num'] = 5 if modo_bloque == "bloque_3" else 10
+        p['stake_num'] = 5 if modo_bloque == "bloque_normal" else 10
         p['analisis_ia'] = "Análisis de valor verificado por fluctuación de mercado."
         return [p]
 
-def procesar_ligas(lista_ligas, modo_bloque="bloque_3"):
+def procesar_ligas(lista_ligas, modo_bloque="bloque_normal"):
     candidatos_todos = []
     fecha_hoy_mx = datetime.now(MX_TZ).date()
 
@@ -162,7 +160,6 @@ def procesar_ligas(lista_ligas, modo_bloque="bloque_3"):
                 for market in bookie.get("markets", []):
                     for o in market.get("outcomes", []):
                         cuota = o.get("price")
-                        # NUEVO FILTRO INTELIGENTE: 1.40 a 2.80
                         if cuota and 1.40 <= cuota <= 2.80:
                             candidatos_todos.append({
                                 "deporte": mapear_icono_deporte(liga),
@@ -170,27 +167,24 @@ def procesar_ligas(lista_ligas, modo_bloque="bloque_3"):
                                 "fecha_hora": fecha_hora_str,
                                 "pick": f"{market.get('key')} {o.get('name')} {o.get('point', '')}",
                                 "cuota": cuota,
-                                "bookie": bookie.get("title", "Bet365"),
+                                "bookie": bookie.get("title", "Eluck"),
                                 "sport_key": liga
                             })
                             
-    # MOTOR DE SELECCION: TOP 50
     if not candidatos_todos: 
         logger.warning("No se encontraron candidatos tras aplicar el rango 1.40-2.80.")
         return []
     
-    random.shuffle(candidatos_todos)
-    top_50 = candidatos_todos[:50]
-    logger.info(f"Analizando {len(top_50)} candidatos de un total de {len(candidatos_todos)} posibles.")
-    
-    return consultar_cerebro_ia(top_50, modo_bloque=modo_bloque)
+    # Se eliminó por completo el recorte de cantidad. Pasa toda la cartelera directo a la IA.
+    logger.info(f"Analizando la cartelera completa: {len(candidatos_todos)} mercados disponibles.")
+    return consultar_cerebro_ia(candidatos_todos, modo_bloque=modo_bloque)
 
 def construir_mensaje(pick_data):
     stk_num = pick_data.get("stake_num", 3)
     estrellas = "⭐" * int(stk_num)
     analisis = pick_data.get("analisis_ia", "Análisis verificado por tendencias.")
 
-    m = f"🔥 El Boss Mexa – Pick del Día\n\n"
+    m = f"🔥 BossOddsMX – Pick del Día\n\n"
     m += f"Deporte: {pick_data['deporte']}\n"
     m += f"Partido: {pick_data['partido']}\n"
     m += f"Pick: {pick_data['pick']}\n"
@@ -228,26 +222,19 @@ def evaluar_pick(pick_str, scores):
 # ==========================================
 async def ejecutar_buenos_dias():
     if verificar_y_marcar(ARCHIVO_LOG_BUENOS_DIAS): return
-    await enviar_mensaje_seguro("¡Buenos días, Familia! ☀️ Arrancamos una nueva jornada de análisis deportivo.\n\nAquí les dejo los primeros tres picks de la MLB (Béisbol de Estados Unidos). En unas horas les mando los otros tres picks para la Liga Mexicana de Béisbol. ¡A facturar hoy! 💸")
-    await asyncio.sleep(5)
-    await ejecutar_bloque_mlb()
+    msg = "¡Buenos días, Familia! ☀️ Arrancamos una nueva jornada de análisis deportivo. En breve salen las primeras jugadas del día para activar el mercado. ¡A facturar hoy! 💸"
+    await enviar_mensaje_seguro(msg)
 
-async def ejecutar_bloque_mlb():
-    picks = procesar_ligas(["baseball_mlb"], modo_bloque="bloque_3")
+async def ejecutar_bloque_especifico(lista_ligas, cantidad, nombre_bloque, mensaje_intro=None):
+    if verificar_y_marcar(f"bloque_{nombre_bloque}.txt"): return
+    
+    if mensaje_intro:
+        await enviar_mensaje_seguro(mensaje_intro)
+        await asyncio.sleep(5)
+        
+    picks = procesar_ligas(lista_ligas, modo_bloque="bloque_normal")
     if picks:
-        actuales = cargar_picks()
-        actuales.extend(picks)
-        guardar_picks(actuales)
-        for pick in picks:
-            await enviar_mensaje_seguro(construir_mensaje(pick))
-            await asyncio.sleep(4)
-
-async def ejecutar_bloque_lmb():
-    if verificar_y_marcar(ARCHIVO_LOG_LMB): return
-    await enviar_mensaje_seguro("Familia, ya están abiertas las líneas de béisbol. En un momento les mando los tres picks correspondientes a la Liga Mexicana de Béisbol. ⚾️🔥")
-    await asyncio.sleep(420) 
-    picks = procesar_ligas(["baseball_lmb"], modo_bloque="bloque_3")
-    if picks:
+        picks = picks[:cantidad] 
         actuales = cargar_picks()
         actuales.extend(picks)
         guardar_picks(actuales)
@@ -278,7 +265,13 @@ async def ejecutar_septimo_pick():
 async def mandar_reporte_profit():
     if verificar_y_marcar(ARCHIVO_LOG_PROFIT): return
     picks_totales = cargar_picks()
-    if not picks_totales: return
+    
+    # MENSAJE OBLIGATORIO SI NO HUBO PICKS
+    if not picks_totales:
+        msg_vacio = "📊 El Boss Mexa – Resumen de la Jornada 📊\n\nHoy las líneas de mercado no ofrecieron el valor analítico suficiente para arriesgar capital. ¡Cuidamos la banca y mañana regresamos con todo a facturar! 💰"
+        await enviar_mensaje_seguro(msg_vacio)
+        return
+
     ligas = list(set([p['sport_key'] for p in picks_totales]))
     todos_res = []
     for liga in ligas: todos_res += obtener_marcadores(liga)
@@ -303,19 +296,46 @@ async def mandar_reporte_profit():
     await enviar_mensaje_seguro(msg)
     if os.path.exists(ARCHIVO_PICKS): os.remove(ARCHIVO_PICKS)
 
+# ==========================================
+# GESTOR DE HORARIOS PRINCIPAL
+# ==========================================
 async def main_loop():
-    logger.info("Bot El Boss Mexa operativo.")
+    logger.info("Bot El Boss Mexa operativo. Rutina: 2 MLB, 2 Fútbol, 2 LMB + Stake 10.")
     while True:
         try:
             ahora = datetime.now(MX_TZ)
-            if ahora.hour == 8 and 30 <= ahora.minute <= 35: await ejecutar_buenos_dias()
-            elif ahora.hour == 13 and 30 <= ahora.minute <= 35: await ejecutar_bloque_lmb()
-            elif ahora.hour == 15 and 0 <= ahora.minute <= 5: await ejecutar_septimo_pick()
-            elif ahora.hour == 23 and 45 <= ahora.minute <= 50: await mandar_reporte_profit()
-            await asyncio.sleep(30)
+            dia = ahora.weekday() # 0=Lun, 5=Sab, 6=Dom
+            
+            # 1. 07:45 AM - Mensaje Obligatorio de Buenos Días
+            if ahora.hour == 7 and 45 <= ahora.minute <= 50:
+                await ejecutar_buenos_dias()
+            
+            # 2. 08:00 AM - Bloque MLB (Hasta 2 picks si hay valor)
+            elif ahora.hour == 8 and 0 <= ahora.minute <= 5:
+                await ejecutar_bloque_especifico(["baseball_mlb"], 2, "mlb")
+            
+            # 3. 09:00 AM - Bloque Fútbol Europeo (Hasta 2 picks si hay valor)
+            elif ahora.hour == 9 and 0 <= ahora.minute <= 5:
+                ligas_futbol = ["soccer_uefa_champions_league"] if dia == 5 else ["soccer_epl", "soccer_spain_la_liga"]
+                await ejecutar_bloque_especifico(ligas_futbol, 2, "futbol")
+            
+            # 4. 01:30 PM - Bloque LMB (Hasta 2 picks si hay valor)
+            elif ahora.hour == 13 and 30 <= ahora.minute <= 35:
+                msg_lmb = "Familia, ya están abiertas las líneas. Aquí tienen los picks de la Liga Mexicana de Béisbol. ⚾️🔥"
+                await ejecutar_bloque_especifico(["baseball_lmb"], 2, "lmb", mensaje_intro=msg_lmb)
+            
+            # 5. 03:00 PM - 1 Pick Especial Stake 10
+            elif ahora.hour == 15 and 0 <= ahora.minute <= 5:
+                await ejecutar_septimo_pick()
+
+            # 6. 11:45 PM - Resumen y Reporte Obligatorio de Buenas Noches
+            elif ahora.hour == 23 and 45 <= ahora.minute <= 50:
+                await mandar_reporte_profit()
+            
+            await asyncio.sleep(60)
         except Exception as e:
             logger.error(f"Error en reloj: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
