@@ -124,9 +124,8 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
 
     try:
         response = model.generate_content(prompt_completo)
-        # AQUÍ ESTABA EL ERROR DEL SALTO DE LÍNEA, YA ESTÁ CORREGIDO EN UNA SOLA LÍNEA
-        txt = response.text.strip().replace("```json", "").replace("
-```", "").strip()
+        # LIMPIEZA SEGURA EN UNA SOLA LÍNEA PARA EVITAR ERRORES DE SINTAXIS
+        txt = response.text.replace("```json", "").replace("```", "").strip()
         picks_seleccionados = json.loads(txt)
         
         limite = 2 if modo_bloque == "bloque_normal" else 1
