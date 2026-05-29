@@ -79,7 +79,7 @@ LIGAS_FUTBOL = [
 ]
 
 def obtener_picks_deporte(sport_key, markets):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/odds/"
     params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -88,7 +88,7 @@ def obtener_picks_deporte(sport_key, markets):
     except: return []
 
 def obtener_marcadores(sport_key):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
+    url = f"[https://api.the-odds-api.com/v4/sports/](https://api.the-odds-api.com/v4/sports/){sport_key}/scores/"
     params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
         response = requests.get(url, params=params, timeout=12)
@@ -129,13 +129,13 @@ def consultar_cerebro_ia(candidatos_raw, modo_bloque="bloque_normal"):
     try:
         response = model.generate_content(prompt_completo)
         
-        # LIMPIEZA COMPLETAMENTE SEGURA Y CORREGIDA SINTÁCTICAMENTE
-        txt = response.text.strip()
-        if txt.startswith("```"):
-            txt = txt.split("\n", 1)[1]
-        if txt.endswith("
-```"):
-            txt = txt.rsplit("\n", 1)[0]
+        # LIMPIEZA 100% SEGURA (Usa chr(96) para evitar errores de sintaxis al copiar/pegar)
+        txt = response.text
+        marcador_json = chr(96) * 3 + "json"
+        marcador_fin = chr(96) * 3
+        
+        txt = txt.replace(marcador_json, "")
+        txt = txt.replace(marcador_fin, "")
         txt = txt.strip()
         
         picks_seleccionados = json.loads(txt)
@@ -326,7 +326,6 @@ async def main_loop():
             
             # 3. 09:00 AM - Bloque Fútbol Europeo (Hasta 2 picks si hay valor)
             elif ahora.hour == 9 and 0 <= ahora.minute <= 5:
-                # Si es sábado usa Champions, si no usa las ligas principales comerciales
                 ligas_futbol = ["soccer_uefa_champions_league"] if dia == 5 else ["soccer_epl", "soccer_spain_la_liga", "soccer_germany_bundesliga", "soccer_italy_serie_a"]
                 await ejecutar_bloque_especifico(ligas_futbol, 2, "futbol")
             
