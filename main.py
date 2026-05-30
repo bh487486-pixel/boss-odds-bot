@@ -23,13 +23,13 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 BASEBALL_API_KEY = os.getenv("BASEBALL_API_KEY")
 
 if not all([TELEGRAM_TOKEN, CHANNEL_ID, ODDS_API_KEY, GEMINI_API_KEY, BASEBALL_API_KEY]):
-    logger.error("¡ALERTA! Faltan variables de entorno obligatorias. Verifica tu configuración.")
+    logger.error("¡ALERTA! Faltan variables de entorno obligatorias.")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
 else:
-    logger.error("¡ALERTA! No se encontró la GEMINI_API_KEY. El bot se detendrá.")
+    logger.error("¡ALERTA! No se encontró la GEMINI_API_KEY.")
     sys.exit(1)
 
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -37,7 +37,7 @@ REGIONS = "us,eu"
 MX_TZ = timezone(timedelta(hours=-6))
 ARCHIVO_PICKS = "picks_hoy.json"
 
-# Solo Béisbol y Básquetbol (si hay finales)
+# Solo Béisbol y Básquetbol
 LIGAS_PERMITIDAS = [
     "baseball_mlb", "baseball_lmb", "baseball_lmb_real",
     "basketball_nba"
@@ -47,9 +47,8 @@ def guardar_picks(picks):
     try:
         with open(ARCHIVO_PICKS, 'w', encoding='utf-8') as f:
             json.dump(picks, f, ensure_ascii=False, indent=4)
-        logger.info("Picks guardados correctamente.")
     except Exception as e:
-        logger.error(f"Error al guardar picks en JSON: {e}")
+        logger.error(f"Error al guardar picks: {e}")
 
 def cargar_picks():
     if os.path.exists(ARCHIVO_PICKS):
@@ -57,11 +56,11 @@ def cargar_picks():
             with open(ARCHIVO_PICKS, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            logger.error(f"Error al leer picks del JSON: {e}")
+            logger.error(f"Error al leer picks: {e}")
     return []
 
 # ==========================================
-# 2. LÓGICA DE ALIMENTACIÓN DE DATOS (APIs)
+# 2. LÓGICA DE ALIMENTACIÓN DE DATOS
 # ==========================================
 def obtener_picks_deporte(sport_key, markets):
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
@@ -71,7 +70,7 @@ def obtener_picks_deporte(sport_key, markets):
         if response.status_code == 200: return response.json()
         return []
     except Exception as e:
-        logger.error(f"Error obteniendo picks The-Odds-API para {sport_key}: {e}")
+        logger.error(f"Error Odds-API {sport_key}: {e}")
         return []
 
 def obtener_marcadores(sport_key):
@@ -82,7 +81,7 @@ def obtener_marcadores(sport_key):
         if response.status_code == 200: return response.json()
         return []
     except Exception as e:
-        logger.error(f"Error obteniendo marcadores The-Odds-API para {sport_key}: {e}")
+        logger.error(f"Error Marcadores {sport_key}: {e}")
         return []
 
 def obtener_partidos_lmb_real():
@@ -154,7 +153,7 @@ def obtener_partidos_lmb_real():
             return mapeo_the_odds
         return []
     except Exception as e:
-        logger.error(f"Error api-sports LMB Odds: {e}")
+        logger.error(f"Error LMB Odds: {e}")
         return []
 
 def obtener_marcadores_lmb_real():
@@ -191,14 +190,14 @@ def obtener_marcadores_lmb_real():
             return mapeo_scores
         return []
     except Exception as e:
-        logger.error(f"Error api-sports LMB Scores: {e}")
+        logger.error(f"Error LMB Scores: {e}")
         return []
 
 def mapear_icono_deporte(sport_key):
     sport_key_lower = str(sport_key).lower()
-    if "baseball_mlb" in sport_key_lower: return "⚾ MLB (Béisbol)"
-    if "baseball_lmb" in sport_key_lower: return "⚾ LMB (Liga Mexicana)"
-    if "basketball" in sport_key_lower: return "🏀 NBA / Básquetbol"
+    if "baseball_mlb" in sport_key_lower: return "⚾ MLB"
+    if "baseball_lmb" in sport_key_lower: return "⚾ LMB"
+    if "basketball" in sport_key_lower: return "🏀 NBA"
     return "🏅 Deporte"
 
 # ==========================================
@@ -207,7 +206,7 @@ def mapear_icono_deporte(sport_key):
 def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     if modo_bloque != "stake_10":
         p1 = f"Analiza y elige los {cantidad} mejores picks únicos del día de hoy. Reglas:\n"
-        p2 = "1. Selecciona partidos con alta probabilidad basados en las cuotas.\n"
+        p2 = "1. Selecciona partidos con alta probabilidad basados en cuotas.\n"
         p3 = "2. Asigna Stake del 1 al 8 según probabilidad.\n"
         p4 = "Devuelve solo JSON plano, sin markdown:\n"
         p5 = "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, "
@@ -228,8 +227,13 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
 
     try:
         response = model.generate_content(prompt_completo)
-        txt = response.text.strip().replace("```json", "").replace("
-```", "").strip()
+        
+        # AQUÍ ESTÁ LA CORRECCIÓN: Separado en líneas cortas para que el celular no lo rompa
+        txt = response.text.strip()
+        txt = txt.replace('```json', '')
+        txt = txt.replace('```', '')
+        txt = txt.strip()
+        
         picks_seleccionados = json.loads(txt)
         
         for pick in picks_seleccionados:
@@ -241,13 +245,13 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
                 break
         return picks_finales_limpios
     except Exception as e:
-        logger.error(f"Error en IA (Modo {modo_bloque}). Activando Red de Seguridad de El Boss: {e}")
+        logger.error(f"Error IA: Activando Red de Seguridad: {e}")
         random.shuffle(candidatos_raw)
         if modo_bloque != "stake_10":
             for p in candidatos_raw:
                 if p.get('partido') not in partidos_vistos:
                     p['stake_num'] = random.randint(4, 7)
-                    p['analisis_ia'] = "Análisis verificado por tendencias del mercado."
+                    p['analisis_ia'] = "Análisis verificado por tendencias de mercado."
                     picks_finales_limpios.append(p)
                     partidos_vistos.add(p.get('partido'))
                 if len(picks_finales_limpios) == cantidad: break
@@ -255,7 +259,7 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
             if candidatos_raw:
                 p = candidatos_raw[0]
                 p['stake_num'] = 10
-                p['analisis_ia'] = "Máxima probabilidad detectada en base a rachas de rendimiento."
+                p['analisis_ia'] = "Máxima probabilidad detectada en rachas."
                 picks_finales_limpios.append(p)
         return picks_finales_limpios
 
@@ -298,7 +302,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                                 tipo_pick = f"Gana {o.get('name')}"
                             elif market_key == "totals": 
                                 punto = o.get('point', 0)
-                                tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {punto} Pts/Goles/Carreras"
+                                tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {punto} Pts"
                             elif market_key == "spreads":
                                 punto = o.get('point', 0)
                                 signo = "+" if punto > 0 else ""
@@ -319,7 +323,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
     return consultar_cerebro_ia(candidatos_crudos, cantidad, modo_bloque=modo_bloque)
 
 # ==========================================
-# 4. PLANTILLA DE TEXTOS Y CALIFICADOR AUTOMÁTICO
+# 4. PLANTILLA DE TEXTOS Y CALIFICADOR
 # ==========================================
 def construir_mensaje(pick_data):
     stk_num = pick_data.get("stake_num", 3)
@@ -329,7 +333,7 @@ def construir_mensaje(pick_data):
         stk_num = 3
         
     estrellas = "⭐" * stk_num
-    analisis = pick_data.get("analisis_ia", "Análisis verificado por tendencias y Expected Value (+EV).")
+    analisis = pick_data.get("analisis_ia", "Análisis verificado por tendencias (+EV).")
 
     m1 = "🔥 BossOddsMX – Pick del Día\n\n"
     m2 = f"Deporte: {pick_data.get('deporte', 'Deporte')}\n"
@@ -347,7 +351,7 @@ async def enviar_mensaje_seguro(texto):
     try:
         await bot.send_message(chat_id=CHANNEL_ID, text=texto, parse_mode=None)
     except Exception as e:
-        logger.error(f"Error al enviar mensaje a Telegram: {e}")
+        logger.error(f"Error al enviar Telegram: {e}")
 
 def evaluar_pick(pick_str, scores):
     try:
@@ -398,7 +402,7 @@ async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="norma
     picks_bloque = procesar_bloque_especifico(ligas, cantidad, modo_bloque=modo)
     
     if not picks_bloque:
-        logger.warning(f"No se encontraron partidos activos hoy para el bloque {nombre_bloque}")
+        logger.warning(f"No hay partidos activos hoy para el bloque {nombre_bloque}")
         return
 
     actuales = cargar_picks()
@@ -427,10 +431,10 @@ async def mandar_reporte_profit():
             todos_los_resultados += obtener_marcadores(liga)
 
     ganados, perdidos, total_evaluados = 0, 0, 0
-    msg = "📊 **El Boss mexa – Resumen de la Jornada** 📊\n\nResultados oficiales de las jugadas enviadas hoy:\n\n"
+    msg = "📊 **El Boss mexa – Resumen de la Jornada** 📊\n\nResultados oficiales:\n\n"
     
     for pick in picks_totales:
-        marcador_texto = "Marcador no disponible / Pospuesto ⏳"
+        marcador_texto = "Marcador no disponible ⏳"
         estado_pick = "❔ Pendiente"
         for res in todos_los_resultados:
             if res.get('home_team') in pick.get('partido', '') and res.get('away_team') in pick.get('partido', ''):
@@ -442,9 +446,9 @@ async def mandar_reporte_profit():
                         if "GANADO" in estado_pick: ganados += 1
                         elif "PERDIDO" in estado_pick: perdidos += 1
                         total_evaluados += 1
-                else: marcador_texto = "Partido aún en juego ⏳"
+                else: marcador_texto = "Partido en juego ⏳"
                 break
-        msg += f"🔥 **{pick.get('partido', 'Partido')}**\nPick: {pick.get('pick', '')} (Cuota {float(pick.get('cuota', 0)):.2f})\nResultado: {marcador_texto}\nEstatus: **{estado_pick}**\n\n"
+        msg += f"🔥 **{pick.get('partido', 'Partido')}**\nPick: {pick.get('pick', '')}\nResultado: {marcador_texto}\nEstatus: **{estado_pick}**\n\n"
     
     porcentaje = (ganados / total_evaluados * 100) if total_evaluados > 0 else 0.0
     msg += f"📈 **Efectividad del día:** {porcentaje:.1f}%\n"
@@ -456,7 +460,7 @@ async def mandar_reporte_profit():
 # 5. CRONOGRAMA AUTOMATIZADO (MAIN LOOP)
 # ==========================================
 async def main_loop():
-    logger.info("Bot El Boss Mexa: Sistema Béisbol Iniciado y esperando bloques.")
+    logger.info("Bot El Boss Mexa: Sistema Béisbol Iniciado.")
 
     bloques_ejecutados = {
         "buenos_dias": None, "mlb": None, 
@@ -488,7 +492,7 @@ async def main_loop():
                 bloques_ejecutados["lmb"] = fecha_str
 
             elif ahora.hour == 15 and 0 <= ahora.minute <= 5 and bloques_ejecutados["stake10"] != fecha_str:
-                intro_s10 = "🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada para maximizar el retorno. Vamos pesados aquí:"
+                intro_s10 = "🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada. Vamos pesados aquí:"
                 await ejecutar_bloque_remodelado("MÁXIMO VIP", LIGAS_PERMITIDAS, 1, modo="stake_10", intro=intro_s10)
                 bloques_ejecutados["stake10"] = fecha_str
 
@@ -497,7 +501,7 @@ async def main_loop():
                 bloques_ejecutados["reporte"] = fecha_str
 
             elif ahora.hour == 23 and 58 <= ahora.minute <= 59 and bloques_ejecutados["buenas_noches"] != fecha_str:
-                msg = "🌙 **¡Buenas noches, equipo!** 🌙\n\nFinalizan las actividades por hoy. El sistema analítico entra en reposo absoluto. ¡A descansar! 💤"
+                msg = "🌙 **¡Buenas noches, equipo!** 🌙\n\nFinalizan las actividades por hoy. ¡A descansar! 💤"
                 await enviar_mensaje_seguro(msg)
                 bloques_ejecutados["buenas_noches"] = fecha_str
             
