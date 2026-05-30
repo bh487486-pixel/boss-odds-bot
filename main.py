@@ -11,7 +11,7 @@ from telegram import Bot
 import google.generativeai as genai
 
 # ==========================================
-# CONFIGURACIÓN BÁSICA Y LOGS
+# 1. CONFIGURACIÓN E IMPORTACIONES
 # ==========================================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -20,6 +20,11 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
+BASEBALL_API_KEY = os.getenv("BASEBALL_API_KEY")
+
+if not all([TELEGRAM_TOKEN, CHANNEL_ID, ODDS_API_KEY, GEMINI_API_KEY, FOOTBALL_API_KEY, BASEBALL_API_KEY]):
+    logger.error("¡ALERTA! Faltan variables de entorno obligatorias. Verifica tu configuración.")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -33,9 +38,14 @@ REGIONS = "us,eu"
 MX_TZ = timezone(timedelta(hours=-6))
 ARCHIVO_PICKS = "picks_hoy.json"
 
-# ==========================================
-# MEMORIA PERSISTENTE (JSON)
-# ==========================================
+LIGAS_PERMITIDAS = [
+    "soccer_uefa_champions_league", "soccer_uefa_europa_league", "soccer_uefa_european_championship",
+    "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", "soccer_germany_bundesliga", 
+    "soccer_france_ligue_1", "soccer_mexico_ligamx", "soccer_usa_mls",
+    "baseball_mlb", "baseball_lmb", "baseball_lmb_real",
+    "basketball_nba", "basketball_euroleague"
+]
+
 def guardar_picks(picks):
     try:
         with open(ARCHIVO_PICKS, 'w', encoding='utf-8') as f:
@@ -54,36 +64,122 @@ def cargar_picks():
     return []
 
 # ==========================================
-# LISTA EXCLUSIVA DE LIGAS PERMITIDAS
+# 2. LÓGICA DE ALIMENTACIÓN DE DATOS (APIs)
 # ==========================================
-LIGAS_PERMITIDAS = [
-    "soccer_uefa_champions_league", "soccer_uefa_europa_league", "soccer_uefa_european_championship",
-    "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", "soccer_germany_bundesliga", 
-    "soccer_france_ligue_1", "soccer_mexico_ligamx", "soccer_usa_mls",
-    "baseball_mlb", "baseball_lmb", 
-    "basketball_nba", "basketball_euroleague"
-]
-
 def obtener_picks_deporte(sport_key, markets):
-    # URL limpiada de hipervínculos corruptos
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
     params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
     try:
-        response = requests.get(url, params=params, timeout=12)
+        response = requests.get(url, params=params, timeout=15)
         if response.status_code == 200: return response.json()
         return []
     except Exception as e:
+        logger.error(f"Error obteniendo picks The-Odds-API para {sport_key}: {e}")
         return []
 
 def obtener_marcadores(sport_key):
-    # URL limpiada de hipervínculos corruptos
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
     params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
     try:
-        response = requests.get(url, params=params, timeout=12)
+        response = requests.get(url, params=params, timeout=15)
         if response.status_code == 200: return response.json()
         return []
     except Exception as e:
+        logger.error(f"Error obteniendo marcadores The-Odds-API para {sport_key}: {e}")
+        return []
+
+def obtener_partidos_lmb_real():
+    hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
+    url = "https://v1.baseball.api-sports.io/odds"
+    headers = {'x-apisports-key': BASEBALL_API_KEY}
+    params = {'league': '11', 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
+    
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=15)
+        if res.status_code == 200:
+            datos = res.json().get('response', [])
+            mapeo_the_odds = []
+            
+            for item in datos:
+                game = item.get('game', {})
+                bookmakers = item.get('bookmakers', [])
+                
+                home_team = game.get('teams', {}).get('home', {}).get('name', 'Home')
+                away_team = game.get('teams', {}).get('away', {}).get('name', 'Away')
+                commence_time = game.get('date', '') 
+                
+                bms_mapeados = []
+                for b in bookmakers:
+                    bets = b.get('bets', [])
+                    markets_mapeados = []
+                    for bet in bets:
+                        if bet.get('name') == "Home/Away":
+                            outcomes = []
+                            for val in bet.get('values', []):
+                                team_name = home_team if val.get('value') == "Home" else away_team
+                                outcomes.append({"name": team_name, "price": float(val.get('odd', 0))})
+                            markets_mapeados.append({"key": "h2h", "outcomes": outcomes})
+                        elif bet.get('name') == "Over/Under":
+                            outcomes = []
+                            for val in bet.get('values', []):
+                                over_under_str = val.get('value', '')
+                                if "Over" in over_under_str:
+                                    outcomes.append({"name": "Over", "price": float(val.get('odd', 0)), "point": float(over_under_str.replace("Over ", ""))})
+                                elif "Under" in over_under_str:
+                                    outcomes.append({"name": "Under", "price": float(val.get('odd', 0)), "point": float(over_under_str.replace("Under ", ""))})
+                            markets_mapeados.append({"key": "totals", "outcomes": outcomes})
+                            
+                    if markets_mapeados:
+                        bms_mapeados.append({
+                            "title": b.get('name', 'Bookmaker'),
+                            "markets": markets_mapeados
+                        })
+                        
+                if bms_mapeados:
+                    mapeo_the_odds.append({
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "commence_time": commence_time,
+                        "bookmakers": bms_mapeados
+                    })
+            return mapeo_the_odds
+        return []
+    except Exception as e:
+        logger.error(f"Error api-sports LMB Odds: {e}")
+        return []
+
+def obtener_marcadores_lmb_real():
+    hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
+    url = "https://v1.baseball.api-sports.io/games"
+    headers = {'x-apisports-key': BASEBALL_API_KEY}
+    params = {'league': '11', 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
+    
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=15)
+        if res.status_code == 200:
+            datos = res.json().get('response', [])
+            mapeo_scores = []
+            for item in datos:
+                home_team = item.get('teams', {}).get('home', {}).get('name', 'Home')
+                away_team = item.get('teams', {}).get('away', {}).get('name', 'Away')
+                status = item.get('status', {}).get('short', '')
+                home_score = item.get('scores', {}).get('home', {}).get('total', 0)
+                away_score = item.get('scores', {}).get('away', {}).get('total', 0)
+                
+                completed = status in ["FT", "AOT"]
+                mapeo_scores.append({
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "completed": completed,
+                    "scores": [
+                        {"name": home_team, "score": str(home_score)},
+                        {"name": away_team, "score": str(away_score)}
+                    ]
+                })
+            return mapeo_scores
+        return []
+    except Exception as e:
+        logger.error(f"Error api-sports LMB Scores: {e}")
         return []
 
 def mapear_icono_deporte(sport_key):
@@ -95,7 +191,7 @@ def mapear_icono_deporte(sport_key):
     return "🏅 Deporte"
 
 # ==========================================
-# CEREBRO IA: CON TU FALLBACK INTACTO
+# 3. PROCESAMIENTO ALGORÍTMICO Y RED DE SEGURIDAD (CEREBRO IA)
 # ==========================================
 def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     if modo_bloque != "stake_10":
@@ -151,14 +247,16 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
                 picks_finales_limpios.append(p)
         return picks_finales_limpios
 
-# TU EXTRACCIÓN ORIGINAL REFORMADA PARA SEPARAR POR LIGAS
 def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
     candidatos_crudos = []
     fecha_hoy_mx = datetime.now(MX_TZ).date()
 
     for liga in lista_ligas:
-        mercados_param = "h2h,totals,spreads"
-        partidos = obtener_picks_deporte(liga, markets=mercados_param)
+        if liga == "baseball_lmb_real":
+            partidos = obtener_partidos_lmb_real()
+        else:
+            partidos = obtener_picks_deporte(liga, markets="h2h,totals,spreads")
+            
         if not partidos: continue
 
         for partido in partidos:
@@ -169,15 +267,15 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                     partido_tiempo_utc = datetime.strptime(commence_time_raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
                     partido_tiempo_mx = partido_tiempo_utc.astimezone(MX_TZ)
                     fecha_hora_str = partido_tiempo_mx.strftime("%I:%M %p")
-                    if partido_tiempo_mx.date() != fecha_hoy_mx: continue
+                    
+                    if liga != "baseball_lmb_real":
+                        if partido_tiempo_mx.date() != fecha_hoy_mx: continue
                 except: continue
 
             for bookie in partido.get("bookmakers", []):
-                lista_mercados = bookie.get("markets", [])
-                for market in lista_mercados:
+                for market in bookie.get("markets", []):
                     market_key = market.get("key")
-                    outcomes = market.get("outcomes", [])
-                    for o in outcomes:
+                    for o in market.get("outcomes", []):
                         cuota = o.get("price")
                         if cuota and 1.30 <= cuota <= 4.00:
                             nombre_deporte = mapear_icono_deporte(liga)
@@ -185,14 +283,14 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                             if market_key == "h2h": 
                                 tipo_pick = f"Gana {o.get('name')}"
                             elif market_key == "totals": 
-                                tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point')} Pts/Goles/Carreras"
+                                punto = o.get('point', 0)
+                                tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {punto} Pts/Goles/Carreras"
                             elif market_key == "spreads":
                                 punto = o.get('point', 0)
                                 signo = "+" if punto > 0 else ""
                                 tipo_pick = f"Hándicap {o.get('name')} {signo}{punto}"
                             else: continue
 
-                            # LÍNEA CORREGIDA: Asignación limpia del deporte sin operador morsa
                             candidatos_crudos.append({
                                 "deporte": nombre_deporte,
                                 "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
@@ -206,7 +304,9 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
     if not candidatos_crudos: return []
     return consultar_cerebro_ia(candidatos_crudos, cantidad, modo_bloque=modo_bloque)
 
-# TU PLANTILLA DE TEXTO ORIGINAL CORREGIDA
+# ==========================================
+# 4. PLANTILLA DE TEXTOS Y CALIFICADOR AUTOMÁTICO (PROFIT)
+# ==========================================
 def construir_mensaje(pick_data):
     stk_num = pick_data.get("stake_num", 3)
     estrellas = "⭐" * int(stk_num)
@@ -230,9 +330,6 @@ async def enviar_mensaje_seguro(texto):
     except Exception as e:
         logger.error(f"Error al enviar mensaje a Telegram: {e}")
 
-# ==========================================
-# TU FUNCIÓN DE EVALUACIÓN ORIGINAL
-# ==========================================
 def evaluar_pick(pick_str, scores):
     try:
         score1 = float(scores[0]['score'])
@@ -277,9 +374,6 @@ def evaluar_pick(pick_str, scores):
     except:
         return "❔ REVISAR"
 
-# ==========================================
-# CONTROLADOR DE BLOQUES MODERNOS
-# ==========================================
 async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="normal", intro=None):
     logger.info(f"Iniciando bloque: {nombre_bloque}")
     picks_bloque = procesar_bloque_especifico(ligas, cantidad, modo_bloque=modo)
@@ -288,7 +382,6 @@ async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="norma
         logger.warning(f"No se encontraron partidos activos hoy para el bloque {nombre_bloque}")
         return
 
-    # Guardar en memoria para la calificación nocturna sin borrar los anteriores
     actuales = cargar_picks()
     actuales.extend(picks_bloque)
     guardar_picks(actuales)
@@ -307,7 +400,12 @@ async def mandar_reporte_profit():
 
     ligas_jugadas = list(set([pick['sport_key'] for pick in picks_totales]))
     todos_los_resultados = []
-    for liga in ligas_jugadas: todos_los_resultados += obtener_marcadores(liga)
+    
+    for liga in ligas_jugadas:
+        if liga == "baseball_lmb_real":
+            todos_los_resultados += obtener_marcadores_lmb_real()
+        else:
+            todos_los_resultados += obtener_marcadores(liga)
 
     ganados, perdidos, total_evaluados = 0, 0, 0
     msg = "📊 **El Boss mexa – Resumen de la Jornada** 📊\n\nResultados oficiales de las jugadas enviadas hoy:\n\n"
@@ -336,7 +434,7 @@ async def mandar_reporte_profit():
     await enviar_mensaje_seguro(msg)
 
 # ==========================================
-# BUCLE PRINCIPAL (CRONOGRAMA DE BLOQUES NUEVOS)
+# 5. CRONOGRAMA AUTOMATIZADO (MAIN LOOP)
 # ==========================================
 async def main_loop():
     logger.info("Bot El Boss Mexa: Sistema Híbrido Iniciado y esperando bloques.")
@@ -346,7 +444,6 @@ async def main_loop():
         "lmb": None, "stake10": None, "reporte": None, "buenas_noches": None
     }
     
-    # Al arrancar, limpiamos el JSON para la cartelera del nuevo día
     guardar_picks([])
 
     while True:
@@ -355,7 +452,7 @@ async def main_loop():
             fecha_str = ahora.strftime("%Y-%m-%d")
             
             if ahora.hour == 0 and ahora.minute == 5:
-                guardar_picks([]) # Limpieza de seguridad a la medianoche
+                guardar_picks([])
 
             # 07:45 AM - Buenos Días
             if ahora.hour == 7 and 45 <= ahora.minute <= 50 and bloques_ejecutados["buenos_dias"] != fecha_str:
@@ -374,13 +471,13 @@ async def main_loop():
                 await ejecutar_bloque_remodelado("Fútbol Europeo", ligas_soccer, 2)
                 bloques_ejecutados["futbol"] = fecha_str
 
-            # 01:30 PM - Bloque LMB / Liga Mexicana (2 Picks)
+            # 01:30 PM - Bloque LMB Tarde (2 Picks)
             elif ahora.hour == 13 and 30 <= ahora.minute <= 35 and bloques_ejecutados["lmb"] != fecha_str:
                 intro_lmb = "Familia, ya están abiertas las líneas. Aquí tienen los picks de la Liga Mexicana de Béisbol. ⚾️🔥"
-                await ejecutar_bloque_remodelado("LMB Tarde", ["baseball_lmb", "baseball_mlb"], 2, intro=intro_lmb)
+                await ejecutar_bloque_remodelado("LMB Tarde", ["baseball_lmb_real", "baseball_mlb"], 2, intro=intro_lmb)
                 bloques_ejecutados["lmb"] = fecha_str
 
-            # 03:00 PM - Bloque Máxima Alerta STAKE 10 (1 Pick Único)
+            # 03:00 PM - Bloque STAKE 10 VIP (1 Pick Único)
             elif ahora.hour == 15 and 0 <= ahora.minute <= 5 and bloques_ejecutados["stake10"] != fecha_str:
                 intro_s10 = "🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada para maximizar el retorno. Vamos pesados aquí:"
                 await ejecutar_bloque_remodelado("MÁXIMO VIP", LIGAS_PERMITIDAS, 1, modo="stake_10", intro=intro_s10)
