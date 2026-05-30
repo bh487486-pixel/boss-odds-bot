@@ -18,31 +18,35 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 BASEBALL_API_KEY = os.getenv("BASEBALL_API_KEY")
 
-if not all([TELEGRAM_TOKEN, CHANNEL_ID, ODDS_API_KEY, GEMINI_API_KEY, BASEBALL_API_KEY]):
+if not all([TELEGRAM_TOKEN, CHANNEL_ID, GEMINI_API_KEY, BASEBALL_API_KEY]):
     logger.error("¡ALERTA! Faltan variables de entorno obligatorias.")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    # Cambio al modelo PRO para evitar el error 404 y recuperar los Stakes reales
     model = genai.GenerativeModel('gemini-1.0-pro')
 else:
     logger.error("¡ALERTA! No se encontró la GEMINI_API_KEY.")
     sys.exit(1)
 
 bot = Bot(token=TELEGRAM_TOKEN)
-REGIONS = "us,eu"
 MX_TZ = timezone(timedelta(hours=-6))
 ARCHIVO_PICKS = "picks_hoy.json"
 
-# Solo Béisbol y Básquetbol
-LIGAS_PERMITIDAS = [
-    "baseball_mlb", "baseball_lmb", "baseball_lmb_real",
-    "basketball_nba"
-]
+# Rango de cuotas permitidas
+CUOTA_MIN = 1.20
+CUOTA_MAX = 5.00
+
+# Solo Béisbol centralizado en API-Sports
+LIGAS_PERMITIDAS = ["baseball_mlb", "baseball_lmb_real"]
+
+# Mapeo de IDs de API-Sports (1 = MLB, 21 = LMB)
+LIGAS_MAP = {
+    "baseball_mlb": "1", 
+    "baseball_lmb_real": "21"
+}
 
 def guardar_picks(picks):
     try:
@@ -61,41 +65,19 @@ def cargar_picks():
     return []
 
 # ==========================================
-# 2. LÓGICA DE ALIMENTACIÓN DE DATOS
+# 2. LÓGICA DE ALIMENTACIÓN DE DATOS (API-SPORTS)
 # ==========================================
-def obtener_picks_deporte(sport_key, markets):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "decimal"}
-    try:
-        response = requests.get(url, params=params, timeout=15)
-        if response.status_code == 200: return response.json()
-        return []
-    except Exception as e:
-        logger.error(f"Error Odds-API {sport_key}: {e}")
-        return []
-
-def obtener_marcadores(sport_key):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
-    params = { "apiKey": ODDS_API_KEY, "daysFrom": 1 }
-    try:
-        response = requests.get(url, params=params, timeout=15)
-        if response.status_code == 200: return response.json()
-        return []
-    except Exception as e:
-        logger.error(f"Error Marcadores {sport_key}: {e}")
-        return []
-
-def obtener_partidos_lmb_real():
+def obtener_partidos_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
     url = "https://v1.baseball.api-sports.io/odds"
     headers = {'x-apisports-key': BASEBALL_API_KEY}
-    params = {'league': '21', 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
+    params = {'league': str(league_id), 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
     
     try:
         res = requests.get(url, headers=headers, params=params, timeout=15)
         if res.status_code == 200:
             datos = res.json().get('response', [])
-            mapeo_the_odds = []
+            mapeo_datos = []
             
             for item in datos:
                 game = item.get('game', {})
@@ -145,23 +127,23 @@ def obtener_partidos_lmb_real():
                         })
                         
                 if bms_mapeados:
-                    mapeo_the_odds.append({
+                    mapeo_datos.append({
                         "home_team": home_team,
                         "away_team": away_team,
                         "commence_time": commence_time,
                         "bookmakers": bms_mapeados
                     })
-            return mapeo_the_odds
+            return mapeo_datos
         return []
     except Exception as e:
-        logger.error(f"Error LMB Odds: {e}")
+        logger.error(f"Error API-Sports Odds (Liga {league_id}): {e}")
         return []
 
-def obtener_marcadores_lmb_real():
+def obtener_marcadores_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
     url = "https://v1.baseball.api-sports.io/games"
     headers = {'x-apisports-key': BASEBALL_API_KEY}
-    params = {'league': '21', 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
+    params = {'league': str(league_id), 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
     
     try:
         res = requests.get(url, headers=headers, params=params, timeout=15)
@@ -191,14 +173,13 @@ def obtener_marcadores_lmb_real():
             return mapeo_scores
         return []
     except Exception as e:
-        logger.error(f"Error LMB Scores: {e}")
+        logger.error(f"Error API-Sports Scores (Liga {league_id}): {e}")
         return []
 
 def mapear_icono_deporte(sport_key):
     sport_key_lower = str(sport_key).lower()
-    if "baseball_mlb" in sport_key_lower: return "⚾ Béisbol"
-    if "baseball_lmb" in sport_key_lower: return "⚾ Béisbol"
-    if "basketball" in sport_key_lower: return "🏀 Básquetbol"
+    if "baseball_mlb" in sport_key_lower: return "⚾ MLB"
+    if "baseball_lmb" in sport_key_lower: return "⚾ LMB"
     return "🏅 Deporte"
 
 # ==========================================
@@ -224,7 +205,9 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     datos_json = json.dumps(candidatos_raw, ensure_ascii=False)
     prompt_completo = prompt + "\n\nDatos: " + datos_json
     picks_finales_limpios = []
-    partidos_vistos = set()
+    
+    # Detección de duplicados mejorada con Clave Única
+    picks_vistos = set()
 
     try:
         response = model.generate_content(prompt_completo)
@@ -236,11 +219,21 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         
         picks_seleccionados = json.loads(txt)
         
+        # ✅ CORREGIDO: Validación de respuesta JSON de la IA (Problema 5)
+        if not isinstance(picks_seleccionados, list):
+            logger.error("❌ La IA no devolvió una lista válida. Formato esperado: [{…}]")
+            raise ValueError("Formato JSON inválido de la IA")
+        
         for pick in picks_seleccionados:
-            nombre_partido = pick.get('partido')
-            if nombre_partido and nombre_partido not in partidos_vistos:
+            partido = pick.get('partido', 'Desconocido')
+            tipo = pick.get('pick', 'Desconocido')
+            cuota = str(pick.get('cuota', '0.0'))
+            
+            clave_unica = f"{partido}_{tipo}_{cuota}"
+            
+            if clave_unica not in picks_vistos:
                 picks_finales_limpios.append(pick)
-                partidos_vistos.add(nombre_partido)
+                picks_vistos.add(clave_unica)
             if len(picks_finales_limpios) == cantidad:
                 break
         return picks_finales_limpios
@@ -249,11 +242,17 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         random.shuffle(candidatos_raw)
         if modo_bloque != "stake_10":
             for p in candidatos_raw:
-                if p.get('partido') not in partidos_vistos:
+                partido = p.get('partido', 'Desconocido')
+                tipo = p.get('pick', 'Desconocido')
+                cuota = str(p.get('cuota', '0.0'))
+                
+                clave_unica = f"{partido}_{tipo}_{cuota}"
+                
+                if clave_unica not in picks_vistos:
                     p['stake_num'] = random.randint(4, 7)
                     p['analisis_ia'] = "Análisis verificado por tendencias del mercado."
                     picks_finales_limpios.append(p)
-                    partidos_vistos.add(p.get('partido'))
+                    picks_vistos.add(clave_unica)
                 if len(picks_finales_limpios) == cantidad: break
         else:
             if candidatos_raw:
@@ -265,15 +264,24 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
 
 def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
     candidatos_crudos = []
-    fecha_hoy_mx = datetime.now(MX_TZ).date()
+
+    logger.info(f"=== Iniciando búsqueda de picks para el bloque. Ligas solicitadas: {lista_ligas} ===")
 
     for liga in lista_ligas:
-        if liga == "baseball_lmb_real":
-            partidos = obtener_partidos_lmb_real()
-        else:
-            partidos = obtener_picks_deporte(liga, markets="h2h,totals,spreads")
+        if liga not in LIGAS_PERMITIDAS:
+            logger.warning(f"⚠️ La liga '{liga}' NO está en LIGAS_PERMITIDAS. Omitiendo.")
+            continue
+
+        logger.info(f"📡 Consultando datos para la liga: {liga}...")
+
+        league_id = LIGAS_MAP.get(liga)
+        partidos = obtener_partidos_api_sports(league_id)
             
-        if not partidos: continue
+        if not partidos: 
+            logger.info(f"❌ No se encontraron datos de partidos activos para {liga}.")
+            continue
+
+        logger.info(f"✅ Se obtuvieron {len(partidos)} partidos crudos en {liga}. Evaluando cuotas y horarios...")
 
         for partido in partidos:
             commence_time_raw = partido.get("commence_time")
@@ -284,9 +292,6 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                     partido_tiempo_utc = datetime.fromisoformat(clean_time).astimezone(timezone.utc)
                     partido_tiempo_mx = partido_tiempo_utc.astimezone(MX_TZ)
                     fecha_hora_str = partido_tiempo_mx.strftime("%I:%M %p")
-                    
-                    if liga != "baseball_lmb_real":
-                        if partido_tiempo_mx.date() != fecha_hoy_mx: continue
                 except Exception: 
                     pass
 
@@ -295,7 +300,9 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                     market_key = market.get("key")
                     for o in market.get("outcomes", []):
                         cuota = o.get("price")
-                        if cuota and 1.30 <= cuota <= 4.00:
+                        
+                        # ✅ CORREGIDO: Validación robusta de cuota (Problema 2)
+                        if cuota and isinstance(cuota, (int, float)) and CUOTA_MIN <= cuota <= CUOTA_MAX:
                             nombre_deporte = mapear_icono_deporte(liga)
                             
                             if market_key == "h2h": 
@@ -315,10 +322,19 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                                 "fecha_hora": fecha_hora_str,
                                 "pick": tipo_pick,
                                 "cuota": cuota,
-                                "bookie": bookie.get("title", "Bet365"),
+                                # ✅ CORREGIDO: Bookie simplificado (Problema 1)
+                                "bookie": bookie.get("title", "Bookmaker Desconocido"),
                                 "sport_key": liga
                             })
                             
+    # ✅ CORREGIDO: Logging detallado de picks por liga (Problema 3)
+    picksporliga = {}
+    for c in candidatos_crudos:
+        liga = c['sport_key']
+        picksporliga[liga] = picksporliga.get(liga, 0) + 1
+    for liga, count in picksporliga.items():
+        logger.info(f" 📍 {liga}: {count} picks viables extraídos.")
+
     if not candidatos_crudos: return []
     return consultar_cerebro_ia(candidatos_crudos, cantidad, modo_bloque=modo_bloque)
 
@@ -335,7 +351,7 @@ def construir_mensaje(pick_data):
     estrellas = "⭐" * stk_num
     analisis = pick_data.get("analisis_ia", "Análisis verificado por la IA basado en tendencias (+EV).")
 
-    m1 = "🔥 BossOddsMX – Pick del Día\n\n"
+    m1 = "🔥 El Boss mexa – Pick del Día\n\n"
     m2 = f"Deporte: {pick_data.get('deporte', 'Deporte')}\n"
     m3 = f"Partido: ({pick_data.get('partido', 'Equipo vs Equipo')})\n"
     m4 = f"Pick: {pick_data.get('pick', '')}\n"
@@ -393,7 +409,9 @@ def evaluar_pick(pick_str, scores):
                     elif score_equipo + linea_h < score_rival: return "🔴 PERDIDO"
                     else: return "⚪ PUSH"
         return "❔ RESULTADO MANUAL"
-    except:
+    # ✅ CORREGIDO: Manejo de excepciones específico (Problema 4)
+    except (ValueError, TypeError, IndexError) as e:
+        logger.warning(f"⚠️ Error evaluando pick '{pick_str}': {e}")
         return "❔ REVISAR"
 
 async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="normal", intro=None):
@@ -424,10 +442,9 @@ async def mandar_reporte_profit():
     todos_los_resultados = []
     
     for liga in ligas_jugadas:
-        if liga == "baseball_lmb_real":
-            todos_los_resultados += obtener_marcadores_lmb_real()
-        else:
-            todos_los_resultados += obtener_marcadores(liga)
+        league_id = LIGAS_MAP.get(liga)
+        if league_id:
+            todos_los_resultados += obtener_marcadores_api_sports(league_id)
 
     ganados, perdidos, total_evaluados = 0, 0, 0
     msg = "📊 **El Boss mexa – Resumen de la Jornada** 📊\n\nResultados oficiales:\n\n"
@@ -459,7 +476,7 @@ async def mandar_reporte_profit():
 # 5. CRONOGRAMA AUTOMATIZADO (MAIN LOOP)
 # ==========================================
 async def main_loop():
-    logger.info("Bot El Boss Mexa: Sistema Béisbol Iniciado.")
+    logger.info("Bot El Boss mexa: Sistema Béisbol Unificado Iniciado.")
 
     bloques_ejecutados = {
         "buenos_dias": None, "mlb": None, 
@@ -489,15 +506,18 @@ async def main_loop():
                 await enviar_mensaje_seguro(msg)
                 bloques_ejecutados["buenos_dias"] = fecha_str
 
-            elif ahora.hour == 8 and 0 <= ahora.minute <= 5 and bloques_ejecutados["mlb"] != fecha_str:
-                await ejecutar_bloque_remodelado("MLB Mañanero", ["baseball_mlb"], 2)
+            # MLB: 8:30 AM (3 Picks)
+            elif ahora.hour == 8 and 30 <= ahora.minute <= 35 and bloques_ejecutados["mlb"] != fecha_str:
+                await ejecutar_bloque_remodelado("MLB Mañanero", ["baseball_mlb"], 3)
                 bloques_ejecutados["mlb"] = fecha_str
 
-            elif ahora.hour == 13 and 30 <= ahora.minute <= 35 and bloques_ejecutados["lmb"] != fecha_str:
+            # LMB: 1:00 PM (3 Picks)
+            elif ahora.hour == 13 and 0 <= ahora.minute <= 5 and bloques_ejecutados["lmb"] != fecha_str:
                 intro_lmb = "Familia, ya están abiertas las líneas. Aquí tienen los picks de la Liga Mexicana de Béisbol. ⚾️🔥"
-                await ejecutar_bloque_remodelado("LMB Tarde", ["baseball_lmb_real", "baseball_mlb"], 2, intro=intro_lmb)
+                await ejecutar_bloque_remodelado("LMB Tarde", ["baseball_lmb_real"], 3, intro=intro_lmb)
                 bloques_ejecutados["lmb"] = fecha_str
 
+            # STAKE 10: 3:00 PM (1 Pick de MLB o LMB)
             elif ahora.hour == 15 and 0 <= ahora.minute <= 5 and bloques_ejecutados["stake10"] != fecha_str:
                 intro_s10 = "🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada. Vamos pesados aquí:"
                 await ejecutar_bloque_remodelado("MÁXIMO VIP", LIGAS_PERMITIDAS, 1, modo="stake_10", intro=intro_s10)
