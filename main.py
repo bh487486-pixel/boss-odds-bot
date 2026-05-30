@@ -92,7 +92,8 @@ def obtener_partidos_lmb_real():
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
     url = "https://v1.baseball.api-sports.io/odds"
     headers = {'x-apisports-key': BASEBALL_API_KEY}
-    params = {'league': '11', 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
+    # AQUÍ ESTÁ EL AJUSTE: Cambiado league '11' por '21' (LMB Real)
+    params = {'league': '21', 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
     
     try:
         res = requests.get(url, headers=headers, params=params, timeout=15)
@@ -152,7 +153,8 @@ def obtener_marcadores_lmb_real():
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
     url = "https://v1.baseball.api-sports.io/games"
     headers = {'x-apisports-key': BASEBALL_API_KEY}
-    params = {'league': '11', 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
+    # AQUÍ ESTÁ EL AJUSTE: Cambiado league '11' por '21' (LMB Real)
+    params = {'league': '21', 'season': str(datetime.now(MX_TZ).year), 'date': hoy}
     
     try:
         res = requests.get(url, headers=headers, params=params, timeout=15)
@@ -217,7 +219,8 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
 
     try:
         response = model.generate_content(prompt_completo)
-        txt = response.text.strip().replace("```json", "").replace("```", "").strip()
+        txt = response.text.strip().replace("```json", "").replace("
+```", "").strip()
         picks_seleccionados = json.loads(txt)
         
         for pick in picks_seleccionados:
