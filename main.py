@@ -27,7 +27,8 @@ if not all([TELEGRAM_TOKEN, CHANNEL_ID, ODDS_API_KEY, GEMINI_API_KEY, BASEBALL_A
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Cambio al modelo PRO para evitar el error 404 y recuperar los Stakes reales
+    model = genai.GenerativeModel('gemini-1.0-pro')
 else:
     logger.error("¡ALERTA! No se encontró la GEMINI_API_KEY.")
     sys.exit(1)
@@ -195,9 +196,9 @@ def obtener_marcadores_lmb_real():
 
 def mapear_icono_deporte(sport_key):
     sport_key_lower = str(sport_key).lower()
-    if "baseball_mlb" in sport_key_lower: return "⚾ MLB"
-    if "baseball_lmb" in sport_key_lower: return "⚾ LMB"
-    if "basketball" in sport_key_lower: return "🏀 NBA"
+    if "baseball_mlb" in sport_key_lower: return "⚾ Béisbol"
+    if "baseball_lmb" in sport_key_lower: return "⚾ Béisbol"
+    if "basketball" in sport_key_lower: return "🏀 Básquetbol"
     return "🏅 Deporte"
 
 # ==========================================
@@ -228,7 +229,6 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     try:
         response = model.generate_content(prompt_completo)
         
-        # AQUÍ ESTÁ LA CORRECCIÓN: Separado en líneas cortas para que el celular no lo rompa
         txt = response.text.strip()
         txt = txt.replace('```json', '')
         txt = txt.replace('```', '')
@@ -251,7 +251,7 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
             for p in candidatos_raw:
                 if p.get('partido') not in partidos_vistos:
                     p['stake_num'] = random.randint(4, 7)
-                    p['analisis_ia'] = "Análisis verificado por tendencias de mercado."
+                    p['analisis_ia'] = "Análisis verificado por tendencias del mercado."
                     picks_finales_limpios.append(p)
                     partidos_vistos.add(p.get('partido'))
                 if len(picks_finales_limpios) == cantidad: break
@@ -302,7 +302,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                                 tipo_pick = f"Gana {o.get('name')}"
                             elif market_key == "totals": 
                                 punto = o.get('point', 0)
-                                tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {punto} Pts"
+                                tipo_pick = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {punto}"
                             elif market_key == "spreads":
                                 punto = o.get('point', 0)
                                 signo = "+" if punto > 0 else ""
@@ -333,19 +333,18 @@ def construir_mensaje(pick_data):
         stk_num = 3
         
     estrellas = "⭐" * stk_num
-    analisis = pick_data.get("analisis_ia", "Análisis verificado por tendencias (+EV).")
+    analisis = pick_data.get("analisis_ia", "Análisis verificado por la IA basado en tendencias (+EV).")
 
     m1 = "🔥 BossOddsMX – Pick del Día\n\n"
     m2 = f"Deporte: {pick_data.get('deporte', 'Deporte')}\n"
-    m3 = f"Partido: ({pick_data.get('partido', 'Partido')})\n"
-    m4 = f"⏰ Horario: {pick_data.get('fecha_hora', 'N/A')} (Hora MX)\n"
-    m5 = f"Pick: {pick_data.get('pick', '')}\n"
-    m6 = f"Cuota: {float(pick_data.get('cuota', 0)):.2f}\n"
-    m7 = f"Stake: {estrellas}\n\n"
-    m8 = "📊 Análisis:\n"
-    m9 = f"{analisis}\n\n"
-    m10 = "¡Vamos con todo! 💰"
-    return m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9 + m10
+    m3 = f"Partido: ({pick_data.get('partido', 'Equipo vs Equipo')})\n"
+    m4 = f"Pick: {pick_data.get('pick', '')}\n"
+    m5 = f"Cuota: {float(pick_data.get('cuota', 0)):.2f}\n"
+    m6 = f"Stake: {estrellas}\n\n"
+    m7 = "📊 Análisis:\n"
+    m8 = f"{analisis}\n\n"
+    m9 = "¡Vamos con todo! 💰"
+    return m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9
 
 async def enviar_mensaje_seguro(texto):
     try:
@@ -468,6 +467,14 @@ async def main_loop():
     }
     
     guardar_picks([])
+    
+    # -------------------------------------------------------------
+    # PRUEBA FORZADA LMB: Solo se ejecutará una vez al encender el bot
+    # -------------------------------------------------------------
+    logger.info("Ejecutando PRUEBA FORZADA exclusiva de la LMB...")
+    await enviar_mensaje_seguro("🚨 **Prueba de Sistema - Verificando Conexión LMB** 🚨\nExtrayendo y analizando un partido en vivo de la Liga Mexicana de Béisbol...")
+    await ejecutar_bloque_remodelado("Prueba LMB Forzada", ["baseball_lmb_real"], 1)
+    # -------------------------------------------------------------
 
     while True:
         try:
