@@ -266,7 +266,6 @@ def obtener_partidos_api_sports(league_id):
                         bet_name = _es_mx_equivalente(bet.get("name"))
                         values = bet.get("values", [])
 
-                        # --- MODIFICADO: Filtros Robustos y Ampliados para LMB ---
                         if any(k in bet_name for k in ["home/away", "moneyline", "match winner", "winner", "h2h", "gana", "ganador", "partido"]):
                             outcomes = []
                             for val in values:
@@ -409,7 +408,7 @@ def obtener_marcadores_api_sports(league_id):
                 ]
             })
 
-        logger.info(f"📌 Total de marcadores procesados en liga {league_id}: {len(mapeo_scores)}")
+        logger.info(f"📌 Total de marcadores processed en liga {league_id}: {len(mapeo_scores)}")
         return mapeo_scores
 
     except Exception as e:
@@ -501,7 +500,7 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         response = model.generate_content(prompt_completo)
         txt = getattr(response, "text", "") or ""
         picks_seleccionados = _extraer_json_lista(txt)
-        logger.info(f"🧩 Gemini devolvió {len(picks_seleccionados) if isinstance(picks_seleccionados, list) else 0} elementos.")
+        logger.info(f"🧩 Gemini devolvió {len(picks_seleccionados) if isinstance(picks_seleccionados, list) else 0} elements.")
 
         if not isinstance(picks_seleccionados, list):
             raise ValueError("Formato JSON inválido de la IA")
@@ -569,7 +568,7 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
             if candidatos_copia and isinstance(candidatos_copia[0], dict):
                 p = dict(candidatos_copia[0])
                 p["stake_num"] = 10
-                p["analisis_ia"] = "Máxima probabilidad detectada en rachas."
+                p["analisis_ia"] = "MÁXIMA probabilidad detectada en rachas."
                 picks_finales_limpios.append(p)
 
         logger.info(f"🏁 Picks finales limpios devueltos por IA (fallback): {len(picks_finales_limpios)}")
@@ -667,7 +666,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
     if not candidatos_unicos:
         return []
 
-    return consultar_cerebro_ia(candidatos_unicos, quantity, modo_bloque=modo_bloque)
+    return consultar_cerebro_ia(candidatos_unicos, cantidad, modo_bloque=modo_bloque)
 
 def construir_mensaje(pick_data):
     stk_num = pick_data.get("stake_num", 3)
@@ -888,11 +887,6 @@ async def main_loop():
         estado["bloques_ejecutados"] = json.loads(json.dumps(DEFAULT_ESTADO["bloques_ejecutados"]))
         guardar_estado(estado)
 
-    # ---> AQUÍ ESTÁ LA PRUEBA FORZADA <---
-    logger.info("🚨 PRUEBA FORZADA DE DIAGNÓSTICO: Buscando mercados de LMB...")
-    await ejecutar_bloque_remodelado("Prueba Diagnóstico LMB", ["baseball_lmb_real"], 1)
-    # --------------------------------------
-
     while True:
         try:
             ahora = datetime.now(MX_TZ)
@@ -927,7 +921,8 @@ async def main_loop():
                 bloques_ejecutados["lmb"] = fecha_str
                 guardar_estado(estado)
 
-            elif agora.hour == 15 and 0 <= ahora.minute <= 5 and bloques_ejecutados["stake10"] != fecha_str:
+            # --- CORREGIDO AQUÍ: 'ahora' en lugar de 'agora' ---
+            elif ahora.hour == 15 and 0 <= ahora.minute <= 5 and bloques_ejecutados["stake10"] != fecha_str:
                 intro_s10 = "🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada. Vamos pesados aquí:"
                 await ejecutar_bloque_remodelado("MÁXIMO VIP", LIGAS_PERMITIDAS, 1, modo="stake_10", intro=intro_s10)
                 bloques_ejecutados["stake10"] = fecha_str
