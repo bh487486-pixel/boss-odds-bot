@@ -158,127 +158,218 @@ def _es_mx_equivalente(nombre_bet):
     return n
 
 
+def _extraer_fixture_id(item):
+    if not isinstance(item, dict):
+        return None
+
+    for key in ("fixture", "game"):
+        bloque = item.get(key)
+        if isinstance(bloque, dict):
+            if bloque.get("id") is not None:
+                return bloque.get("id")
+
+    if item.get("id") is not None:
+        return item.get("id")
+
+    if item.get("fixture_id") is not None:
+        return item.get("fixture_id")
+
+    return None
+
+
 def obtener_partidos_api_sports(league_id):
+    """
+    Flujo corregido:
+    1) Consultar /games para obtener fixtures del día
+    2) Por cada fixture, consultar /odds?fixture=ID
+    """
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
-    url = "https://v1.baseball.api-sports.io/odds"
+    url_games = "https://v1.baseball.api-sports.io/games"
+    url_odds = "https://v1.baseball.api-sports.io/odds"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
-    params = {"league": str(league_id), "season": str(datetime.now(MX_TZ).year), "date": hoy}
+
+    params_games = {
+        "league": str(league_id),
+        "season": str(datetime.now(MX_TZ).year),
+        "date": hoy
+    }
 
     try:
-        res = request_con_reintentos(url, headers, params)
-        if not res:
-            logger.warning(f"No se pudo obtener Odds para liga {league_id}")
+        res_games = request_con_reintentos(url_games, headers, params_games)
+        if not res_games:
+            logger.warning(f"No se pudo obtener Games para liga {league_id}")
             return []
 
-        datos = res.json().get("response", [])
-        logger.info(f"📦 API-Sports response recibida para liga {league_id}: {len(datos)} registros.")
-        mapeo_datos = []
+        datos_games = res_games.json().get("response", [])
+        logger.info(f"📦 API-Sports Games liga {league_id}: {len(datos_games)} registros recibidos.")
 
-        for item in datos:
-            logger.info(f"🎯 Procesando registro crudo de liga {league_id}.")
-            game = item.get("game", {})
-            bookmakers = item.get("bookmakers", [])
+        fixtures = []
+        for item in datos_games:
+            fixture_id = _extraer_fixture_id(item)
+            game = item.get("game") or item.get("fixture") or item
 
-            home_team = game.get("teams", {}).get("home", {}).get("name", "Home")
-            away_team = game.get("teams", {}).get("away", {}).get("name", "Away")
-            commence_time = game.get("date", "")
+            if not isinstance(game, dict):
+                continue
 
-            bms_mapeados = []
-            for b in bookmakers:
-                logger.info(f"📚 Bookmaker detectado: {b.get('name', 'Bookmaker')}")
-                bets = b.get("bets", [])
-                markets_mapeados = []
+            teams = game.get("teams", {})
+            home_team = teams.get("home", {}).get("name", "Home")
+            away_team = teams.get("away", {}).get("name", "Away")
+            commence_time = game.get("date", "") or item.get("date", "")
 
-                for bet in bets:
-                    bet_name = _es_mx_equivalente(bet.get("name"))
-                    values = bet.get("values", [])
-
-                    if any(k in bet_name for k in ["home/away", "moneyline", "match winner", "winner", "h2h"]):
-                        outcomes = []
-                        for val in values:
-                            odd_raw = val.get("odd", 0)
-                            try:
-                                price = float(odd_raw)
-                            except (TypeError, ValueError):
-                                continue
-
-                            team_name = _buscar_nombre_equipo(val.get("value"), home_team, away_team)
-                            if not team_name:
-                                team_name = home_team if len(outcomes) == 0 else away_team
-
-                            outcomes.append({"name": team_name, "price": price})
-
-                        if len(outcomes) >= 2:
-                            markets_mapeados.append({"key": "h2h", "outcomes": outcomes})
-
-                    elif any(k in bet_name for k in ["over/under", "totals", "total"]):
-                        outcomes = []
-                        for val in values:
-                            over_under_str = str(val.get("value", ""))
-                            try:
-                                odd_val = float(val.get("odd", 0))
-                            except (TypeError, ValueError):
-                                continue
-
-                            try:
-                                if "over" in over_under_str.lower():
-                                    punto = float(re.sub(r"[^0-9\.\-]", "", over_under_str.replace("Over", "").strip()))
-                                    outcomes.append({"name": "Over", "price": odd_val, "point": punto})
-                                elif "under" in over_under_str.lower():
-                                    punto = float(re.sub(r"[^0-9\.\-]", "", over_under_str.replace("Under", "").strip()))
-                                    outcomes.append({"name": "Under", "price": odd_val, "point": punto})
-                            except ValueError:
-                                continue
-
-                        if outcomes:
-                            markets_mapeados.append({"key": "totals", "outcomes": outcomes})
-
-                    elif any(k in bet_name for k in ["handicap", "spread", "run line", "runline"]):
-                        outcomes = []
-                        for val in values:
-                            odd_raw = val.get("odd", 0)
-                            try:
-                                price = float(odd_raw)
-                            except (TypeError, ValueError):
-                                continue
-
-                            raw_name = val.get("value")
-                            team_name = _buscar_nombre_equipo(raw_name, home_team, away_team)
-                            if not team_name:
-                                team_name = str(raw_name or "") or home_team
-
-                            point_raw = val.get("point", None)
-                            if point_raw is None:
-                                point_raw = val.get("handicap", None)
-                            if point_raw is None:
-                                point_raw = val.get("line", None)
-
-                            try:
-                                point = float(point_raw) if point_raw is not None else 0.0
-                            except (TypeError, ValueError):
-                                point = 0.0
-
-                            outcomes.append({"name": team_name, "price": price, "point": point})
-
-                        if outcomes:
-                            markets_mapeados.append({"key": "spreads", "outcomes": outcomes})
-
-                if markets_mapeados:
-                    logger.info(f"🧾 Partido {home_team} vs {away_team}: {len(markets_mapeados)} mercados útiles en {b.get('name', 'Bookmaker')}.")
-                    bms_mapeados.append({
-                        "title": b.get("name", "Bookmaker"),
-                        "markets": markets_mapeados
-                    })
-
-            if bms_mapeados:
-                mapeo_datos.append({
+            if fixture_id is not None:
+                fixtures.append({
+                    "fixture_id": fixture_id,
                     "home_team": home_team,
                     "away_team": away_team,
-                    "commence_time": commence_time,
-                    "bookmakers": bms_mapeados
+                    "commence_time": commence_time
                 })
 
+        logger.info(f"📌 Fixtures detectados en liga {league_id}: {len(fixtures)}")
+
+        if not fixtures:
+            logger.warning(f"No se pudieron extraer fixtures válidos para liga {league_id}")
+            return []
+
+        mapeo_datos = []
+        fixtures_con_cuotas = 0
+
+        for fixture in fixtures:
+            params_odds = {
+                "fixture": fixture["fixture_id"]
+            }
+
+            res_odds = request_con_reintentos(url_odds, headers, params_odds)
+            if not res_odds:
+                logger.warning(
+                    f"No se pudieron obtener odds para fixture {fixture['fixture_id']} "
+                    f"({fixture['home_team']} vs {fixture['away_team']})"
+                )
+                continue
+
+            datos_odds = res_odds.json().get("response", [])
+            logger.info(
+                f"📦 API-Sports Odds fixture {fixture['fixture_id']}: {len(datos_odds)} registros recibidos."
+            )
+
+            if not datos_odds:
+                logger.info(
+                    f"⚠️ Sin cuotas para fixture {fixture['fixture_id']} "
+                    f"({fixture['home_team']} vs {fixture['away_team']})"
+                )
+                continue
+
+            for item in datos_odds:
+                game = item.get("game") or item.get("fixture") or {}
+                if not isinstance(game, dict):
+                    game = {}
+
+                teams = game.get("teams", {})
+                home_team = teams.get("home", {}).get("name", fixture["home_team"])
+                away_team = teams.get("away", {}).get("name", fixture["away_team"])
+                commence_time = game.get("date", "") or fixture["commence_time"]
+                bookmakers = item.get("bookmakers", [])
+
+                bms_mapeados = []
+                for b in bookmakers:
+                    logger.info(f"📚 Bookmaker detectado: {b.get('name', 'Bookmaker')}")
+                    bets = b.get("bets", [])
+                    markets_mapeados = []
+
+                    for bet in bets:
+                        bet_name = _es_mx_equivalente(bet.get("name"))
+                        values = bet.get("values", [])
+
+                        if any(k in bet_name for k in ["home/away", "moneyline", "match winner", "winner", "h2h"]):
+                            outcomes = []
+                            for val in values:
+                                odd_raw = val.get("odd", 0)
+                                try:
+                                    price = float(odd_raw)
+                                except (TypeError, ValueError):
+                                    continue
+
+                                team_name = _buscar_nombre_equipo(val.get("value"), home_team, away_team)
+                                if not team_name:
+                                    team_name = home_team if len(outcomes) == 0 else away_team
+
+                                outcomes.append({"name": team_name, "price": price})
+
+                            if len(outcomes) >= 2:
+                                markets_mapeados.append({"key": "h2h", "outcomes": outcomes})
+
+                        elif any(k in bet_name for k in ["over/under", "totals", "total"]):
+                            outcomes = []
+                            for val in values:
+                                over_under_str = str(val.get("value", ""))
+                                try:
+                                    odd_val = float(val.get("odd", 0))
+                                except (TypeError, ValueError):
+                                    continue
+
+                                try:
+                                    if "over" in over_under_str.lower():
+                                        punto = float(re.sub(r"[^0-9\.\-]", "", over_under_str.replace("Over", "").strip()))
+                                        outcomes.append({"name": "Over", "price": odd_val, "point": punto})
+                                    elif "under" in over_under_str.lower():
+                                        punto = float(re.sub(r"[^0-9\.\-]", "", over_under_str.replace("Under", "").strip()))
+                                        outcomes.append({"name": "Under", "price": odd_val, "point": punto})
+                                except ValueError:
+                                    continue
+
+                            if outcomes:
+                                markets_mapeados.append({"key": "totals", "outcomes": outcomes})
+
+                        elif any(k in bet_name for k in ["handicap", "spread", "run line", "runline"]):
+                            outcomes = []
+                            for val in values:
+                                odd_raw = val.get("odd", 0)
+                                try:
+                                    price = float(odd_raw)
+                                except (TypeError, ValueError):
+                                    continue
+
+                                raw_name = val.get("value")
+                                team_name = _buscar_nombre_equipo(raw_name, home_team, away_team)
+                                if not team_name:
+                                    team_name = str(raw_name or "") or home_team
+
+                                point_raw = val.get("point", None)
+                                if point_raw is None:
+                                    point_raw = val.get("handicap", None)
+                                if point_raw is None:
+                                    point_raw = val.get("line", None)
+
+                                try:
+                                    point = float(point_raw) if point_raw is not None else 0.0
+                                except (TypeError, ValueError):
+                                    point = 0.0
+
+                                outcomes.append({"name": team_name, "price": price, "point": point})
+
+                            if outcomes:
+                                markets_mapeados.append({"key": "spreads", "outcomes": outcomes})
+
+                    if markets_mapeados:
+                        logger.info(
+                            f"🧾 Partido {home_team} vs {away_team}: {len(markets_mapeados)} "
+                            f"mercados útiles en {b.get('name', 'Bookmaker')}."
+                        )
+                        bms_mapeados.append({
+                            "title": b.get("name", "Bookmaker"),
+                            "markets": markets_mapeados
+                        })
+
+                if bms_mapeados:
+                    mapeo_datos.append({
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "commence_time": commence_time,
+                        "bookmakers": bms_mapeados
+                    })
+                    fixtures_con_cuotas += 1
+
         logger.info(f"📌 Total de partidos con cuotas válidas en liga {league_id}: {len(mapeo_datos)}")
+        logger.info(f"📌 Fixtures con al menos una cuota válida en liga {league_id}: {fixtures_con_cuotas}")
         return mapeo_datos
 
     except Exception as e:
