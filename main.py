@@ -168,8 +168,8 @@ def _extraer_fixture_id(item):
 
 def obtener_partidos_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
-    url_games = "[https://v1.baseball.api-sports.io/games](https://v1.baseball.api-sports.io/games)"
-    url_odds = "[https://v1.baseball.api-sports.io/odds](https://v1.baseball.api-sports.io/odds)"
+    url_games = "https://v1.baseball.api-sports.io/games"
+    url_odds = "https://v1.baseball.api-sports.io/odds"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
 
     params_games = {
@@ -255,12 +255,10 @@ def obtener_partidos_api_sports(league_id):
                     logger.info(f"📚 Bookmaker detectado: {b.get('name', 'Bookmaker')}")
                     bets = b.get("bets", [])
                     
-                    # ---> AQUÍ ESTÁ EL MODO DETECTIVE <---
                     try:
                         logger.info(f"🔎 DEBUG API: Apuestas crudas de {b.get('name')}: {json.dumps(bets, ensure_ascii=False)}")
                     except Exception as e:
                         logger.warning(f"No se pudo imprimir debug de bets: {e}")
-                    # ---------------------------------------
 
                     markets_mapeados = []
 
@@ -367,7 +365,7 @@ def obtener_partidos_api_sports(league_id):
 
 def obtener_marcadores_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
-    url = "[https://v1.baseball.api-sports.io/games](https://v1.baseball.api-sports.io/games)"
+    url = "https://v1.baseball.api-sports.io/games"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
     params = {"league": str(league_id), "season": str(datetime.now(MX_TZ).year), "date": hoy}
 
@@ -429,7 +427,6 @@ def _extraer_json_lista(texto):
     if not texto:
         raise ValueError("Respuesta vacía de la IA")
 
-    # AQUÍ ESTABA EL ERROR. SE CORRIGIÓ EL SALTO DE LÍNEA FANTASMA.
     txt = texto.strip().replace("```json", "").replace("```", "").strip()
 
     inicio = txt.find("[")
