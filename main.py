@@ -266,7 +266,8 @@ def obtener_partidos_api_sports(league_id):
                         bet_name = _es_mx_equivalente(bet.get("name"))
                         values = bet.get("values", [])
 
-                        if any(k in bet_name for k in ["home/away", "moneyline", "match winner", "winner", "h2h"]):
+                        # --- MODIFICADO: Filtros Robustos y Ampliados para LMB ---
+                        if any(k in bet_name for k in ["home/away", "moneyline", "match winner", "winner", "h2h", "gana", "ganador", "partido"]):
                             outcomes = []
                             for val in values:
                                 odd_raw = val.get("odd", 0)
@@ -306,7 +307,7 @@ def obtener_partidos_api_sports(league_id):
                             if outcomes:
                                 markets_mapeados.append({"key": "totals", "outcomes": outcomes})
 
-                        elif any(k in bet_name for k in ["handicap", "spread", "run line", "runline"]):
+                        elif any(k in bet_name for k in ["handicap", "spread", "run line", "runline", "run"]):
                             outcomes = []
                             for val in values:
                                 odd_raw = val.get("odd", 0)
@@ -666,7 +667,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
     if not candidatos_unicos:
         return []
 
-    return consultar_cerebro_ia(candidatos_unicos, cantidad, modo_bloque=modo_bloque)
+    return consultar_cerebro_ia(candidatos_unicos, quantity, modo_bloque=modo_bloque)
 
 def construir_mensaje(pick_data):
     stk_num = pick_data.get("stake_num", 3)
@@ -926,7 +927,7 @@ async def main_loop():
                 bloques_ejecutados["lmb"] = fecha_str
                 guardar_estado(estado)
 
-            elif ahora.hour == 15 and 0 <= ahora.minute <= 5 and bloques_ejecutados["stake10"] != fecha_str:
+            elif agora.hour == 15 and 0 <= ahora.minute <= 5 and bloques_ejecutados["stake10"] != fecha_str:
                 intro_s10 = "🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada. Vamos pesados aquí:"
                 await ejecutar_bloque_remodelado("MÁXIMO VIP", LIGAS_PERMITIDAS, 1, modo="stake_10", intro=intro_s10)
                 bloques_ejecutados["stake10"] = fecha_str
