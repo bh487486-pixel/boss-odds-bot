@@ -171,9 +171,11 @@ def obtener_partidos_api_sports(league_id):
             return []
 
         datos = res.json().get("response", [])
+        logger.info(f"📦 API-Sports response recibida para liga {league_id}: {len(datos)} registros.")
         mapeo_datos = []
 
         for item in datos:
+            logger.info(f"🎯 Procesando registro crudo de liga {league_id}.")
             game = item.get("game", {})
             bookmakers = item.get("bookmakers", [])
 
@@ -183,6 +185,7 @@ def obtener_partidos_api_sports(league_id):
 
             bms_mapeados = []
             for b in bookmakers:
+                logger.info(f"📚 Bookmaker detectado: {b.get('name', 'Bookmaker')}")
                 bets = b.get("bets", [])
                 markets_mapeados = []
 
@@ -261,6 +264,7 @@ def obtener_partidos_api_sports(league_id):
                             markets_mapeados.append({"key": "spreads", "outcomes": outcomes})
 
                 if markets_mapeados:
+                    logger.info(f"🧾 Partido {home_team} vs {away_team}: {len(markets_mapeados)} mercados útiles en {b.get('name', 'Bookmaker')}.")
                     bms_mapeados.append({
                         "title": b.get("name", "Bookmaker"),
                         "markets": markets_mapeados
@@ -274,6 +278,7 @@ def obtener_partidos_api_sports(league_id):
                     "bookmakers": bms_mapeados
                 })
 
+        logger.info(f"📌 Total de partidos con cuotas válidas en liga {league_id}: {len(mapeo_datos)}")
         return mapeo_datos
 
     except Exception as e:
@@ -294,6 +299,7 @@ def obtener_marcadores_api_sports(league_id):
             return []
 
         datos = res.json().get("response", [])
+        logger.info(f"📦 API-Sports Games liga {league_id}: {len(datos)} registros recibidos.")
         mapeo_scores = []
 
         for item in datos:
@@ -325,6 +331,7 @@ def obtener_marcadores_api_sports(league_id):
                 ]
             })
 
+        logger.info(f"📌 Total de marcadores procesados en liga {league_id}: {len(mapeo_scores)}")
         return mapeo_scores
 
     except Exception as e:
@@ -386,7 +393,9 @@ def _ranking_pre_gemini(picks):
 
 
 def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
+    logger.info(f"🧠 Candidatos enviados a Gemini antes de ranking: {len(candidatos_raw)}")
     candidatos_raw = _ranking_pre_gemini(candidatos_raw)[:50]
+    logger.info(f"🧠 Candidatos enviados a Gemini después de ranking y corte: {len(candidatos_raw)}")
 
     if modo_bloque != "stake_10":
         prompt = (
@@ -415,9 +424,11 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     picks_vistos = set()
 
     try:
+        logger.info(f"🤖 Enviando prompt a Gemini con {len(candidatos_raw)} candidatos.")
         response = model.generate_content(prompt_completo)
         txt = getattr(response, "text", "") or ""
         picks_seleccionados = _extraer_json_lista(txt)
+        logger.info(f"🧩 Gemini devolvió {len(picks_seleccionados) if isinstance(picks_seleccionados, list) else 0} elementos.")
 
         if not isinstance(picks_seleccionados, list):
             raise ValueError("Formato JSON inválido de la IA")
@@ -446,6 +457,7 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
             if len(picks_finales_limpios) == cantidad:
                 break
 
+        logger.info(f"🏁 Picks finales limpios devueltos por IA: {len(picks_finales_limpios)}")
         return picks_finales_limpios
 
     except Exception as e:
@@ -487,6 +499,7 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
                 p["analisis_ia"] = "Máxima probabilidad detectada en rachas."
                 picks_finales_limpios.append(p)
 
+        logger.info(f"🏁 Picks finales limpios devueltos por IA (fallback): {len(picks_finales_limpios)}")
         return picks_finales_limpios
 
 
@@ -559,6 +572,8 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                                 "sport_key": liga
                             })
 
+    logger.info(f"📊 Candidatos crudos antes de deduplicar: {len(candidatos_crudos)}")
+
     candidatos_unicos = []
     vistos = set()
     for c in candidatos_crudos:
@@ -574,6 +589,8 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
 
     for liga, count in picks_por_liga.items():
         logger.info(f"📍 {liga}: {count} picks viables extraídos.")
+
+    logger.info(f"✅ Candidatos únicos tras deduplicar: {len(candidatos_unicos)}")
 
     if not candidatos_unicos:
         return []
@@ -707,6 +724,7 @@ async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="norma
     picks_bloque = []
     for intento in range(3):
         picks_bloque = procesar_bloque_especifico(ligas, cantidad, modo_bloque=modo)
+        logger.info(f"📤 Bloque '{nombre_bloque}' intento {intento + 1}: {len(picks_bloque)} picks candidatos.")
         picks_bloque = _filtrar_picks_nuevos(picks_bloque)
 
         if picks_bloque:
@@ -722,12 +740,14 @@ async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="norma
         return
 
     actuales = cargar_picks()
+    logger.info(f"💾 Picks guardados actualmente antes de añadir bloque: {len(actuales)}")
     claves_actuales = {_clave_unica_pick(p) for p in actuales if isinstance(p, dict)}
     for pick in picks_bloque:
         if _clave_unica_pick(pick) not in claves_actuales:
             actuales.append(pick)
             claves_actuales.add(_clave_unica_pick(pick))
     guardar_picks(actuales)
+    logger.info(f"💾 Picks totales guardados después del bloque '{nombre_bloque}': {len(actuales)}")
 
     if intro:
         await enviar_mensaje_seguro(intro)
@@ -740,6 +760,7 @@ async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="norma
 
 async def mandar_reporte_profit():
     picks_totales = cargar_picks()
+    logger.info(f"📊 Generando reporte con {len(picks_totales)} picks totales guardados.")
     if not picks_totales:
         return
 
