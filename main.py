@@ -184,8 +184,8 @@ def mapear_icono_deporte(sport_key):
 # ==========================================
 def obtener_partidos_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
-    url_games = "https://v1.baseball.api-sports.io/games"
-    url_odds = "https://v1.baseball.api-sports.io/odds"
+    url_games = "[https://v1.baseball.api-sports.io/games](https://v1.baseball.api-sports.io/games)"
+    url_odds = "[https://v1.baseball.api-sports.io/odds](https://v1.baseball.api-sports.io/odds)"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
 
     params_games = {
@@ -330,7 +330,7 @@ def obtener_partidos_api_sports(league_id):
 
 def obtener_marcadores_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
-    url = "https://v1.baseball.api-sports.io/games"
+    url = "[https://v1.baseball.api-sports.io/games](https://v1.baseball.api-sports.io/games)"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
     params = {"league": str(league_id), "season": str(datetime.now(MX_TZ).year), "date": hoy}
 
@@ -371,8 +371,7 @@ def obtener_marcadores_api_sports(league_id):
 # ==========================================
 def _extraer_json_lista(texto):
     if not texto: raise ValueError("Respuesta vacía de la IA")
-    txt = texto.strip().replace("```json", "").replace("
-```", "").strip()
+    txt = texto.strip().replace("`" * 3 + "json", "").replace("`" * 3, "").strip()
     inicio, fin = txt.find("["), txt.rfind("]")
     if inicio != -1 and fin != -1 and fin > inicio:
         return json.loads(txt[inicio:fin + 1].strip())
@@ -438,7 +437,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
             fecha_hora_str = "Horario por confirmar"
             if partido.get("commence_time"):
                 try:
-                    fecha_hora_str = datetime.fromisoformat(partio.get("commence_time").replace("Z", "+00:00")).astimezone(MX_TZ).strftime("%I:%M %p")
+                    fecha_hora_str = datetime.fromisoformat(partido.get("commence_time").replace("Z", "+00:00")).astimezone(MX_TZ).strftime("%I:%M %p")
                 except: pass
 
             for bookie in partido.get("bookmakers", []):
@@ -473,7 +472,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
 def construir_mensaje(pick_data):
     stk = max(1, min(int(pick_data.get("stake_num", 3)), 10))
     return (
-        "🔥 BossOddsMX – Pick del Día\n\n"
+        "🔥 El Boss Mexa – Pick del Día\n\n"
         f"Deporte: {pick_data.get('deporte')}\n"
         f"Partido: ({pick_data.get('partido')})\n"
         f"Pick: {pick_data.get('pick')}\n"
@@ -574,7 +573,7 @@ async def mandar_reporte_profit():
 # 11. BUCLE DE TIEMPO CENTRAL (RELOJ)
 # ==========================================
 async def main_loop():
-    logger.info("Bot El Boss mexa: Sistema Béisbol Unificado Iniciado.")
+    logger.info("Bot El Boss Mexa: Sistema Béisbol Unificado Iniciado.")
     estado = cargar_estado()
     
     while True:
