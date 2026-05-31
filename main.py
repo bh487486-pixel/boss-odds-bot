@@ -70,7 +70,6 @@ DEFAULT_ESTADO = {
 
 REQUEST_TIMEOUT = (10, 30)
 
-
 def _cargar_json_seguro(path, fallback):
     if not os.path.exists(path):
         return fallback
@@ -82,7 +81,6 @@ def _cargar_json_seguro(path, fallback):
         logger.error(f"Error al leer {path}: {e}")
         return fallback
 
-
 def _guardar_json_seguro(path, data):
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -90,18 +88,15 @@ def _guardar_json_seguro(path, data):
     except Exception as e:
         logger.error(f"Error al guardar {path}: {e}")
 
-
 def cargar_picks():
     data = _cargar_json_seguro(ARCHIVO_PICKS, [])
     return data if isinstance(data, list) else []
-
 
 def guardar_picks(picks):
     if not isinstance(picks, list):
         logger.error("guardar_picks recibió un valor inválido; se esperaba lista.")
         return
     _guardar_json_seguro(ARCHIVO_PICKS, picks)
-
 
 def cargar_estado():
     data = _cargar_json_seguro(ARCHIVO_ESTADO, DEFAULT_ESTADO)
@@ -114,12 +109,10 @@ def cargar_estado():
     data.setdefault("fecha", None)
     return data
 
-
 def guardar_estado(estado):
     if not isinstance(estado, dict):
         return
     _guardar_json_seguro(ARCHIVO_ESTADO, estado)
-
 
 def request_con_reintentos(url, headers, params, intentos=3, espera=5):
     for intento in range(1, intentos + 1):
@@ -136,7 +129,6 @@ def request_con_reintentos(url, headers, params, intentos=3, espera=5):
 
     return None
 
-
 def _buscar_nombre_equipo(value, home_team, away_team):
     v = str(value or "").strip().lower()
     home_l = str(home_team).lower()
@@ -152,11 +144,9 @@ def _buscar_nombre_equipo(value, home_team, away_team):
         return away_team
     return None
 
-
 def _es_mx_equivalente(nombre_bet):
     n = str(nombre_bet or "").strip().lower()
     return n
-
 
 def _extraer_fixture_id(item):
     if not isinstance(item, dict):
@@ -176,13 +166,7 @@ def _extraer_fixture_id(item):
 
     return None
 
-
 def obtener_partidos_api_sports(league_id):
-    """
-    Flujo corregido:
-    1) Consultar /games para obtener fixtures del día
-    2) Por cada fixture, consultar /odds?fixture=ID
-    """
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
     url_games = "https://v1.baseball.api-sports.io/games"
     url_odds = "https://v1.baseball.api-sports.io/odds"
@@ -247,10 +231,7 @@ def obtener_partidos_api_sports(league_id):
                 continue
 
             datos_odds = res_odds.json().get("response", [])
-            logger.info(
-                f"📦 API-Sports Odds fixture {fixture['fixture_id']}: {len(datos_odds)} registros recibidos."
-            )
-
+            
             if not datos_odds:
                 logger.info(
                     f"⚠️ Sin cuotas para fixture {fixture['fixture_id']} "
@@ -273,6 +254,14 @@ def obtener_partidos_api_sports(league_id):
                 for b in bookmakers:
                     logger.info(f"📚 Bookmaker detectado: {b.get('name', 'Bookmaker')}")
                     bets = b.get("bets", [])
+                    
+                    # ---> AQUÍ ESTÁ EL MODO DETECTIVE <---
+                    try:
+                        logger.info(f"🔎 DEBUG API: Apuestas crudas de {b.get('name')}: {json.dumps(bets, ensure_ascii=False)}")
+                    except Exception as e:
+                        logger.warning(f"No se pudo imprimir debug de bets: {e}")
+                    # ---------------------------------------
+
                     markets_mapeados = []
 
                     for bet in bets:
@@ -376,7 +365,6 @@ def obtener_partidos_api_sports(league_id):
         logger.error(f"Error API-Sports Odds (Liga {league_id}): {e}")
         return []
 
-
 def obtener_marcadores_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
     url = "https://v1.baseball.api-sports.io/games"
@@ -429,7 +417,6 @@ def obtener_marcadores_api_sports(league_id):
         logger.error(f"Error API-Sports Scores (Liga {league_id}): {e}")
         return []
 
-
 def mapear_icono_deporte(sport_key):
     sport_key_lower = str(sport_key).lower()
     if "baseball_mlb" in sport_key_lower:
@@ -438,12 +425,12 @@ def mapear_icono_deporte(sport_key):
         return "⚾ LMB"
     return "🏅 Deporte"
 
-
 def _extraer_json_lista(texto):
     if not texto:
         raise ValueError("Respuesta vacía de la IA")
 
-    txt = texto.strip().replace("```json", "").replace("```", "").strip()
+    txt = texto.strip().replace("```json", "").replace("
+```", "").strip()
 
     inicio = txt.find("[")
     fin = txt.rfind("]")
@@ -460,10 +447,8 @@ def _extraer_json_lista(texto):
 
     raise ValueError("No se pudo extraer JSON válido de la respuesta")
 
-
 def _clave_unica_pick(pick):
     return f"{str(pick.get('partido', 'Desconocido')).strip().lower()}|{str(pick.get('pick', 'Desconocido')).strip().lower()}|{str(pick.get('cuota', '0.0')).strip()}|{str(pick.get('sport_key', '')).strip().lower()}"
-
 
 def _ranking_pre_gemini(picks):
     def score(x):
@@ -481,7 +466,6 @@ def _ranking_pre_gemini(picks):
         return distancia + bonus
 
     return sorted(picks, key=score)
-
 
 def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     logger.info(f"🧠 Candidatos enviados a Gemini antes de ranking: {len(candidatos_raw)}")
@@ -593,7 +577,6 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         logger.info(f"🏁 Picks finales limpios devueltos por IA (fallback): {len(picks_finales_limpios)}")
         return picks_finales_limpios
 
-
 def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
     candidatos_crudos = []
 
@@ -688,7 +671,6 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
 
     return consultar_cerebro_ia(candidatos_unicos, cantidad, modo_bloque=modo_bloque)
 
-
 def construir_mensaje(pick_data):
     stk_num = pick_data.get("stake_num", 3)
     try:
@@ -711,20 +693,17 @@ def construir_mensaje(pick_data):
     m9 = "¡Vamos con todo! 💰"
     return m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9
 
-
 async def enviar_mensaje_seguro(texto):
     try:
         await bot.send_message(chat_id=CHANNEL_ID, text=texto, parse_mode=None)
     except Exception as e:
         logger.error(f"Error al enviar Telegram: {e}")
 
-
 def _extraer_linea_pick(pick_str):
     match = re.search(r"(-?\d+(?:\.\d+)?)\s*$", pick_str.strip())
     if not match:
         raise ValueError("No se pudo extraer la línea numérica del pick")
     return float(match.group(1))
-
 
 def evaluar_pick(pick_str, scores):
     try:
@@ -790,11 +769,9 @@ def evaluar_pick(pick_str, scores):
         logger.warning(f"⚠️ Error evaluando pick '{pick_str}': {e}")
         return "❔ REVISAR"
 
-
 def _picks_existentes_unicos():
     actuales = cargar_picks()
     return {_clave_unica_pick(p) for p in actuales if isinstance(p, dict)}
-
 
 def _filtrar_picks_nuevos(picks):
     existentes = _picks_existentes_unicos()
@@ -807,7 +784,6 @@ def _filtrar_picks_nuevos(picks):
             nuevos.append(p)
             existentes.add(clave)
     return nuevos
-
 
 async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="normal", intro=None):
     logger.info(f"Iniciando bloque: {nombre_bloque}")
@@ -847,7 +823,6 @@ async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="norma
     for pick in picks_bloque:
         await enviar_mensaje_seguro(construir_mensaje(pick))
         await asyncio.sleep(5)
-
 
 async def mandar_reporte_profit():
     picks_totales = cargar_picks()
@@ -903,7 +878,6 @@ async def mandar_reporte_profit():
     msg += "¡Mañana regresamos por más verdes! 📉💰"
     await enviar_mensaje_seguro(msg)
 
-
 async def main_loop():
     logger.info("Bot El Boss mexa: Sistema Béisbol Unificado Iniciado.")
 
@@ -915,6 +889,11 @@ async def main_loop():
         estado["fecha"] = fecha_hoy
         estado["bloques_ejecutados"] = json.loads(json.dumps(DEFAULT_ESTADO["bloques_ejecutados"]))
         guardar_estado(estado)
+
+    # ---> AQUÍ ESTÁ LA PRUEBA FORZADA <---
+    logger.info("🚨 PRUEBA FORZADA DE DIAGNÓSTICO: Buscando mercados de LMB...")
+    await ejecutar_bloque_remodelado("Prueba Diagnóstico LMB", ["baseball_lmb_real"], 1)
+    # --------------------------------------
 
     while True:
         try:
@@ -972,7 +951,6 @@ async def main_loop():
         except Exception as e:
             logger.error(f"Error en bucle del reloj: {e}")
             await asyncio.sleep(30)
-
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
