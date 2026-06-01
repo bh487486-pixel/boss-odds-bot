@@ -50,9 +50,9 @@ bot = Bot(token=TELEGRAM_TOKEN)
 ARCHIVO_PICKS = "picks_hoy.json"
 ARCHIVO_ESTADO = "estado_bot.json"
 
-# Rango de cuotas permitidas
-CUOTA_MIN = 1.20
-CUOTA_MAX = 5.00
+# Rango de cuotas permitidas (ACTUALIZADO A 1.00 - 10.00)
+CUOTA_MIN = 1.00
+CUOTA_MAX = 10.00
 
 # Ligas centralizadas en API-Sports
 LIGAS_PERMITIDAS = ["baseball_mlb", "baseball_lmb_real"]
@@ -596,20 +596,20 @@ async def main_loop():
                 be["buenos_dias"] = fecha_str
                 guardar_estado(estado)
 
-            # 8:30 AM - MLB Mañanero
-            elif ahora.hour == 8 and 30 <= ahora.minute <= 35 and be["mlb"] != fecha_str:
+            # 10:00 AM - MLB Mañanero
+            elif ahora.hour == 10 and 0 <= ahora.minute <= 5 and be["mlb"] != fecha_str:
                 await ejecutar_bloque_remodelado("MLB Mañanero", ["baseball_mlb"], 3)
                 be["mlb"] = fecha_str
                 guardar_estado(estado)
 
-            # 1:00 PM - LMB Tarde
-            elif ahora.hour == 13 and 0 <= ahora.minute <= 5 and be["lmb"] != fecha_str:
+            # 3:30 PM - LMB Tarde 
+            elif ahora.hour == 15 and 30 <= ahora.minute <= 35 and be["lmb"] != fecha_str:
                 await ejecutar_bloque_remodelado("LMB Tarde", ["baseball_lmb_real"], 3, intro="Familia, ya están abiertas las líneas. Aquí tienen los picks de la Liga Mexicana de Béisbol. ⚾️🔥")
                 be["lmb"] = fecha_str
                 guardar_estado(estado)
 
-            # 3:00 PM - MÁXIMO VIP (STAKE 10)
-            elif ahora.hour == 15 and 0 <= ahora.minute <= 5 and be["stake10"] != fecha_str:
+            # 4:00 PM - MÁXIMO VIP (STAKE 10) - Analiza todos los mercados de ambas ligas
+            elif ahora.hour == 16 and 0 <= ahora.minute <= 5 and be["stake10"] != fecha_str:
                 await ejecutar_bloque_remodelado("MÁXIMO VIP", LIGAS_PERMITIDAS, 1, modo="stake_10", intro="🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada. Vamos pesados aquí:")
                 be["stake10"] = fecha_str
                 guardar_estado(estado)
