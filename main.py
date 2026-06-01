@@ -1,34 +1,635 @@
-import requests
+import os
+import re
 import json
+import sys
+import time
+import random
+import asyncio
+import logging
 from datetime import datetime
 
-API_KEY = "4b90f036a499cb44446f79edd3ef82b4" # ¡Pon tu llave de API-Sports aquí!
-headers = {"x-apisports-key": API_KEY}
-fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+import requests
+from telegram import Bot
+import google.generativeai as genai
 
-print("🔍 Buscando juegos de MLB para hoy...")
-res_games = requests.get("https://v1.baseball.api-sports.io/games", headers=headers, params={"league": "1", "season": "2026", "date": fecha_hoy}).json()
-fixtures = res_games.get("response", [])
+# ==========================================
+# 1. CONTROL DE ZONA HORARIA (MÉXICO)
+# ==========================================
+try:
+    from zoneinfo import ZoneInfo
+    MX_TZ = ZoneInfo("America/Mexico_City")
+except Exception:
+    from datetime import timezone, timedelta
+    MX_TZ = timezone(timedelta(hours=-6))
 
-if not fixtures:
-    print("❌ No encontré juegos. (Asegúrate de que el API Key esté correcto).")
-else:
-    fix_id = fixtures[0]["id"]
-    home = fixtures[0]["teams"]["home"]["name"]
-    away = fixtures[0]["teams"]["away"]["name"]
-    print(f"✅ Juego encontrado: {home} vs {away} (ID: {fix_id})")
-    
-    print("\n📡 Extrayendo nombres exactos de los mercados...")
-    res_odds = requests.get("https://v1.baseball.api-sports.io/odds", headers=headers, params={"fixture": fix_id}).json()
-    
-    datos = res_odds.get("response", [])
-    if not datos:
-        print("⚠️ No hay cuotas abiertas para este partido aún.")
+# ==========================================
+# 2. CONFIGURACIÓN DE LOGS (MONITOREO)
+# ==========================================
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# ==========================================
+# 3. CARGA DE VARIABLES DE ENTORNO
+# ==========================================
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+BASEBALL_API_KEY = os.getenv("BASEBALL_API_KEY")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+
+if not all([TELEGRAM_TOKEN, CHANNEL_ID, GEMINI_API_KEY, BASEBALL_API_KEY]):
+    logger.error("❌ ¡ALERTA! Faltan variables de entorno obligatorias en Render.")
+    sys.exit(1)
+
+# Inicialización de servicios
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+bot = Bot(token=TELEGRAM_TOKEN)
+
+# Nombres de archivos locales
+ARCHIVO_PICKS = "picks_hoy.json"
+ARCHIVO_ESTADO = "estado_bot.json"
+
+# Rango de cuotas permitidas (ACTUALIZADO A 1.00 - 10.00)
+CUOTA_MIN = 1.00
+CUOTA_MAX = 10.00
+
+# Ligas centralizadas en API-Sports
+LIGAS_PERMITIDAS = ["baseball_mlb", "baseball_lmb_real"]
+
+# Mapeo de IDs oficiales (1 = MLB, 21 = LMB)
+LIGAS_MAP = {
+    "baseball_mlb": "1",
+    "baseball_lmb_real": "21",
+}
+
+DEFAULT_ESTADO = {
+    "fecha": None,
+    "bloques_ejecutados": {
+        "buenos_dias": None,
+        "mlb": None,
+        "lmb": None,
+        "stake10": None,
+        "reporte": None,
+        "buenas_noches": None,
+    }
+}
+
+REQUEST_TIMEOUT = (10, 30)
+
+# ==========================================
+# 4. CONTROL DE ARCHIVOS LOCALES
+# ==========================================
+def _cargar_json_seguro(path, fallback):
+    if not os.path.exists(path):
+        return fallback
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Error al leer {path}: {e}")
+        return fallback
+
+def _guardar_json_seguro(path, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        logger.error(f"Error al guardar {path}: {e}")
+
+def cargar_picks():
+    data = _cargar_json_seguro(ARCHIVO_PICKS, [])
+    return data if isinstance(data, list) else []
+
+def guardar_picks(picks):
+    if not isinstance(picks, list):
+        return
+    _guardar_json_seguro(ARCHIVO_PICKS, picks)
+
+def cargar_estado():
+    data = _cargar_json_seguro(ARCHIVO_ESTADO, DEFAULT_ESTADO)
+    if not isinstance(data, dict):
+        return json.loads(json.dumps(DEFAULT_ESTADO))
+    if "bloques_ejecutados" not in data or not isinstance(data["bloques_ejecutados"], dict):
+        data["bloques_ejecutados"] = json.loads(json.dumps(DEFAULT_ESTADO["bloques_ejecutados"]))
+    for k, v in DEFAULT_ESTADO["bloques_ejecutados"].items():
+        data["bloques_ejecutados"].setdefault(k, v)
+    data.setdefault("fecha", None)
+    return data
+
+def guardar_estado(estado):
+    if not isinstance(estado, dict):
+        return
+    _guardar_json_seguro(ARCHIVO_ESTADO, estado)
+
+# ==========================================
+# 5. CONEXIÓN CON REINTENTOS (MÉTODO GET)
+# ==========================================
+def request_con_reintentos(url, headers, params, intentos=3, espera=5):
+    for intento in range(1, intentos + 1):
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
+            if res.status_code == 200:
+                return res
+            logger.warning(f"API respondió {res.status_code} (intento {intento}/{intentos})")
+        except Exception as e:
+            logger.warning(f"Intento {intento}/{intentos} falló: {e}")
+
+        if intento < intentos:
+            time.sleep(espera)
+    return None
+
+# ==========================================
+# 6. HERRAMIENTAS AUXILIARES DE PROCESAMIENTO
+# ==========================================
+def _buscar_nombre_equipo(value, home_team, away_team):
+    v = str(value or "").strip().lower()
+    home_l = str(home_team).lower()
+    away_l = str(away_team).lower()
+
+    if v in {"home", "1", "local"} or home_l in v:
+        return home_team
+    if v in {"away", "2", "visitante", "visita"} or away_l in v:
+        return away_team
+    if v == str(home_team).strip().lower() or v == str(away_team).strip().lower():
+        return home_team if v == str(home_team).strip().lower() else away_team
+    return None
+
+def _es_mx_equivalente(nombre_bet):
+    return str(nombre_bet or "").strip().lower()
+
+def _extraer_fixture_id(item):
+    if not isinstance(item, dict):
+        return None
+    for key in ("fixture", "game"):
+        bloque = item.get(key)
+        if isinstance(bloque, dict) and bloque.get("id") is not None:
+            return bloque.get("id")
+    if item.get("id") is not None:
+        return item.get("id")
+    if item.get("fixture_id") is not None:
+        return item.get("fixture_id")
+    return None
+
+def mapear_icono_deporte(sport_key):
+    sport_key_lower = str(sport_key).lower()
+    if "baseball_mlb" in sport_key_lower:
+        return "⚾ MLB"
+    if "baseball_lmb" in sport_key_lower:
+        return "⚾ LMB"
+    return "🏅 Deporte"
+
+# ==========================================
+# 7. EXTRACCIÓN DE DATOS DE API-SPORTS
+# ==========================================
+def obtener_partidos_api_sports(league_id):
+    hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
+    url_games = "https://v1.baseball.api-sports.io/games"
+    url_odds = "https://v1.baseball.api-sports.io/odds"
+    headers = {"x-apisports-key": BASEBALL_API_KEY}
+
+    params_games = {
+        "league": str(league_id),
+        "season": str(datetime.now(MX_TZ).year),
+        "date": hoy
+    }
+
+    try:
+        res_games = request_con_reintentos(url_games, headers, params_games)
+        if not res_games:
+            logger.warning(f"No se pudo obtener Games para liga {league_id}")
+            return []
+
+        datos_games = res_games.json().get("response", [])
+        logger.info(f"📦 API-Sports Games liga {league_id}: {len(datos_games)} registros recibidos.")
+
+        fixtures = []
+        for item in datos_games:
+            fixture_id = _extraer_fixture_id(item)
+            game = item.get("game") or item.get("fixture") or item
+
+            if not isinstance(game, dict):
+                continue
+
+            teams = game.get("teams", {})
+            home_team = teams.get("home", {}).get("name", "Home")
+            away_team = teams.get("away", {}).get("name", "Away")
+            commence_time = game.get("date", "") or item.get("date", "")
+
+            if fixture_id is not None:
+                fixtures.append({
+                    "fixture_id": fixture_id,
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "commence_time": commence_time
+                })
+
+        logger.info(f"📌 Fixtures detectados en liga {league_id}: {len(fixtures)}")
+
+        if not fixtures:
+            return []
+
+        mapeo_datos = []
+        for fixture in fixtures:
+            res_odds = request_con_reintentos(url_odds, headers, {"fixture": fixture["fixture_id"]})
+            if not res_odds:
+                continue
+
+            datos_odds = res_odds.json().get("response", [])
+            if not datos_odds:
+                continue
+
+            for item in datos_odds:
+                game = item.get("game") or item.get("fixture") or {}
+                if not isinstance(game, dict):
+                    game = {}
+
+                teams = game.get("teams", {})
+                home_team = teams.get("home", {}).get("name", fixture["home_team"])
+                away_team = teams.get("away", {}).get("name", fixture["away_team"])
+                commence_time = game.get("date", "") or fixture["commence_time"]
+                bookmakers = item.get("bookmakers", [])
+
+                bms_mapeados = []
+                for b in bookmakers:
+                    bets = b.get("bets", [])
+                    markets_mapeados = []
+
+                    for bet in bets:
+                        bet_name = _es_mx_equivalente(bet.get("name"))
+                        values = bet.get("values", [])
+
+                        # Filtros de Mercados robustos
+                        if any(k in bet_name for k in ["home/away", "moneyline", "match winner", "winner", "h2h", "gana", "ganador"]):
+                            outcomes = []
+                            for val in values:
+                                try:
+                                    price = float(val.get("odd", 0))
+                                except (TypeError, ValueError):
+                                    continue
+                                team_name = _buscar_nombre_equipo(val.get("value"), home_team, away_team)
+                                if not team_name:
+                                    team_name = home_team if len(outcomes) == 0 else away_team
+                                outcomes.append({"name": team_name, "price": price})
+                            if len(outcomes) >= 2:
+                                markets_mapeados.append({"key": "h2h", "outcomes": outcomes})
+
+                        elif any(k in bet_name for k in ["over/under", "totals", "total"]):
+                            outcomes = []
+                            for val in values:
+                                over_under_str = str(val.get("value", ""))
+                                try:
+                                    odd_val = float(val.get("odd", 0))
+                                except (TypeError, ValueError):
+                                    continue
+                                try:
+                                    if "over" in over_under_str.lower():
+                                        punto = float(re.sub(r"[^0-9\.\-]", "", over_under_str.replace("Over", "").strip()))
+                                        outcomes.append({"name": "Over", "price": odd_val, "point": punto})
+                                    elif "under" in over_under_str.lower():
+                                        punto = float(re.sub(r"[^0-9\.\-]", "", over_under_str.replace("Under", "").strip()))
+                                        outcomes.append({"name": "Under", "price": odd_val, "point": punto})
+                                except ValueError:
+                                    continue
+                            if outcomes:
+                                markets_mapeados.append({"key": "totals", "outcomes": outcomes})
+
+                        elif any(k in bet_name for k in ["handicap", "spread", "run line", "runline", "run"]):
+                            outcomes = []
+                            for val in values:
+                                try:
+                                    price = float(val.get("odd", 0))
+                                except (TypeError, ValueError):
+                                    continue
+                                raw_name = val.get("value")
+                                team_name = _buscar_nombre_equipo(raw_name, home_team, away_team) or home_team
+                                point_raw = val.get("point") or val.get("handicap") or val.get("line")
+                                try:
+                                    point = float(point_raw) if point_raw is not None else 0.0
+                                except (TypeError, ValueError):
+                                    point = 0.0
+                                outcomes.append({"name": team_name, "price": price, "point": point})
+                            if outcomes:
+                                markets_mapeados.append({"key": "spreads", "outcomes": outcomes})
+
+                    if markets_mapeados:
+                        bms_mapeados.append({"title": b.get("name", "Bookmaker"), "markets": markets_mapeados})
+
+                if bms_mapeados:
+                    mapeo_datos.append({
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "commence_time": commence_time,
+                        "bookmakers": bms_mapeados
+                    })
+
+        return mapeo_datos
+    except Exception as e:
+        logger.error(f"Error API-Sports Odds: {e}")
+        return []
+
+def obtener_marcadores_api_sports(league_id):
+    hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
+    url = "https://v1.baseball.api-sports.io/games"
+    headers = {"x-apisports-key": BASEBALL_API_KEY}
+    params = {"league": str(league_id), "season": str(datetime.now(MX_TZ).year), "date": hoy}
+
+    try:
+        res = request_con_reintentos(url, headers, params)
+        if not res:
+            return []
+
+        datos = res.json().get("response", [])
+        mapeo_scores = []
+
+        for item in datos:
+            home_team = item.get("teams", {}).get("home", {}).get("name", "Home")
+            away_team = item.get("teams", {}).get("away", {}).get("name", "Away")
+            status = item.get("status", {}).get("short", "")
+
+            home_score = item.get("scores", {}).get("home", {}).get("total", 0)
+            away_score = item.get("scores", {}).get("away", {}).get("total", 0)
+
+            try: home_score = 0 if home_score is None else float(home_score)
+            except (TypeError, ValueError): home_score = 0
+            try: away_score = 0 if away_score is None else float(away_score)
+            except (TypeError, ValueError): away_score = 0
+
+            mapeo_scores.append({
+                "home_team": home_team,
+                "away_team": away_team,
+                "completed": status in {"FT", "AOT"},
+                "scores": [{"name": home_team, "score": str(home_score)}, {"name": away_team, "score": str(away_score)}]
+            })
+        return mapeo_scores
+    except Exception as e:
+        logger.error(f"Error API-Sports Scores: {e}")
+        return []
+
+# ==========================================
+# 8. CEREBRO INTELIGENCIA ARTIFICIAL (GEMINI)
+# ==========================================
+def _extraer_json_lista(texto):
+    if not texto: raise ValueError("Respuesta vacía de la IA")
+    txt = texto.strip().replace("`" * 3 + "json", "").replace("`" * 3, "").strip()
+    inicio, fin = txt.find("["), txt.rfind("]")
+    if inicio != -1 and fin != -1 and fin > inicio:
+        return json.loads(txt[inicio:fin + 1].strip())
+    inicio, fin = txt.find("{"), txt.rfind("}")
+    if inicio != -1 and fin != -1 and fin > inicio:
+        obj = json.loads(txt[inicio:fin + 1].strip())
+        return obj if isinstance(obj, list) else [obj]
+    raise ValueError("No se pudo extraer JSON")
+
+def _clave_unica_pick(pick):
+    return f"{str(pick.get('partido','')).strip().lower()}|{str(pick.get('pick','')).strip().lower()}|{str(pick.get('cuota',''))}"
+
+def _ranking_pre_gemini(picks):
+    return sorted(picks, key=lambda x: abs(float(x.get("cuota", 0.0) or 0.0) - 1.80))
+
+def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
+    candidatos_raw = _ranking_pre_gemini(candidatos_raw)[:50]
+    if not candidatos_raw: return []
+
+    if modo_bloque != "stake_10":
+        prompt = (
+            f"Elige los {cantidad} mejores picks únicos de hoy.\n"
+            "Asigna Stake del 1 al 8 según probabilidad. No repitas partidos.\n"
+            "Devuelve solo JSON plano, sin markdown:\n"
+            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
+        )
     else:
-        bookmakers = datos[0].get("bookmakers", [])
-        if bookmakers:
-            bets = bookmakers[0].get("bets", [])
-            print("\n📋 === MERCADOS DISPONIBLES EN LA API ===")
-            for bet in bets:
-                print(f"- ID: {bet.get('id')} | Nombre de la apuesta: '{bet.get('name')}'")
-            print("=========================================")
+        prompt = (
+            "Selecciona únicamente el pick más seguro de toda la cartelera. Asigna obligatoriamente Stake 10.\n"
+            "Devuelve solo un objeto JSON dentro de una lista, sin markdown:\n"
+            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 10, \"analisis_ia\": \"\"}]"
+        )
+
+    try:
+        response = model.generate_content(prompt + "\n\nDatos:\n" + json.dumps(candidatos_raw, ensure_ascii=False))
+        picks_seleccionados = _extraer_json_lista(getattr(response, "text", ""))
+        
+        finales = []
+        vistos = set()
+        for p in picks_seleccionados:
+            if not isinstance(p, dict): continue
+            clave = _clave_unica_pick(p)
+            if clave in vistos: continue
+            vistos.add(clave)
+            finales.append(p)
+            if len(finales) == cantidad: break
+        return finales
+    except Exception as e:
+        logger.error(f"Fallback activado por error de IA: {e}")
+        return candidatos_raw[:cantidad]
+
+# ==========================================
+# 9. PROCESAMIENTO Y ENVÍO DE BLOQUES
+# ==========================================
+def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
+    candidatos_crudos = []
+    for liga in lista_ligas:
+        if liga not in LIGAS_PERMITIDAS: continue
+        league_id = LIGAS_MAP.get(liga)
+        partidos = obtener_partidos_api_sports(league_id)
+        
+        for partido in partidos:
+            fecha_hora_str = "Horario por confirmar"
+            if partido.get("commence_time"):
+                try:
+                    fecha_hora_str = datetime.fromisoformat(partido.get("commence_time").replace("Z", "+00:00")).astimezone(MX_TZ).strftime("%I:%M %p")
+                except: pass
+
+            for bookie in partido.get("bookmakers", []):
+                for market in bookie.get("markets", []):
+                    mk = market.get("key")
+                    for o in market.get("outcomes", []):
+                        cuota = o.get("price")
+                        if isinstance(cuota, (int, float)) and CUOTA_MIN <= cuota <= CUOTA_MAX:
+                            if mk == "h2h": tp = f"Gana {o.get('name')}"
+                            elif mk == "totals": tp = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point', 0)}"
+                            elif mk == "spreads": tp = f"Hándicap {o.get('name')} {o.get('point', 0):+g}"
+                            else: continue
+
+                            candidatos_crudos.append({
+                                "deporte": mapear_icono_deporte(liga),
+                                "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
+                                "fecha_hora": fecha_hora_str,
+                                "pick": tp,
+                                "cuota": float(cuota),
+                                "bookie": bookie.get("title"),
+                                "sport_key": liga
+                            })
+
+    unicos = []
+    vistos = set()
+    for c in candidatos_crudos:
+        if _clave_unica_pick(c) not in vistos:
+            vistos.add(_clave_unica_pick(c))
+            unicos.append(c)
+    return consultar_cerebro_ia(unicos, cantidad, modo_bloque)
+
+def construir_mensaje(pick_data):
+    stk = max(1, min(int(pick_data.get("stake_num", 3)), 10))
+    return (
+        "🔥 El Boss Mexa – Pick del Día\n\n"
+        f"Deporte: {pick_data.get('deporte')}\n"
+        f"Partido: ({pick_data.get('partido')})\n"
+        f"Pick: {pick_data.get('pick')}\n"
+        f"Cuota: {float(pick_data.get('cuota', 0)):.2f}\n"
+        f"Stake: {'⭐' * stk}\n\n"
+        "📊 Análisis:\n"
+        f"{pick_data.get('analisis_ia')}\n\n"
+        "¡Vamos con todo! 💰"
+    )
+
+async def enviar_mensaje_seguro(texto):
+    try: await bot.send_message(chat_id=CHANNEL_ID, text=texto, parse_mode=None)
+    except Exception as e: logger.error(f"Error Telegram: {e}")
+
+def _filtrar_picks_nuevos(picks):
+    existentes = {_clave_unica_pick(p) for p in cargar_picks()}
+    return [p for p in picks if _clave_unica_pick(p) not in existentes]
+
+async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="normal", intro=None):
+    picks_bloque = []
+    for intento in range(3):
+        picks_bloque = _filtrar_picks_nuevos(procesar_bloque_especifico(ligas, cantidad, modo))
+        if picks_bloque: break
+        await asyncio.sleep(600)
+
+    if not picks_bloque:
+        await enviar_mensaje_seguro(f"⏳ Sistema {nombre_bloque}: Monitoreando mercado... líneas aún no abiertas.")
+        return
+
+    actuales = cargar_picks()
+    for p in picks_bloque: actuales.append(p)
+    guardar_picks(actuales)
+
+    if intro:
+        await enviar_mensaje_seguro(intro)
+        await asyncio.sleep(3)
+
+    for pick in picks_bloque:
+        await enviar_mensaje_seguro(construir_mensaje(pick))
+        await asyncio.sleep(5)
+
+# ==========================================
+# 10. EVALUACIÓN Y REPORTES DE PROFIT
+# ==========================================
+def _extraer_linea_pick(pick_str):
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*$", pick_str.strip())
+    return float(match.group(1)) if match else 0.0
+
+def evaluar_pick(pick_str, scores):
+    try:
+        s1, s2 = float(scores[0]["score"]), float(scores[1]["score"])
+        n1, n2 = scores[0]["name"].lower(), scores[1]["name"].lower()
+        p = str(pick_str or "").strip().lower()
+
+        if "gana" in p:
+            team = p.replace("gana ", "").strip()
+            winner = n1 if s1 > s2 else (n2 if s2 > s1 else None)
+            return "🟢 GANADO" if winner == team else ("⚪ PUSH" if winner is None else "🔴 PERDIDO")
+        elif "over" in p or "under" in p or "altas" in p or "bajas" in p:
+            total = s1 + s2
+            linea = _extraer_linea_pick(pick_str)
+            if "over" in p or "altas" in p:
+                return "🟢 GANADO" if total > linea else ("🔴 PERDIDO" if total < linea else "⚪ PUSH")
+            else:
+                return "🟢 GANADO" if total < linea else ("🔴 PERDIDO" if total > linea else "⚪ PUSH")
+        return "❔ RESULTADO MANUAL"
+    except: return "❔ REVISAR"
+
+async def mandar_reporte_profit():
+    picks = cargar_picks()
+    if not picks: return
+    resultados = []
+    for liga in list(set([p.get("sport_key") for p in picks if p.get("sport_key")])):
+        resultados += obtener_marcadores_api_sports(LIGAS_MAP.get(liga))
+
+    ganados, perdidos, total = 0, 0, 0
+    msg = "📊 BossOddsMX – Resumen de la Jornada 📊\n\nResultados oficiales:\n\n"
+
+    for pick in picks:
+        status, marcador = "❔ Pendiente", "Marcador no disponible ⏳"
+        for res in resultados:
+            if res.get("home_team") in pick.get("partido") and res.get("away_team") in pick.get("partido"):
+                if res.get("completed"):
+                    sc = res.get("scores")
+                    marcador = f"{sc[0]['name']} {sc[0]['score']} - {sc[1]['score']} {sc[1]['name']} 🏁"
+                    status = evaluar_pick(pick.get("pick"), sc)
+                    if "GANADO" in status: ganados += 1
+                    elif "PERDIDO" in status: perdidos += 1
+                    total += 1
+                break
+        msg += f"🔥 {pick.get('partido')}\nPick: {pick.get('pick')}\nResultado: {marcador}\nEstatus: {status}\n\n"
+
+    porcentaje = (ganados / total * 100) if total > 0 else 0.0
+    msg += f"📈 Efectividad: {porcentaje:.1f}%\n🟢 GANADOS: {ganados} | 🔴 PERDIDOS: {perdidos}\n\n¡Mañana regresamos por más! 💰"
+    await enviar_mensaje_seguro(msg)
+
+# ==========================================
+# 11. BUCLE DE TIEMPO CENTRAL (RELOJ)
+# ==========================================
+async def main_loop():
+    logger.info("Bot El Boss Mexa: Sistema Béisbol Unificado Iniciado.")
+    estado = cargar_estado()
+    
+    while True:
+        try:
+            ahora = datetime.now(MX_TZ)
+            fecha_str = ahora.strftime("%Y-%m-%d")
+
+            if estado.get("fecha") != fecha_str:
+                guardar_picks([])
+                estado["fecha"] = fecha_str
+                estado["bloques_ejecutados"] = json.loads(json.dumps(DEFAULT_ESTADO["bloques_ejecutados"]))
+                guardar_estado(estado)
+                logger.info(f"🧹 Nuevo día detectado: {fecha_str}. Estado reiniciado.")
+
+            be = estado["bloques_ejecutados"]
+
+            # 7:45 AM - Buenos Días
+            if ahora.hour == 7 and 45 <= ahora.minute <= 50 and be["buenos_dias"] != fecha_str:
+                await enviar_mensaje_seguro("¡Buenos días, Familia! ☀️ Arrancamos una nueva jornada de análisis deportivo. En breve salen las primeras jugadas del día. ¡A facturar hoy! 💸")
+                be["buenos_dias"] = fecha_str
+                guardar_estado(estado)
+
+            # 10:00 AM - MLB Mañanero
+            elif ahora.hour == 10 and 0 <= ahora.minute <= 5 and be["mlb"] != fecha_str:
+                await ejecutar_bloque_remodelado("MLB Mañanero", ["baseball_mlb"], 3)
+                be["mlb"] = fecha_str
+                guardar_estado(estado)
+
+            # 3:30 PM - LMB Tarde 
+            elif ahora.hour == 15 and 30 <= ahora.minute <= 35 and be["lmb"] != fecha_str:
+                await ejecutar_bloque_remodelado("LMB Tarde", ["baseball_lmb_real"], 3, intro="Familia, ya están abiertas las líneas. Aquí tienen los picks de la Liga Mexicana de Béisbol. ⚾️🔥")
+                be["lmb"] = fecha_str
+                guardar_estado(estado)
+
+            # 4:00 PM - MÁXIMO VIP (STAKE 10) - Analiza todos los mercados de ambas ligas
+            elif ahora.hour == 16 and 0 <= ahora.minute <= 5 and be["stake10"] != fecha_str:
+                await ejecutar_bloque_remodelado("MÁXIMO VIP", LIGAS_PERMITIDAS, 1, modo="stake_10", intro="🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada. Vamos pesados aquí:")
+                be["stake10"] = fecha_str
+                guardar_estado(estado)
+
+            # 11:45 PM - Reporte Profit
+            elif ahora.hour == 23 and 45 <= ahora.minute <= 50 and be["reporte"] != fecha_str:
+                await mandar_reporte_profit()
+                be["reporte"] = fecha_str
+                guardar_estado(estado)
+
+            # 11:58 PM - Buenas Noches
+            elif ahora.hour == 23 and 58 <= ahora.minute <= 59 and be["buenas_noches"] != fecha_str:
+                await enviar_mensaje_seguro("🌙 ¡Buenas noches, equipo! 🌙\n\nFinalizan las actividades por hoy. ¡A descansar! 💤")
+                be["buenas_noches"] = fecha_str
+                guardar_estado(estado)
+
+            await asyncio.sleep(30)
+        except Exception as e:
+            logger.error(f"Error en bucle del reloj: {e}")
+            await asyncio.sleep(30)
+
+if __name__ == "__main__":
+    asyncio.run(main_loop())
