@@ -184,8 +184,8 @@ def mapear_icono_deporte(sport_key):
 # ==========================================
 def obtener_partidos_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
-    url_games = "[https://v1.baseball.api-sports.io/games](https://v1.baseball.api-sports.io/games)"
-    url_odds = "[https://v1.baseball.api-sports.io/odds](https://v1.baseball.api-sports.io/odds)"
+    url_games = "https://v1.baseball.api-sports.io/games"
+    url_odds = "https://v1.baseball.api-sports.io/odds"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
 
     params_games = {
@@ -330,7 +330,7 @@ def obtener_partidos_api_sports(league_id):
 
 def obtener_marcadores_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
-    url = "[https://v1.baseball.api-sports.io/games](https://v1.baseball.api-sports.io/games)"
+    url = "https://v1.baseball.api-sports.io/games"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
     params = {"league": str(league_id), "season": str(datetime.now(MX_TZ).year), "date": hoy}
 
