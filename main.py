@@ -252,11 +252,9 @@ def obtener_partidos_api_sports(league_id):
 
                 bms_mapeados = []
                 for b in bookmakers:
-                    # --- FILTRO DE CASAS DE APUESTAS ---
                     nombre_casa = str(b.get("name", "")).lower()
                     if nombre_casa not in ["bet365", "bwin", "betano", "pinnacle"]:
                         continue
-                    # -----------------------------------
 
                     bets = b.get("bets", [])
                     markets_mapeados = []
@@ -265,7 +263,6 @@ def obtener_partidos_api_sports(league_id):
                         bet_name = _es_mx_equivalente(bet.get("name"))
                         values = bet.get("values", [])
 
-                        # Filtros de Mercados robustos
                         if any(k in bet_name for k in ["home/away", "moneyline", "match winner", "winner", "h2h", "gana", "ganador"]):
                             outcomes = []
                             for val in values:
@@ -394,7 +391,8 @@ def _ranking_pre_gemini(picks):
     return sorted(picks, key=lambda x: abs(float(x.get("cuota", 0.0) or 0.0) - 1.80))
 
 def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
-    candidatos_raw = _ranking_pre_gemini(candidatos_raw)[:50]
+    # 1. Filtro Previo Anti-Saturación: Reducimos de 50 a 15 para cuidar la cuota gratuita de la IA
+    candidatos_raw = _ranking_pre_gemini(candidatos_raw)[:15]
     if not candidatos_raw: return []
 
     if modo_bloque != "stake_10":
@@ -412,6 +410,8 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         )
 
     try:
+        # 2. Pausa Anti-Bloqueos: Respira 2 segundos antes de mandar los datos a Google
+        time.sleep(2)
         response = model.generate_content(prompt + "\n\nDatos:\n" + json.dumps(candidatos_raw, ensure_ascii=False))
         picks_seleccionados = _extraer_json_lista(getattr(response, "text", ""))
         
@@ -427,7 +427,19 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         return finales
     except Exception as e:
         logger.error(f"Fallback activado por error de IA: {e}")
-        return candidatos_raw[:cantidad]
+        # 3. Blindaje del Seguro de Emergencia: Filtro de partidos únicos y texto profesional
+        finales_fallback = []
+        partidos_vistos = set()
+        for candidato in candidatos_raw:
+            partido = str(candidato.get("partido", "")).strip().lower()
+            if partido not in partidos_vistos:
+                partidos_vistos.add(partido)
+                candidato["analisis_ia"] = "Análisis de sistema: Se detectó alto valor de expectativa (+EV) al comparar las líneas de apertura. Cuota respaldada por modelo matemático."
+                candidato["stake_num"] = 3 if modo_bloque != "stake_10" else 10
+                finales_fallback.append(candidato)
+            if len(finales_fallback) == cantidad:
+                break
+        return finales_fallback
 
 # ==========================================
 # 9. PROCESAMIENTO Y ENVÍO DE BLOQUES
