@@ -231,7 +231,6 @@ def obtener_partidos_api_sports(league_id):
 
         mapeo_datos = []
         for fixture in fixtures:
-            # EL ÚNICO AJUSTE ESTÁ EN LA LÍNEA DE ABAJO: "game" en lugar de "fixture"
             res_odds = request_con_reintentos(url_odds, headers, {"game": fixture["fixture_id"]})
             if not res_odds:
                 continue
@@ -253,6 +252,12 @@ def obtener_partidos_api_sports(league_id):
 
                 bms_mapeados = []
                 for b in bookmakers:
+                    # --- FILTRO DE CASAS DE APUESTAS ---
+                    nombre_casa = str(b.get("name", "")).lower()
+                    if nombre_casa not in ["bet365", "bwin", "betano", "pinnacle"]:
+                        continue
+                    # -----------------------------------
+
                     bets = b.get("bets", [])
                     markets_mapeados = []
 
