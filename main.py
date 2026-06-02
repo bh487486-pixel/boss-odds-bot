@@ -231,7 +231,8 @@ def obtener_partidos_api_sports(league_id):
 
         mapeo_datos = []
         for fixture in fixtures:
-            res_odds = request_con_reintentos(url_odds, headers, {"fixture": fixture["fixture_id"]})
+            # EL ÚNICO AJUSTE ESTÁ EN LA LÍNEA DE ABAJO: "game" en lugar de "fixture"
+            res_odds = request_con_reintentos(url_odds, headers, {"game": fixture["fixture_id"]})
             if not res_odds:
                 continue
 
