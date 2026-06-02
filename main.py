@@ -621,14 +621,6 @@ async def main_loop():
     logger.info("Bot El Boss Mexa: Sistema Béisbol Unificado Iniciado.")
     estado = cargar_estado()
     
-    # --- EJECUCIÓN FORZADA INMEDIATA (Solo corre una vez al hacer deploy) ---
-    if estado.get("forzado_lmb") != True:
-        logger.info("⚡ Ejecutando bloque forzado LMB a petición...")
-        await ejecutar_bloque_remodelado("LMB Forzado", ["baseball_lmb_real"], 3, intro="🚨 [ALERTA VIP] Picks adicionales de la Liga Mexicana de Béisbol (Juegos diferentes garantizados). ⚾️🔥")
-        estado["forzado_lmb"] = True
-        guardar_estado(estado)
-    # -----------------------------------------------------------------------
-    
     while True:
         try:
             ahora = datetime.now(MX_TZ)
@@ -643,8 +635,8 @@ async def main_loop():
 
             be = estado["bloques_ejecutados"]
 
-            # 7:45 AM - Buenos Días
-            if ahora.hour == 7 and 45 <= ahora.minute <= 50 and be["buenos_dias"] != fecha_str:
+            # 8:30 AM - Buenos Días
+            if ahora.hour == 8 and 30 <= ahora.minute <= 35 and be["buenos_dias"] != fecha_str:
                 await enviar_mensaje_seguro("¡Buenos días, Familia! ☀️ Arrancamos una nueva jornada de análisis deportivo. En breve salen las primeras jugadas del día. ¡A facturar hoy! 💸")
                 be["buenos_dias"] = fecha_str
                 guardar_estado(estado)
@@ -655,14 +647,14 @@ async def main_loop():
                 be["mlb"] = fecha_str
                 guardar_estado(estado)
 
-            # 3:30 PM - LMB Tarde 
-            elif ahora.hour == 15 and 30 <= ahora.minute <= 35 and be["lmb"] != fecha_str:
+            # 4:00 PM - LMB Tarde 
+            elif ahora.hour == 16 and 0 <= ahora.minute <= 5 and be["lmb"] != fecha_str:
                 await ejecutar_bloque_remodelado("LMB Tarde", ["baseball_lmb_real"], 3, intro="Familia, ya están abiertas las líneas. Aquí tienen los picks de la Liga Mexicana de Béisbol. ⚾️🔥")
                 be["lmb"] = fecha_str
                 guardar_estado(estado)
 
-            # 4:00 PM - MÁXIMO VIP (STAKE 10) - Analiza todos los mercados de ambas ligas
-            elif ahora.hour == 16 and 0 <= ahora.minute <= 5 and be["stake10"] != fecha_str:
+            # 4:30 PM - MÁXIMO VIP (STAKE 10) - Analiza todos los mercados de ambas ligas
+            elif ahora.hour == 16 and 30 <= ahora.minute <= 35 and be["stake10"] != fecha_str:
                 await ejecutar_bloque_remodelado("MÁXIMO VIP", LIGAS_PERMITIDAS, 1, modo="stake_10", intro="🚨 STAKE 10 DETECTADO 🚨\n\nInteligencia algorítmica aplicada. Vamos pesados aquí:")
                 be["stake10"] = fecha_str
                 guardar_estado(estado)
