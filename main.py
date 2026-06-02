@@ -65,6 +65,7 @@ LIGAS_MAP = {
 
 DEFAULT_ESTADO = {
     "fecha": None,
+    "forzado_lmb": False,
     "bloques_ejecutados": {
         "buenos_dias": None,
         "mlb": None,
@@ -115,6 +116,7 @@ def cargar_estado():
     for k, v in DEFAULT_ESTADO["bloques_ejecutados"].items():
         data["bloques_ejecutados"].setdefault(k, v)
     data.setdefault("fecha", None)
+    data.setdefault("forzado_lmb", False)
     return data
 
 def guardar_estado(estado):
@@ -388,10 +390,22 @@ def _clave_unica_pick(pick):
     return f"{str(pick.get('partido','')).strip().lower()}|{str(pick.get('pick','')).strip().lower()}|{str(pick.get('cuota',''))}"
 
 def _ranking_pre_gemini(picks):
-    return sorted(picks, key=lambda x: abs(float(x.get("cuota", 0.0) or 0.0) - 1.80))
+    # Aseguramos de mandar partidos variados a la IA desde el principio
+    ordenados = sorted(picks, key=lambda x: abs(float(x.get("cuota", 0.0) or 0.0) - 1.80))
+    diversos = []
+    vistos = set()
+    for p in ordenados:
+        partido = str(p.get("partido", "")).strip().lower()
+        if partido not in vistos:
+            vistos.add(partido)
+            diversos.append(p)
+    # Si faltan picks para llegar al límite, rellenamos
+    for p in ordenados:
+        if p not in diversos:
+            diversos.append(p)
+    return diversos
 
 def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
-    # 1. Filtro Previo Anti-Saturación: Reducimos de 50 a 15 para cuidar la cuota gratuita de la IA
     candidatos_raw = _ranking_pre_gemini(candidatos_raw)[:15]
     if not candidatos_raw: return []
 
@@ -410,24 +424,37 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         )
 
     try:
-        # 2. Pausa Anti-Bloqueos: Respira 2 segundos antes de mandar los datos a Google
         time.sleep(2)
         response = model.generate_content(prompt + "\n\nDatos:\n" + json.dumps(candidatos_raw, ensure_ascii=False))
         picks_seleccionados = _extraer_json_lista(getattr(response, "text", ""))
         
         finales = []
-        vistos = set()
+        partidos_vistos = set()
+        
+        # Filtro estricto: la IA no puede meter dos picks del mismo partido
         for p in picks_seleccionados:
             if not isinstance(p, dict): continue
-            clave = _clave_unica_pick(p)
-            if clave in vistos: continue
-            vistos.add(clave)
+            partido = str(p.get("partido", "")).strip().lower()
+            if partido in partidos_vistos: continue
+            partidos_vistos.add(partido)
             finales.append(p)
             if len(finales) == cantidad: break
+            
+        # Candado: Si la IA mandó menos de los solicitados por repetir, el bot rellena automáticamente
+        if len(finales) < cantidad:
+            for c in candidatos_raw:
+                partido = str(c.get("partido", "")).strip().lower()
+                if partido not in partidos_vistos:
+                    partidos_vistos.add(partido)
+                    c_copy = c.copy()
+                    c_copy["analisis_ia"] = "Análisis de sistema: Cuota seleccionada por algoritmo de valor (+EV) para balancear la jornada."
+                    c_copy["stake_num"] = 3 if modo_bloque != "stake_10" else 10
+                    finales.append(c_copy)
+                if len(finales) == cantidad: break
         return finales
+
     except Exception as e:
         logger.error(f"Fallback activado por error de IA: {e}")
-        # 3. Blindaje del Seguro de Emergencia: Filtro de partidos únicos y texto profesional
         finales_fallback = []
         partidos_vistos = set()
         for candidato in candidatos_raw:
@@ -490,7 +517,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
 def construir_mensaje(pick_data):
     stk = max(1, min(int(pick_data.get("stake_num", 3)), 10))
     return (
-        "🔥 El Boss Mexa – Pick del Día\n\n"
+        "🔥 el Boss mexa – Pick del Día\n\n"
         f"Deporte: {pick_data.get('deporte')}\n"
         f"Partido: ({pick_data.get('partido')})\n"
         f"Pick: {pick_data.get('pick')}\n"
@@ -593,6 +620,14 @@ async def mandar_reporte_profit():
 async def main_loop():
     logger.info("Bot El Boss Mexa: Sistema Béisbol Unificado Iniciado.")
     estado = cargar_estado()
+    
+    # --- EJECUCIÓN FORZADA INMEDIATA (Solo corre una vez al hacer deploy) ---
+    if estado.get("forzado_lmb") != True:
+        logger.info("⚡ Ejecutando bloque forzado LMB a petición...")
+        await ejecutar_bloque_remodelado("LMB Forzado", ["baseball_lmb_real"], 3, intro="🚨 [ALERTA VIP] Picks adicionales de la Liga Mexicana de Béisbol (Juegos diferentes garantizados). ⚾️🔥")
+        estado["forzado_lmb"] = True
+        guardar_estado(estado)
+    # -----------------------------------------------------------------------
     
     while True:
         try:
