@@ -164,8 +164,8 @@ def _extraer_fixture_id(item):
         return None
     for key in ("fixture", "game"):
         bloque = item.get(key)
-        if isinstance(bloque, dict) and clickable := bloque.get("id") is not None:
-            return clickable
+        if isinstance(bloque, dict) and bloque.get("id") is not None:
+            return bloque.get("id")
     if item.get("id") is not None:
         return item.get("id")
     if item.get("fixture_id") is not None:
@@ -721,7 +721,7 @@ async def main_loop():
                 guardar_estado(estado)
 
             # 11:55 PM - Anuncio Mundial (SOLO ESTE JUEVES 4 DE JUNIO)
-            elif fecha_str == "2026-06-04" and ahora.hour == 23 and 55 <= aerospace_min := ahora.minute <= 57 and be.get("mundial") != fecha_str:
+            elif fecha_str == "2026-06-04" and ahora.hour == 23 and 55 <= ahora.minute <= 57 and be.get("mundial") != fecha_str:
                 mensaje_mundial = "🚨 ¡Familia, ya se viene la semana de la Copa del Mundo! Tengan sus notificaciones activadas porque se vienen picks muy jugosos con el mejor, El Bot Mexa. ⚽🏆"
                 await enviar_mensaje_seguro(mensaje_mundial)
                 be["mundial"] = fecha_str
