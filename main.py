@@ -65,7 +65,6 @@ LIGAS_MAP = {
 
 DEFAULT_ESTADO = {
     "fecha": None,
-    "forzado_lmb": False,
     "bloques_ejecutados": {
         "buenos_dias": None,
         "mlb": None,
@@ -73,6 +72,7 @@ DEFAULT_ESTADO = {
         "stake10": None,
         "reporte": None,
         "buenas_noches": None,
+        "mundial": None
     }
 }
 
@@ -116,7 +116,6 @@ def cargar_estado():
     for k, v in DEFAULT_ESTADO["bloques_ejecutados"].items():
         data["bloques_ejecutados"].setdefault(k, v)
     data.setdefault("fecha", None)
-    data.setdefault("forzado_lmb", False)
     return data
 
 def guardar_estado(estado):
@@ -255,7 +254,8 @@ def obtener_partidos_api_sports(league_id):
                 bms_mapeados = []
                 for b in bookmakers:
                     nombre_casa = str(b.get("name", "")).lower()
-                    if nombre_casa not in ["bet365", "bwin", "betano", "pinnacle"]:
+                    # --- FILTRO CON 1XBET (CALIENTE RETIRADO) ---
+                    if nombre_casa not in ["bet365", "bwin", "betano", "pinnacle", "1xbet"]:
                         continue
 
                     bets = b.get("bets", [])
@@ -390,7 +390,6 @@ def _clave_unica_pick(pick):
     return f"{str(pick.get('partido','')).strip().lower()}|{str(pick.get('pick','')).strip().lower()}|{str(pick.get('cuota',''))}"
 
 def _ranking_pre_gemini(picks):
-    # Aseguramos de mandar partidos variados a la IA desde el principio
     ordenados = sorted(picks, key=lambda x: abs(float(x.get("cuota", 0.0) or 0.0) - 1.80))
     diversos = []
     vistos = set()
@@ -399,7 +398,6 @@ def _ranking_pre_gemini(picks):
         if partido not in vistos:
             vistos.add(partido)
             diversos.append(p)
-    # Si faltan picks para llegar al límite, rellenamos
     for p in ordenados:
         if p not in diversos:
             diversos.append(p)
@@ -431,7 +429,6 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         finales = []
         partidos_vistos = set()
         
-        # Filtro estricto: la IA no puede meter dos picks del mismo partido
         for p in picks_seleccionados:
             if not isinstance(p, dict): continue
             partido = str(p.get("partido", "")).strip().lower()
@@ -440,7 +437,6 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
             finales.append(p)
             if len(finales) == cantidad: break
             
-        # Candado: Si la IA mandó menos de los solicitados por repetir, el bot rellena automáticamente
         if len(finales) < cantidad:
             for c in candidatos_raw:
                 partido = str(c.get("partido", "")).strip().lower()
@@ -517,7 +513,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
 def construir_mensaje(pick_data):
     stk = max(1, min(int(pick_data.get("stake_num", 3)), 10))
     return (
-        "🔥 el Boss mexa – Pick del Día\n\n"
+        "🔥 El Bot Mexa – Pick del Día\n\n"
         f"Deporte: {pick_data.get('deporte')}\n"
         f"Partido: ({pick_data.get('partido')})\n"
         f"Pick: {pick_data.get('pick')}\n"
@@ -594,7 +590,7 @@ async def mandar_reporte_profit():
         resultados += obtener_marcadores_api_sports(LIGAS_MAP.get(liga))
 
     ganados, perdidos, total = 0, 0, 0
-    msg = "📊 BossOddsMX – Resumen de la Jornada 📊\n\nResultados oficiales:\n\n"
+    msg = "📊 El Bot Mexa – Resumen de la Jornada 📊\n\nResultados oficiales:\n\n"
 
     for pick in picks:
         status, marcador = "❔ Pendiente", "Marcador no disponible ⏳"
@@ -618,7 +614,7 @@ async def mandar_reporte_profit():
 # 11. BUCLE DE TIEMPO CENTRAL (RELOJ)
 # ==========================================
 async def main_loop():
-    logger.info("Bot El Boss Mexa: Sistema Béisbol Unificado Iniciado.")
+    logger.info("Bot El Bot Mexa: Sistema Béisbol Unificado Iniciado.")
     estado = cargar_estado()
     
     while True:
@@ -663,6 +659,13 @@ async def main_loop():
             elif ahora.hour == 23 and 45 <= ahora.minute <= 50 and be["reporte"] != fecha_str:
                 await mandar_reporte_profit()
                 be["reporte"] = fecha_str
+                guardar_estado(estado)
+
+            # 11:55 PM - Anuncio Mundial (SOLO ESTE JUEVES 4 DE JUNIO)
+            elif fecha_str == "2026-06-04" and ahora.hour == 23 and 55 <= ahora.minute <= 57 and be.get("mundial") != fecha_str:
+                mensaje_mundial = "🚨 ¡Familia, ya se viene la semana de la Copa del Mundo! Tengan sus notificaciones activadas porque se vienen picks muy jugosos con el mejor, El Bot Mexa. ⚽🏆"
+                await enviar_mensaje_seguro(mensaje_mundial)
+                be["mundial"] = fecha_str
                 guardar_estado(estado)
 
             # 11:58 PM - Buenas Noches
