@@ -164,8 +164,8 @@ def _extraer_fixture_id(item):
         return None
     for key in ("fixture", "game"):
         bloque = item.get(key)
-        if isinstance(bloque, dict) and bloque.get("id") is not None:
-            return bloque.get("id")
+        if isinstance(bloque, dict) and clickable := bloque.get("id") is not None:
+            return clickable
     if item.get("id") is not None:
         return item.get("id")
     if item.get("fixture_id") is not None:
@@ -181,8 +181,46 @@ def mapear_icono_deporte(sport_key):
     return "🏅 Deporte"
 
 # ==========================================
-# 7. EXTRACCIÓN DE DATOS DE API-SPORTS
+# 7. EXTRACCIÓN DE DATOS Y ESTADÍSTICAS EN VIVO
 # ==========================================
+def obtener_estadisticas_equipo(league_id, team_id):
+    """Descarga la radiografía estadística acumulada de la temporada para un equipo."""
+    url = "https://v1.baseball.api-sports.io/teams/statistics"
+    headers = {"x-apisports-key": BASEBALL_API_KEY}
+    params = {
+        "league": str(league_id),
+        "season": str(datetime.now(MX_TZ).year),
+        "team": str(team_id)
+    }
+    
+    try:
+        res = request_con_reintentos(url, headers, params)
+        if not res:
+            return {}
+        
+        datos = res.json().get("response", {})
+        if not datos:
+            return {}
+            
+        juegos_totales = datos.get("games", {}).get("played", {}).get("all", 0)
+        if juegos_totales == 0:
+            return {}
+            
+        # Extracción segura de carreras anotadas (Ofensiva) y permitidas (Defensiva)
+        carreras = datos.get("runs", {})
+        return {
+            "juegos_disputados": juegos_totales,
+            "goles_favor_total": carreras.get("for", {}).get("total", {}).get("all", 0),
+            "goles_contra_total": carreras.get("against", {}).get("total", {}).get("all", 0),
+            "promedio_favor_general": carreras.get("for", {}).get("average", {}).get("all", 0),
+            "promedio_contra_general": carreras.get("against", {}).get("average", {}).get("all", 0),
+            "promedio_favor_casa": carreras.get("for", {}).get("average", {}).get("home", 0),
+            "promedio_contra_visita": carreras.get("against", {}).get("average", {}).get("away", 0)
+        }
+    except Exception as e:
+        logger.error(f"Error al obtener estadísticas del equipo {team_id}: {e}")
+        return {}
+
 def obtener_partidos_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
     url_games = "https://v1.baseball.api-sports.io/games"
@@ -213,14 +251,18 @@ def obtener_partidos_api_sports(league_id):
                 continue
 
             teams = game.get("teams", {})
+            home_id = teams.get("home", {}).get("id")
             home_team = teams.get("home", {}).get("name", "Home")
+            away_id = teams.get("away", {}).get("id")
             away_team = teams.get("away", {}).get("name", "Away")
             commence_time = game.get("date", "") or item.get("date", "")
 
-            if fixture_id is not None:
+            if fixture_id is not None and home_id and away_id:
                 fixtures.append({
                     "fixture_id": fixture_id,
+                    "home_id": home_id,
                     "home_team": home_team,
+                    "away_id": away_id,
                     "away_team": away_team,
                     "commence_time": commence_time
                 })
@@ -240,6 +282,10 @@ def obtener_partidos_api_sports(league_id):
             if not datos_odds:
                 continue
 
+            # Traemos la radiografía estadística real de los dos equipos
+            stats_home = obtener_estadisticas_equipo(league_id, fixture["home_id"])
+            stats_away = obtener_estadisticas_equipo(league_id, fixture["away_id"])
+
             for item in datos_odds:
                 game = item.get("game") or item.get("fixture") or {}
                 if not isinstance(game, dict):
@@ -254,7 +300,6 @@ def obtener_partidos_api_sports(league_id):
                 bms_mapeados = []
                 for b in bookmakers:
                     nombre_casa = str(b.get("name", "")).lower()
-                    # --- FILTRO CON 1XBET (CALIENTE RETIRADO) ---
                     if nombre_casa not in ["bet365", "bwin", "betano", "pinnacle", "1xbet"]:
                         continue
 
@@ -325,7 +370,9 @@ def obtener_partidos_api_sports(league_id):
                         "home_team": home_team,
                         "away_team": away_team,
                         "commence_time": commence_time,
-                        "bookmakers": bms_mapeados
+                        "bookmakers": bms_mapeados,
+                        "stats_home_team": stats_home,
+                        "stats_away_team": stats_away
                     })
 
         return mapeo_datos
@@ -407,23 +454,32 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     candidatos_raw = _ranking_pre_gemini(candidatos_raw)[:15]
     if not candidatos_raw: return []
 
+    # Prompt reestructurado: Exige de forma matemática estricta validar los promedios inyectados
+    base_instruccion = (
+        "Eres un analista de apuestas profesional (+EV). Tienes datos estadísticos adjuntos de la temporada por equipo.\n"
+        "Compara de forma estricta las líneas del casino con los promedios de carreras anotadas/permitidas de cada rival.\n"
+        "REGLA CRÍTICA: Prohibido por completo sugerir picks contradictorios (por ejemplo, mandar Altas y Bajas para el mismo juego).\n"
+    )
+
     if modo_bloque != "stake_10":
         prompt = (
+            base_instruccion +
             f"Elige los {cantidad} mejores picks únicos de hoy.\n"
-            "Asigna Stake del 1 al 8 según probabilidad. No repitas partidos.\n"
+            "Asigna Stake del 1 al 8 según probabilidad estadística real. No repitas partidos.\n"
             "Devuelve solo JSON plano, sin markdown:\n"
             "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
         )
     else:
         prompt = (
-            "Selecciona únicamente el pick más seguro de toda la cartelera. Asigna obligatoriamente Stake 10.\n"
+            base_instruccion +
+            "Selecciona únicamente la jugada con mayor ventaja matemática sobre la casa de apuestas. Asigna Stake 10.\n"
             "Devuelve solo un objeto JSON dentro de una lista, sin markdown:\n"
             "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 10, \"analisis_ia\": \"\"}]"
         )
 
     try:
         time.sleep(2)
-        response = model.generate_content(prompt + "\n\nDatos:\n" + json.dumps(candidatos_raw, ensure_ascii=False))
+        response = model.generate_content(prompt + "\n\nDatos del Mercado y Estadísticas Reales:\n" + json.dumps(candidatos_raw, ensure_ascii=False))
         picks_seleccionados = _extraer_json_lista(getattr(response, "text", ""))
         
         finales = []
@@ -492,6 +548,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                             elif mk == "spreads": tp = f"Hándicap {o.get('name')} {o.get('point', 0):+g}"
                             else: continue
 
+                            # Empaquetamos momios junto con la radiografía de estadísticas en vivo
                             candidatos_crudos.append({
                                 "deporte": mapear_icono_deporte(liga),
                                 "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
@@ -499,7 +556,9 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                                 "pick": tp,
                                 "cuota": float(cuota),
                                 "bookie": bookie.get("title"),
-                                "sport_key": liga
+                                "sport_key": liga,
+                                "estadisticas_local": partido.get("stats_home_team", {}),
+                                "estadisticas_visitante": partido.get("stats_away_team", {})
                             })
 
     unicos = []
@@ -662,7 +721,7 @@ async def main_loop():
                 guardar_estado(estado)
 
             # 11:55 PM - Anuncio Mundial (SOLO ESTE JUEVES 4 DE JUNIO)
-            elif fecha_str == "2026-06-04" and ahora.hour == 23 and 55 <= ahora.minute <= 57 and be.get("mundial") != fecha_str:
+            elif fecha_str == "2026-06-04" and ahora.hour == 23 and 55 <= aerospace_min := ahora.minute <= 57 and be.get("mundial") != fecha_str:
                 mensaje_mundial = "🚨 ¡Familia, ya se viene la semana de la Copa del Mundo! Tengan sus notificaciones activadas porque se vienen picks muy jugosos con el mejor, El Bot Mexa. ⚽🏆"
                 await enviar_mensaje_seguro(mensaje_mundial)
                 be["mundial"] = fecha_str
