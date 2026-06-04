@@ -206,16 +206,21 @@ def obtener_estadisticas_equipo(league_id, team_id):
         if juegos_totales == 0:
             return {}
             
-        # Extracción segura de carreras anotadas (Ofensiva) y permitidas (Defensiva)
-        carreras = datos.get("runs", {})
+        # AJUSTE: Mapeo correcto de 'points' y conversión de comillas a decimales
+        carreras = datos.get("points", {})
+        
+        def _f(val):
+            try: return float(str(val or 0.0).strip())
+            except: return 0.0
+
         return {
             "juegos_disputados": juegos_totales,
-            "goles_favor_total": carreras.get("for", {}).get("total", {}).get("all", 0),
-            "goles_contra_total": carreras.get("against", {}).get("total", {}).get("all", 0),
-            "promedio_favor_general": carreras.get("for", {}).get("average", {}).get("all", 0),
-            "promedio_contra_general": carreras.get("against", {}).get("average", {}).get("all", 0),
-            "promedio_favor_casa": carreras.get("for", {}).get("average", {}).get("home", 0),
-            "promedio_contra_visita": carreras.get("against", {}).get("average", {}).get("away", 0)
+            "carreras_favor_total": _f(carreras.get("for", {}).get("total", {}).get("all", 0)),
+            "carreras_contra_total": _f(carreras.get("against", {}).get("total", {}).get("all", 0)),
+            "promedio_favor_general": _f(carreras.get("for", {}).get("average", {}).get("all", 0)),
+            "promedio_contra_general": _f(carreras.get("against", {}).get("average", {}).get("all", 0)),
+            "promedio_favor_casa": _f(carreras.get("for", {}).get("average", {}).get("home", 0)),
+            "promedio_contra_visita": _f(carreras.get("against", {}).get("average", {}).get("away", 0))
         }
     except Exception as e:
         logger.error(f"Error al obtener estadísticas del equipo {team_id}: {e}")
@@ -240,7 +245,7 @@ def obtener_partidos_api_sports(league_id):
             return []
 
         datos_games = res_games.json().get("response", [])
-        logger.info(f"📦 API-Sports Games liga {league_id}: {len(datos_games)} registros recibidos.")
+        logger.info(f"📦 API-Sports Games liga {league_id}: {len(datos_games)} registros received.")
 
         fixtures = []
         for item in datos_games:
@@ -282,7 +287,6 @@ def obtener_partidos_api_sports(league_id):
             if not datos_odds:
                 continue
 
-            # Traemos la radiografía estadística real de los dos equipos
             stats_home = obtener_estadisticas_equipo(league_id, fixture["home_id"])
             stats_away = obtener_estadisticas_equipo(league_id, fixture["away_id"])
 
@@ -399,8 +403,9 @@ def obtener_marcadores_api_sports(league_id):
             away_team = item.get("teams", {}).get("away", {}).get("name", "Away")
             status = item.get("status", {}).get("short", "")
 
-            home_score = item.get("scores", {}).get("home", {}).get("total", 0)
-            away_score = item.get("scores", {}).get("away", {}).get("total", 0)
+            # --- AJUSTE CRÍTICO: EXTRACCIÓN DE SCORE DE BÉISBOL DESDE LLAVE 'CURRENT' ---
+            home_score = item.get("scores", {}).get("home", {}).get("current", 0)
+            away_score = item.get("scores", {}).get("away", {}).get("current", 0)
 
             try: home_score = 0 if home_score is None else float(home_score)
             except (TypeError, ValueError): home_score = 0
@@ -410,7 +415,7 @@ def obtener_marcadores_api_sports(league_id):
             mapeo_scores.append({
                 "home_team": home_team,
                 "away_team": away_team,
-                "completed": status in {"FT", "AOT"},
+                "completed": status in ["FT", "AOT"],
                 "scores": [{"name": home_team, "score": str(home_score)}, {"name": away_team, "score": str(away_score)}]
             })
         return mapeo_scores
@@ -454,7 +459,6 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     candidatos_raw = _ranking_pre_gemini(candidatos_raw)[:15]
     if not candidatos_raw: return []
 
-    # Prompt reestructurado: Exige de forma matemática estricta validar los promedios inyectados
     base_instruccion = (
         "Eres un analista de apuestas profesional (+EV). Tienes datos estadísticos adjuntos de la temporada por equipo.\n"
         "Compara de forma estricta las líneas del casino con los promedios de carreras anotadas/permitidas de cada rival.\n"
@@ -548,7 +552,6 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                             elif mk == "spreads": tp = f"Hándicap {o.get('name')} {o.get('point', 0):+g}"
                             else: continue
 
-                            # Empaquetamos momios junto con la radiografía de estadísticas en vivo
                             candidatos_crudos.append({
                                 "deporte": mapear_icono_deporte(liga),
                                 "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
@@ -574,7 +577,7 @@ def construir_mensaje(pick_data):
     return (
         "🔥 El Bot Mexa – Pick del Día\n\n"
         f"Deporte: {pick_data.get('deporte')}\n"
-        f"Partido: ({pick_data.get('partido')})\n"
+        f"Partido: {pick_data.get('partido')}\n"
         f"Pick: {pick_data.get('pick')}\n"
         f"Cuota: {float(pick_data.get('cuota', 0)):.2f}\n"
         f"Stake: {'⭐' * stk}\n\n"
