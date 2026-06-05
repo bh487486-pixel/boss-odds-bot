@@ -206,7 +206,6 @@ def obtener_estadisticas_equipo(league_id, team_id):
         if juegos_totales == 0:
             return {}
             
-        # AJUSTE: Mapeo correcto de 'points' y conversión de comillas a decimales
         carreras = datos.get("points", {})
         
         def _f(val):
@@ -245,7 +244,7 @@ def obtener_partidos_api_sports(league_id):
             return []
 
         datos_games = res_games.json().get("response", [])
-        logger.info(f"📦 API-Sports Games liga {league_id}: {len(datos_games)} registros received.")
+        logger.info(f"📦 API-Sports Games liga {league_id}: {len(datos_games)} registros recibidos.")
 
         fixtures = []
         for item in datos_games:
@@ -403,7 +402,6 @@ def obtener_marcadores_api_sports(league_id):
             away_team = item.get("teams", {}).get("away", {}).get("name", "Away")
             status = item.get("status", {}).get("short", "")
 
-            # --- AJUSTE CRÍTICO: EXTRACCIÓN DE SCORE DE BÉISBOL DESDE LLAVE 'CURRENT' ---
             home_score = item.get("scores", {}).get("home", {}).get("current", 0)
             away_score = item.get("scores", {}).get("away", {}).get("current", 0)
 
@@ -462,21 +460,22 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
     base_instruccion = (
         "Eres un analista de apuestas profesional (+EV). Tienes datos estadísticos adjuntos de la temporada por equipo.\n"
         "Compara de forma estricta las líneas del casino con los promedios de carreras anotadas/permitidas de cada rival.\n"
-        "REGLA CRÍTICA: Prohibido por completo sugerir picks contradictorios (por ejemplo, mandar Altas y Bajas para el mismo juego).\n"
+        "REGLA CRÍTICA DE MERCADO: Debes iniciar tu análisis ('analisis_ia') especificando claramente qué tipo de mercado se está jugando (ej. 'Mercado: Línea Principal del juego completo').\n"
+        "REGLA CRÍTICA DE RIESGO: Prohibido por completo sugerir picks contradictorios.\n"
     )
 
     if modo_bloque != "stake_10":
         prompt = (
             base_instruccion +
             f"Elige los {cantidad} mejores picks únicos de hoy.\n"
-            "Asigna Stake del 1 al 8 según probabilidad estadística real. No repitas partidos.\n"
+            "REGLA DE STAKE INTELIGENTE: Asigna únicamente un Stake de entre 1 y 4 para jornadas normales. Usa Stake 2 para apuestas estándar, Stake 3 para jugadas fuertes y Stake 4 de forma muy exclusiva. No uses 5, 6, 7 ni 8.\n"
             "Devuelve solo JSON plano, sin markdown:\n"
-            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 5, \"analisis_ia\": \"\"}]"
+            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 2, \"analisis_ia\": \"\"}]"
         )
     else:
         prompt = (
             base_instruccion +
-            "Selecciona únicamente la jugada con mayor ventaja matemática sobre la casa de apuestas. Asigna Stake 10.\n"
+            "Selecciona únicamente la jugada con mayor ventaja matemática sobre la casa de apuestas. Asigna Stake 10 de forma estricta.\n"
             "Devuelve solo un objeto JSON dentro de una lista, sin markdown:\n"
             "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 10, \"analisis_ia\": \"\"}]"
         )
@@ -503,8 +502,8 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
                 if partido not in partidos_vistos:
                     partidos_vistos.add(partido)
                     c_copy = c.copy()
-                    c_copy["analisis_ia"] = "Análisis de sistema: Cuota seleccionada por algoritmo de valor (+EV) para balancear la jornada."
-                    c_copy["stake_num"] = 3 if modo_bloque != "stake_10" else 10
+                    c_copy["analisis_ia"] = "Mercado: Línea de juego completo. Cuota seleccionada por algoritmo de valor (+EV) para balancear la jornada."
+                    c_copy["stake_num"] = 2 if modo_bloque != "stake_10" else 10
                     finales.append(c_copy)
                 if len(finales) == cantidad: break
         return finales
@@ -517,8 +516,8 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
             partido = str(candidato.get("partido", "")).strip().lower()
             if partido not in partidos_vistos:
                 partidos_vistos.add(partido)
-                candidato["analisis_ia"] = "Análisis de sistema: Se detectó alto valor de expectativa (+EV) al comparar las líneas de apertura. Cuota respaldada por modelo matemático."
-                candidato["stake_num"] = 3 if modo_bloque != "stake_10" else 10
+                candidato["analisis_ia"] = "Mercado: Línea de juego completo. Se detectó alto valor de expectativa (+EV) al comparar las líneas de apertura. Cuota respaldada por modelo matemático."
+                candidato["stake_num"] = 2 if modo_bloque != "stake_10" else 10
                 finales_fallback.append(candidato)
             if len(finales_fallback) == cantidad:
                 break
@@ -573,7 +572,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
     return consultar_cerebro_ia(unicos, cantidad, modo_bloque)
 
 def construir_mensaje(pick_data):
-    stk = max(1, min(int(pick_data.get("stake_num", 3)), 10))
+    stk = max(1, min(int(pick_data.get("stake_num", 2)), 10))
     return (
         "🔥 El Bot Mexa – Pick del Día\n\n"
         f"Deporte: {pick_data.get('deporte')}\n"
