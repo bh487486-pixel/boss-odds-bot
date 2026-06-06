@@ -50,14 +50,14 @@ bot = Bot(token=TELEGRAM_TOKEN)
 ARCHIVO_PICKS = "picks_hoy.json"
 ARCHIVO_ESTADO = "estado_bot.json"
 
-# Rango de cuotas permitidas (ACTUALIZADO A 1.00 - 10.00)
+# Rango de cuotas permitidas
 CUOTA_MIN = 1.00
 CUOTA_MAX = 10.00
 
 # Ligas centralizadas en API-Sports
 LIGAS_PERMITIDAS = ["baseball_mlb", "baseball_lmb_real"]
 
-# Mapeo de IDs oficiales (1 = MLB, 21 = LMB)
+# Mapeo de IDs oficiales
 LIGAS_MAP = {
     "baseball_mlb": "1",
     "baseball_lmb_real": "21",
@@ -141,7 +141,7 @@ def request_con_reintentos(url, headers, params, intentos=3, espera=5):
     return None
 
 # ==========================================
-# 6. HERRAMIENTAS AUXILIARES DE PROCESAMIENTO
+# 6. HERRAMIENTAS AUXILIARES
 # ==========================================
 def _buscar_nombre_equipo(value, home_team, away_team):
     v = str(value or "").strip().lower()
@@ -159,17 +159,16 @@ def _buscar_nombre_equipo(value, home_team, away_team):
 def _es_mx_equivalente(nombre_bet):
     return str(nombre_bet or "").strip().lower()
 
+# EXTRACCIÓN BLINDADA: Busca forzosamente "game" o "fixture" en todos los niveles
 def _extraer_fixture_id(item):
-    if not isinstance(item, dict):
-        return None
-    for key in ("fixture", "game"):
+    if not isinstance(item, dict): return None
+    if item.get("id") is not None: return item.get("id")
+    if item.get("fixture_id") is not None: return item.get("fixture_id")
+    
+    for key in ("game", "fixture"):
         bloque = item.get(key)
         if isinstance(bloque, dict) and bloque.get("id") is not None:
             return bloque.get("id")
-    if item.get("id") is not None:
-        return item.get("id")
-    if item.get("fixture_id") is not None:
-        return item.get("fixture_id")
     return None
 
 def mapear_icono_deporte(sport_key):
@@ -184,7 +183,6 @@ def mapear_icono_deporte(sport_key):
 # 7. EXTRACCIÓN DE DATOS Y ESTADÍSTICAS EN VIVO
 # ==========================================
 def obtener_estadisticas_equipo(league_id, team_id):
-    """Descarga la radiografía estadística acumulada de la temporada para un equipo."""
     url = "https://v1.baseball.api-sports.io/teams/statistics"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
     params = {
@@ -195,19 +193,14 @@ def obtener_estadisticas_equipo(league_id, team_id):
     
     try:
         res = request_con_reintentos(url, headers, params)
-        if not res:
-            return {}
-        
+        if not res: return {}
         datos = res.json().get("response", {})
-        if not datos:
-            return {}
+        if not datos: return {}
             
         juegos_totales = datos.get("games", {}).get("played", {}).get("all", 0)
-        if juegos_totales == 0:
-            return {}
+        if juegos_totales == 0: return {}
             
         carreras = datos.get("points", {})
-        
         def _f(val):
             try: return float(str(val or 0.0).strip())
             except: return 0.0
@@ -222,7 +215,7 @@ def obtener_estadisticas_equipo(league_id, team_id):
             "promedio_contra_visita": _f(carreras.get("against", {}).get("average", {}).get("away", 0))
         }
     except Exception as e:
-        logger.error(f"Error al obtener estadísticas del equipo {team_id}: {e}")
+        logger.error(f"Error al obtener estadísticas: {e}")
         return {}
 
 def obtener_partidos_api_sports(league_id):
@@ -234,25 +227,25 @@ def obtener_partidos_api_sports(league_id):
     params_games = {
         "league": str(league_id),
         "season": str(datetime.now(MX_TZ).year),
-        "date": hoy
+        "date": hoy,
+        "timezone": "America/Mexico_City"
     }
 
     try:
         res_games = request_con_reintentos(url_games, headers, params_games)
-        if not res_games:
-            logger.warning(f"No se pudo obtener Games para liga {league_id}")
-            return []
+        if not res_games: return []
 
         datos_games = res_games.json().get("response", [])
-        logger.info(f"📦 API-Sports Games liga {league_id}: {len(datos_games)} registros recibidos.")
-
         fixtures = []
         for item in datos_games:
             fixture_id = _extraer_fixture_id(item)
+            
+            # Asegurar extracción desde "game" o "fixture"
             game = item.get("game") or item.get("fixture") or item
-
-            if not isinstance(game, dict):
-                continue
+            if not isinstance(game, dict): continue
+            
+            status = game.get("status", {}).get("short", "")
+            if status not in ["NS", "Not Started"]: continue
 
             teams = game.get("teams", {})
             home_id = teams.get("home", {}).get("id")
@@ -271,28 +264,22 @@ def obtener_partidos_api_sports(league_id):
                     "commence_time": commence_time
                 })
 
-        logger.info(f"📌 Fixtures detectados en liga {league_id}: {len(fixtures)}")
-
-        if not fixtures:
-            return []
+        if not fixtures: return []
 
         mapeo_datos = []
         for fixture in fixtures:
             res_odds = request_con_reintentos(url_odds, headers, {"game": fixture["fixture_id"]})
-            if not res_odds:
-                continue
+            if not res_odds: continue
 
             datos_odds = res_odds.json().get("response", [])
-            if not datos_odds:
-                continue
+            if not datos_odds: continue
 
             stats_home = obtener_estadisticas_equipo(league_id, fixture["home_id"])
             stats_away = obtener_estadisticas_equipo(league_id, fixture["away_id"])
 
             for item in datos_odds:
                 game = item.get("game") or item.get("fixture") or {}
-                if not isinstance(game, dict):
-                    game = {}
+                if not isinstance(game, dict): game = {}
 
                 teams = game.get("teams", {})
                 home_team = teams.get("home", {}).get("name", fixture["home_team"])
@@ -301,9 +288,11 @@ def obtener_partidos_api_sports(league_id):
                 bookmakers = item.get("bookmakers", [])
 
                 bms_mapeados = []
+                casas_permitidas = ["pinnacle", "1xbet", "betano", "bet365"]
+                
                 for b in bookmakers:
                     nombre_casa = str(b.get("name", "")).lower()
-                    if nombre_casa not in ["bet365", "bwin", "betano", "pinnacle", "1xbet"]:
+                    if not any(casa in nombre_casa for casa in casas_permitidas):
                         continue
 
                     bets = b.get("bets", [])
@@ -316,54 +305,45 @@ def obtener_partidos_api_sports(league_id):
                         if any(k in bet_name for k in ["home/away", "moneyline", "match winner", "winner", "h2h", "gana", "ganador"]):
                             outcomes = []
                             for val in values:
-                                try:
-                                    price = float(val.get("odd", 0))
-                                except (TypeError, ValueError):
-                                    continue
+                                try: price = float(val.get("odd", 0))
+                                except: continue
                                 team_name = _buscar_nombre_equipo(val.get("value"), home_team, away_team)
-                                if not team_name:
-                                    team_name = home_team if len(outcomes) == 0 else away_team
+                                if not team_name: team_name = home_team if len(outcomes) == 0 else away_team
                                 outcomes.append({"name": team_name, "price": price})
                             if len(outcomes) >= 2:
-                                markets_mapeados.append({"key": "h2h", "outcomes": outcomes})
+                                markets_mapeados.append({"key": "Ganador Directo (Moneyline)", "outcomes": outcomes})
 
                         elif any(k in bet_name for k in ["over/under", "totals", "total"]):
                             outcomes = []
                             for val in values:
                                 over_under_str = str(val.get("value", ""))
-                                try:
-                                    odd_val = float(val.get("odd", 0))
-                                except (TypeError, ValueError):
-                                    continue
+                                try: odd_val = float(val.get("odd", 0))
+                                except: continue
                                 try:
                                     if "over" in over_under_str.lower():
                                         punto = float(re.sub(r"[^0-9\.\-]", "", over_under_str.replace("Over", "").strip()))
-                                        outcomes.append({"name": "Over", "price": odd_val, "point": punto})
+                                        outcomes.append({"name": f"Over {punto}", "price": odd_val})
                                     elif "under" in over_under_str.lower():
                                         punto = float(re.sub(r"[^0-9\.\-]", "", over_under_str.replace("Under", "").strip()))
-                                        outcomes.append({"name": "Under", "price": odd_val, "point": punto})
+                                        outcomes.append({"name": f"Under {punto}", "price": odd_val})
                                 except ValueError:
                                     continue
                             if outcomes:
-                                markets_mapeados.append({"key": "totals", "outcomes": outcomes})
+                                markets_mapeados.append({"key": "Total de Carreras Generales", "outcomes": outcomes})
 
                         elif any(k in bet_name for k in ["handicap", "spread", "run line", "runline", "run"]):
                             outcomes = []
                             for val in values:
-                                try:
-                                    price = float(val.get("odd", 0))
-                                except (TypeError, ValueError):
-                                    continue
+                                try: price = float(val.get("odd", 0))
+                                except: continue
                                 raw_name = val.get("value")
                                 team_name = _buscar_nombre_equipo(raw_name, home_team, away_team) or home_team
                                 point_raw = val.get("point") or val.get("handicap") or val.get("line")
-                                try:
-                                    point = float(point_raw) if point_raw is not None else 0.0
-                                except (TypeError, ValueError):
-                                    point = 0.0
-                                outcomes.append({"name": team_name, "price": price, "point": point})
+                                try: point = float(point_raw) if point_raw is not None else 0.0
+                                except: point = 0.0
+                                outcomes.append({"name": f"{team_name} {point:+g}", "price": price})
                             if outcomes:
-                                markets_mapeados.append({"key": "spreads", "outcomes": outcomes})
+                                markets_mapeados.append({"key": "Hándicap (Runline)", "outcomes": outcomes})
 
                     if markets_mapeados:
                         bms_mapeados.append({"title": b.get("name", "Bookmaker"), "markets": markets_mapeados})
@@ -387,12 +367,11 @@ def obtener_marcadores_api_sports(league_id):
     hoy = datetime.now(MX_TZ).strftime("%Y-%m-%d")
     url = "https://v1.baseball.api-sports.io/games"
     headers = {"x-apisports-key": BASEBALL_API_KEY}
-    params = {"league": str(league_id), "season": str(datetime.now(MX_TZ).year), "date": hoy}
+    params = {"league": str(league_id), "season": str(datetime.now(MX_TZ).year), "date": hoy, "timezone": "America/Mexico_City"}
 
     try:
         res = request_con_reintentos(url, headers, params)
-        if not res:
-            return []
+        if not res: return []
 
         datos = res.json().get("response", [])
         mapeo_scores = []
@@ -402,18 +381,28 @@ def obtener_marcadores_api_sports(league_id):
             away_team = item.get("teams", {}).get("away", {}).get("name", "Away")
             status = item.get("status", {}).get("short", "")
 
-            home_score = item.get("scores", {}).get("home", {}).get("current", 0)
-            away_score = item.get("scores", {}).get("away", {}).get("current", 0)
+            # ARREGLO CRÍTICO: Buscar carreras en 'total' para evitar el bug de 0.0 del Profit
+            scores_obj = item.get("scores", {})
+            home_obj = scores_obj.get("home")
+            away_obj = scores_obj.get("away")
 
-            try: home_score = 0 if home_score is None else float(home_score)
-            except (TypeError, ValueError): home_score = 0
-            try: away_score = 0 if away_score is None else float(away_score)
-            except (TypeError, ValueError): away_score = 0
+            def parse_score(val):
+                if isinstance(val, dict):
+                    # En la API de Béisbol se guarda normalmente en 'total'
+                    return float(val.get("total", val.get("current", 0)) or 0)
+                try:
+                    return float(val or 0)
+                except:
+                    return 0.0
+
+            home_score = parse_score(home_obj)
+            away_score = parse_score(away_obj)
 
             mapeo_scores.append({
                 "home_team": home_team,
                 "away_team": away_team,
-                "completed": status in ["FT", "AOT"],
+                # Validar estatus de finalizado de béisbol
+                "completed": status in ["FT", "AOT", "Finished", "F/O"],
                 "scores": [{"name": home_team, "score": str(home_score)}, {"name": away_team, "score": str(away_score)}]
             })
         return mapeo_scores
@@ -422,10 +411,10 @@ def obtener_marcadores_api_sports(league_id):
         return []
 
 # ==========================================
-# 8. CEREBRO INTELIGENCIA ARTIFICIAL (GEMINI)
+# 8. CEREBRO INTELIGENCIA ARTIFICIAL (GEMINI) - DOBLE FILTRO
 # ==========================================
 def _extraer_json_lista(texto):
-    if not texto: raise ValueError("Respuesta vacía de la IA")
+    if not texto: return []
     txt = texto.strip().replace("`" * 3 + "json", "").replace("`" * 3, "").strip()
     inicio, fin = txt.find("["), txt.rfind("]")
     if inicio != -1 and fin != -1 and fin > inicio:
@@ -434,55 +423,62 @@ def _extraer_json_lista(texto):
     if inicio != -1 and fin != -1 and fin > inicio:
         obj = json.loads(txt[inicio:fin + 1].strip())
         return obj if isinstance(obj, list) else [obj]
-    raise ValueError("No se pudo extraer JSON")
+    return []
 
 def _clave_unica_pick(pick):
-    return f"{str(pick.get('partido','')).strip().lower()}|{str(pick.get('pick','')).strip().lower()}|{str(pick.get('cuota',''))}"
-
-def _ranking_pre_gemini(picks):
-    ordenados = sorted(picks, key=lambda x: abs(float(x.get("cuota", 0.0) or 0.0) - 1.80))
-    diversos = []
-    vistos = set()
-    for p in ordenados:
-        partido = str(p.get("partido", "")).strip().lower()
-        if partido not in vistos:
-            vistos.add(partido)
-            diversos.append(p)
-    for p in ordenados:
-        if p not in diversos:
-            diversos.append(p)
-    return diversos
+    return f"{str(pick.get('partido','')).strip().lower()}|{str(pick.get('pick','')).strip().lower()}"
 
 def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
-    candidatos_raw = _ranking_pre_gemini(candidatos_raw)[:15]
     if not candidatos_raw: return []
+    
+    juegos_agrupados = {}
+    for c in candidatos_raw:
+        clave = f"{c['partido']}_{c['mercado']}_{c['pick']}"
+        if clave not in juegos_agrupados:
+            juegos_agrupados[clave] = {
+                "deporte": c["deporte"],
+                "partido": c["partido"],
+                "fecha_hora": c["fecha_hora"],
+                "mercado": c["mercado"],
+                "pick": c["pick"],
+                "estadisticas_local": c.get("estadisticas_local", {}),
+                "estadisticas_visitante": c.get("estadisticas_visitante", {}),
+                "cuotas": {}
+            }
+        juegos_agrupados[clave]["cuotas"][c["bookie"]] = c["cuota"]
+
+    juegos_comparables = []
+    for k, v in juegos_agrupados.items():
+        tiene_pinnacle = any("pinnacle" in b.lower() for b in v["cuotas"].keys())
+        tiene_soft = any(b.lower() in ["1xbet", "betano", "bet365"] for b in v["cuotas"].keys())
+        if tiene_pinnacle and tiene_soft:
+            juegos_comparables.append(v)
+
+    if not juegos_comparables:
+        logger.warning("No se encontraron partidos con cuotas cruzadas entre Pinnacle y Casas Soft.")
+        return []
+
+    datos_para_ia = json.dumps(juegos_comparables[:15], ensure_ascii=False)
 
     base_instruccion = (
-        "Eres un analista de apuestas profesional (+EV). Tienes datos estadísticos adjuntos de la temporada por equipo.\n"
-        "Compara de forma estricta las líneas del casino con los promedios de carreras anotadas/permitidas de cada rival.\n"
-        "REGLA CRÍTICA DE MERCADO: Debes iniciar tu análisis ('analisis_ia') especificando claramente qué tipo de mercado se está jugando (ej. 'Mercado: Línea Principal del juego completo').\n"
-        "REGLA CRÍTICA DE RIESGO: Prohibido por completo sugerir picks contradictorios.\n"
+        "Eres El Bot Mexa, el tipster profesional más letal de béisbol en México. Tu análisis requiere un DOBLE FILTRO estricto:\n"
+        "FILTRO 1 (Probabilidad Deportiva REAL): Analiza las estadísticas provistas (promedios de carreras a favor y en contra). Si un pick NO tiene sentido en el diamante real (ej. ir a altas de carreras con dos equipos que no batean y pitchean bien), DESCÁRTALO INMEDIATAMENTE. No nos importa si la cuota es buena si no va a suceder en la vida real.\n"
+        "FILTRO 2 (Cacería de Línea): Solo para los picks que PASARON el Filtro 1 (tienen altísima probabilidad de suceder), cruza la información de los casinos. Identifica la cuota exacta de 'Pinnacle'. Luego, encuentra o proyecta un 'Error de línea' en una casa comercial/mexicana (1xBet, Betano, PlayDoit, Caliente). La casa comercial debe estar pagando MÁS que Pinnacle.\n"
+        "Reglas finales:\n"
+        "1. Selecciona la jugada que cumple AMBOS filtros (alta probabilidad + error matemático a favor).\n"
+        "2. Redacta el 'analisis_deportivo' explicando con argumentos reales de béisbol por qué este pick VA A DARSE en el campo.\n"
+        "REGLA CRÍTICA: Devuelve SOLO el siguiente formato JSON plano (sin markdown ni explicaciones adicionales):\n"
     )
 
-    if modo_bloque != "stake_10":
-        prompt = (
-            base_instruccion +
-            f"Elige los {cantidad} mejores picks únicos de hoy.\n"
-            "REGLA DE STAKE INTELIGENTE: Asigna únicamente un Stake de entre 1 y 4 para jornadas normales. Usa Stake 2 para apuestas estándar, Stake 3 para jugadas fuertes y Stake 4 de forma muy exclusiva. No uses 5, 6, 7 ni 8.\n"
-            "Devuelve solo JSON plano, sin markdown:\n"
-            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 2, \"analisis_ia\": \"\"}]"
-        )
-    else:
-        prompt = (
-            base_instruccion +
-            "Selecciona únicamente la jugada con mayor ventaja matemática sobre la casa de apuestas. Asigna Stake 10 de forma estricta.\n"
-            "Devuelve solo un objeto JSON dentro de una lista, sin markdown:\n"
-            "[{\"deporte\": \"\", \"partido\": \"\", \"fecha_hora\": \"\", \"pick\": \"\", \"cuota\": 0.0, \"bookie\": \"\", \"sport_key\": \"\", \"stake_num\": 10, \"analisis_ia\": \"\"}]"
-        )
+    prompt = (
+        base_instruccion +
+        f"Elige los {cantidad} mejores picks.\n"
+        "[{\"deporte\": \"⚾ Béisbol\", \"partido\": \"Equipo A vs Equipo B\", \"fecha_hora\": \"\", \"pick\": \"\", \"mercado\": \"\", \"cuota_pinnacle\": 0.0, \"casa_error\": \"1xBet o Betano\", \"cuota_error\": 0.0, \"stake_num\": 2, \"analisis_deportivo\": \"\"}]"
+    )
 
     try:
         time.sleep(2)
-        response = model.generate_content(prompt + "\n\nDatos del Mercado y Estadísticas Reales:\n" + json.dumps(candidatos_raw, ensure_ascii=False))
+        response = model.generate_content(prompt + "\n\nDatos de Juegos (Estadísticas y Cuotas):\n" + datos_para_ia)
         picks_seleccionados = _extraer_json_lista(getattr(response, "text", ""))
         
         finales = []
@@ -493,35 +489,15 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
             partido = str(p.get("partido", "")).strip().lower()
             if partido in partidos_vistos: continue
             partidos_vistos.add(partido)
+            if modo_bloque == "stake_10": p["stake_num"] = 10
             finales.append(p)
             if len(finales) == cantidad: break
             
-        if len(finales) < cantidad:
-            for c in candidatos_raw:
-                partido = str(c.get("partido", "")).strip().lower()
-                if partido not in partidos_vistos:
-                    partidos_vistos.add(partido)
-                    c_copy = c.copy()
-                    c_copy["analisis_ia"] = "Mercado: Línea de juego completo. Cuota seleccionada por algoritmo de valor (+EV) para balancear la jornada."
-                    c_copy["stake_num"] = 2 if modo_bloque != "stake_10" else 10
-                    finales.append(c_copy)
-                if len(finales) == cantidad: break
         return finales
 
     except Exception as e:
-        logger.error(f"Fallback activado por error de IA: {e}")
-        finales_fallback = []
-        partidos_vistos = set()
-        for candidato in candidatos_raw:
-            partido = str(candidato.get("partido", "")).strip().lower()
-            if partido not in partidos_vistos:
-                partidos_vistos.add(partido)
-                candidato["analisis_ia"] = "Mercado: Línea de juego completo. Se detectó alto valor de expectativa (+EV) al comparar las líneas de apertura. Cuota respaldada por modelo matemático."
-                candidato["stake_num"] = 2 if modo_bloque != "stake_10" else 10
-                finales_fallback.append(candidato)
-            if len(finales_fallback) == cantidad:
-                break
-        return finales_fallback
+        logger.error(f"Error de IA: {e}")
+        return []
 
 # ==========================================
 # 9. PROCESAMIENTO Y ENVÍO DE BLOQUES
@@ -537,7 +513,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
             fecha_hora_str = "Horario por confirmar"
             if partido.get("commence_time"):
                 try:
-                    fecha_hora_str = datetime.fromisoformat(partido.get("commence_time").replace("Z", "+00:00")).astimezone(MX_TZ).strftime("%I:%M %p")
+                    fecha_hora_str = datetime.fromisoformat(partido.get("commence_time").replace("Z", "+00:00")).astimezone(MX_TZ).strftime("%Y-%m-%d | %I:%M %p")
                 except: pass
 
             for bookie in partido.get("bookmakers", []):
@@ -546,43 +522,36 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                     for o in market.get("outcomes", []):
                         cuota = o.get("price")
                         if isinstance(cuota, (int, float)) and CUOTA_MIN <= cuota <= CUOTA_MAX:
-                            if mk == "h2h": tp = f"Gana {o.get('name')}"
-                            elif mk == "totals": tp = f"{'Altas/Over' if o.get('name') == 'Over' else 'Bajas/Under'} {o.get('point', 0)}"
-                            elif mk == "spreads": tp = f"Hándicap {o.get('name')} {o.get('point', 0):+g}"
-                            else: continue
-
                             candidatos_crudos.append({
                                 "deporte": mapear_icono_deporte(liga),
                                 "partido": f"{partido.get('home_team')} vs {partido.get('away_team')}",
                                 "fecha_hora": fecha_hora_str,
-                                "pick": tp,
+                                "pick": o.get('name'),
+                                "mercado": mk,
                                 "cuota": float(cuota),
                                 "bookie": bookie.get("title"),
-                                "sport_key": liga,
                                 "estadisticas_local": partido.get("stats_home_team", {}),
                                 "estadisticas_visitante": partido.get("stats_away_team", {})
                             })
 
-    unicos = []
-    vistos = set()
-    for c in candidatos_crudos:
-        if _clave_unica_pick(c) not in vistos:
-            vistos.add(_clave_unica_pick(c))
-            unicos.append(c)
-    return consultar_cerebro_ia(unicos, cantidad, modo_bloque)
+    return consultar_cerebro_ia(candidatos_crudos, cantidad, modo_bloque)
 
 def construir_mensaje(pick_data):
     stk = max(1, min(int(pick_data.get("stake_num", 2)), 10))
     return (
         "🔥 El Bot Mexa – Pick del Día\n\n"
-        f"Deporte: {pick_data.get('deporte')}\n"
+        f"Deporte: {pick_data.get('deporte', '⚾ Béisbol')}\n"
+        f"🗓 Fecha y Hora: {pick_data.get('fecha_hora', 'Por confirmar')}\n"
         f"Partido: {pick_data.get('partido')}\n"
-        f"Pick: {pick_data.get('pick')}\n"
-        f"Cuota: {float(pick_data.get('cuota', 0)):.2f}\n"
+        f"🎯 Pick: {pick_data.get('pick')}\n"
+        f"⚖️ Mercado: {pick_data.get('mercado')}\n\n"
+        f"📉 La cuota justa (línea perfecta) en Pinnacle es de: {float(pick_data.get('cuota_pinnacle', 0)):.2f}\n"
+        f"🚨 ¡Error de línea detectado! {pick_data.get('casa_error')} se equivocó y la está pagando en: {float(pick_data.get('cuota_error', 0)):.2f}\n\n"
         f"Stake: {'⭐' * stk}\n\n"
-        "📊 Análisis:\n"
-        f"{pick_data.get('analisis_ia')}\n\n"
-        "¡Vamos con todo! 💰"
+        "🧠 Análisis Deportivo:\n"
+        f"{pick_data.get('analisis_deportivo')}\n\n"
+        "💡 NOTA IMPORTANTE:\n"
+        "Esta cuota podría estar disponible en otras casas de apuestas. Revisen también en PlayDoit, Team México, Caliente, Codere, Winpot o Betway, ya que suelen manejar líneas similares. ¡Aprovechen el error del casino y vamos con todo! 💰"
     )
 
 async def enviar_mensaje_seguro(texto):
@@ -601,7 +570,7 @@ async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="norma
         await asyncio.sleep(600)
 
     if not picks_bloque:
-        await enviar_mensaje_seguro(f"⏳ Sistema {nombre_bloque}: Monitoreando mercado... líneas aún no abiertas.")
+        await enviar_mensaje_seguro(f"⏳ Sistema {nombre_bloque}: Monitoreando mercado... líneas aún no abiertas o sin errores de valor detectados.")
         return
 
     actuales = cargar_picks()
@@ -659,7 +628,11 @@ async def mandar_reporte_profit():
             if res.get("home_team") in pick.get("partido") and res.get("away_team") in pick.get("partido"):
                 if res.get("completed"):
                     sc = res.get("scores")
-                    marcador = f"{sc[0]['name']} {sc[0]['score']} - {sc[1]['score']} {sc[1]['name']} 🏁"
+                    # ARREGLO VISUAL DEL FORMATO (Evitamos el 0.0 decimal si es número entero)
+                    score_home = int(float(sc[0]['score'])) if float(sc[0]['score']).is_integer() else sc[0]['score']
+                    score_away = int(float(sc[1]['score'])) if float(sc[1]['score']).is_integer() else sc[1]['score']
+                    marcador = f"{sc[0]['name']} {score_home} - {score_away} {sc[1]['name']} 🏁"
+                    
                     status = evaluar_pick(pick.get("pick"), sc)
                     if "GANADO" in status: ganados += 1
                     elif "PERDIDO" in status: perdidos += 1
@@ -722,7 +695,7 @@ async def main_loop():
                 be["reporte"] = fecha_str
                 guardar_estado(estado)
 
-            # 11:55 PM - Anuncio Mundial (SOLO ESTE JUEVES 4 DE JUNIO)
+            # 11:55 PM - Anuncio Mundial
             elif fecha_str == "2026-06-04" and ahora.hour == 23 and 55 <= ahora.minute <= 57 and be.get("mundial") != fecha_str:
                 mensaje_mundial = "🚨 ¡Familia, ya se viene la semana de la Copa del Mundo! Tengan sus notificaciones activadas porque se vienen picks muy jugosos con el mejor, El Bot Mexa. ⚽🏆"
                 await enviar_mensaje_seguro(mensaje_mundial)
