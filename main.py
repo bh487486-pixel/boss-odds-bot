@@ -411,7 +411,7 @@ def obtener_marcadores_api_sports(league_id):
         return []
 
 # ==========================================
-# 8. CEREBRO INTELIGENCIA ARTIFICIAL (GEMINI) - MODO DEPORTIVO
+# 8. CEREBRO INTELIGENCIA ARTIFICIAL (GEMINI) - MODO DEPORTIVO (CON REINTENTO ANTI-LÍMITE)
 # ==========================================
 def _extraer_json_lista(texto):
     if not texto: return []
@@ -451,28 +451,39 @@ def consultar_cerebro_ia(candidatos_raw, cantidad, modo_bloque="normal"):
         "[{\"deporte\": \"⚾ Béisbol\", \"partido\": \"Equipo A vs Equipo B\", \"fecha_hora\": \"\", \"pick\": \"\", \"mercado\": \"\", \"cuota\": 0.0, \"casa_apuestas\": \"\", \"stake_num\": 2, \"analisis_deportivo\": \"\"}]"
     )
 
-    try:
-        time.sleep(2)
-        response = model.generate_content(prompt + "\n\nDatos de Juegos (Estadísticas y Cuotas):\n" + datos_para_ia)
-        picks_seleccionados = _extraer_json_lista(getattr(response, "text", ""))
-        
-        finales = []
-        partidos_vistos = set()
-        
-        for p in picks_seleccionados:
-            if not isinstance(p, dict): continue
-            partido = str(p.get("partido", "")).strip().lower()
-            if partido in partidos_vistos: continue
-            partidos_vistos.add(partido)
-            if modo_bloque == "stake_10": p["stake_num"] = 10
-            finales.append(p)
-            if len(finales) == cantidad: break
+    max_reintentos = 3
+    for intento in range(max_reintentos):
+        try:
+            time.sleep(3) # Pausa inicial ligera
+            response = model.generate_content(prompt + "\n\nDatos de Juegos (Estadísticas y Cuotas):\n" + datos_para_ia)
+            picks_seleccionados = _extraer_json_lista(getattr(response, "text", ""))
             
-        return finales
+            finales = []
+            partidos_vistos = set()
+            
+            for p in picks_seleccionados:
+                if not isinstance(p, dict): continue
+                partido = str(p.get("partido", "")).strip().lower()
+                if partido in partidos_vistos: continue
+                partidos_vistos.add(partido)
+                if modo_bloque == "stake_10": p["stake_num"] = 10
+                finales.append(p)
+                if len(finales) == cantidad: break
+                
+            if finales:
+                return finales
 
-    except Exception as e:
-        logger.error(f"Error de IA: {e}")
-        return []
+        except Exception as e:
+            error_str = str(e)
+            logger.error(f"Error de IA (Intento {intento + 1}/{max_reintentos}): {error_str}")
+            # Detectar si Google nos frenó por el límite de peticiones (Error 429)
+            if "429" in error_str or "quota" in error_str.lower() or "exhausted" in error_str.lower():
+                logger.info("⏳ Límite de Google alcanzado. Esperando 40 segundos para enfriar la API...")
+                time.sleep(40) # Respetamos el tiempo que pide el error (33s + colchón)
+            else:
+                time.sleep(10)
+                
+    return [] # Retorna vacío solo si fallan los 3 intentos
 
 # ==========================================
 # 9. PROCESAMIENTO Y ENVÍO DE BLOQUES
