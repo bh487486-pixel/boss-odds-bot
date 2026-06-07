@@ -45,7 +45,7 @@ ARCHIVO_PICKS = "picks_hoy.json"
 ARCHIVO_ESTADO = "estado_bot.json"
 
 # Rango de cuotas permitidas
-CUOTA_MIN = 1.15
+CUOTA_MIN = 1.50
 CUOTA_MAX = 4.00
 
 # Ligas centralizadas en API-Sports
