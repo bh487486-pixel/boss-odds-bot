@@ -144,7 +144,7 @@ def _extraer_fixture_id(item):
     if not isinstance(item, dict): return None
     for key in ("game", "fixture"):
         bloque = item.get(key)
-        if isinstance(bloque, dict) and Custom_id := bloque.get("id"): return Custom_id
+        if isinstance(bloque, dict) and bloque.get("id") is not None: return bloque.get("id")
     return item.get("id") or item.get("fixture_id")
 
 def mapear_icono_deporte(sport_key):
@@ -360,7 +360,7 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                                 "cuota": o['price'], "bookie": bookie['title'], "sport_key": liga, "mercado_raw": market['key'],
                                 "stats_home_team": part['stats_home_team'], "stats_away_team": part['stats_away_team']
                             })
-    return os_res := procesar_logica_matematica(candidatos_crudos, cantidad, modo_bloque)
+    return procesar_logica_matematica(candidatos_crudos, cantidad, modo_bloque)
 
 def construir_mensaje(p):
     return (
