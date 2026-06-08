@@ -144,7 +144,8 @@ def _extraer_fixture_id(item):
     if not isinstance(item, dict): return None
     for key in ("game", "fixture"):
         bloque = item.get(key)
-        if isinstance(bloque, dict) and bloque.get("id") is not None: return bloque.get("id")
+        if isinstance(bloque, dict) and bloque.get("id") is not None:
+            return bloque.get("id")
     return item.get("id") or item.get("fixture_id")
 
 def mapear_icono_deporte(sport_key):
@@ -353,10 +354,24 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                 for market in bookie.get("markets", []):
                     for o in market.get("outcomes", []):
                         if CUOTA_MIN <= o.get("price", 0) <= CUOTA_MAX:
-                            # CANDADO DE COHERENCIA CONTRA CUOTAS FANTASMA EN TOTALES
+                            
+                            # =======================================================================
+                            # FILTRO DE COHERENCIA RADICAL (ANTI-CABLES CRUZADOS DE LA API)
+                            # =======================================================================
                             if market['key'] == "totals":
-                                if o.get("point", 8.5) <= 8.5 and o.get("price", 0) > 2.20:
+                                punto = o.get("point", 8.5)
+                                cuota = o.get("price", 0)
+                                
+                                # En MLB/LMB una línea baja (Menor o igual a 9.5) jamás paga cuotas altas (Más de 2.20)
+                                # Si esto pasa, es porque la API nos está dando la cuota del Over de UN SOLO EQUIPO o F5.
+                                if punto <= 9.5 and cuota > 2.20:
                                     continue
+                                    
+                                # Mismo candado inverso: Una línea altísima (Mayor a 14.5) no puede pagar una cuota normal/baja
+                                if punto >= 14.5 and cuota < 1.70:
+                                    continue
+                            # =======================================================================
+
                             candidatos_crudos.append({
                                 "deporte": mapear_icono_deporte(liga), "partido": f"{part['home_team']} vs {part['away_team']}",
                                 "home_team": part['home_team'], "away_team": part['away_team'], "fecha_hora": fh,
@@ -390,7 +405,7 @@ def _filtrar_picks_nuevos(picks):
 async def ejecutar_bloque_remodelado(nombre_bloque, ligas, cantidad, modo="normal", intro=None):
     picks_bloque = _filtrar_picks_nuevos(procesar_bloque_especifico(ligas, cantidad, modo))
     if not picks_bloque:
-        logger.info(f"⏳ {nombre_bloque}: No se enviaron picks. Las cuotas en vivo no pasaron el filtro de Edge mínimo (+EV).")
+        logger.info(f"⏳ {nombre_bloque}: No se enviaron picks. Las cuotas en vivo no pasaron el filtro de Edge mínimo (+EV) o Coherencia.")
         return
     actuales = cargar_picks()
     for p in picks_bloque: actuales.append(p)
