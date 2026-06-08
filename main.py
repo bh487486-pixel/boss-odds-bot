@@ -2,7 +2,7 @@ import os
 import requests
 import logging
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -29,8 +29,8 @@ def obtener_juegos(league_id):
         "x-apisports-key": API_KEY
     }
 
-    # PRUEBA DE ZONA HORARIA
-    hoy = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
+    # FECHA ACTUAL
+    hoy = datetime.utcnow().strftime("%Y-%m-%d")
 
     logging.info(f"Fecha consultada API: {hoy}")
 
@@ -99,14 +99,14 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     texto += f"⚾ MLB: {len(mlb)} juegos\n"
 
-    for juego in mlb[:10]:
+    for juego in mlb:
         texto += f"• {juego}\n"
 
     texto += "\n"
 
     texto += f"⚾ LMB: {len(lmb)} juegos\n"
 
-    for juego in lmb[:10]:
+    for juego in lmb:
         texto += f"• {juego}\n"
 
     await mensaje.edit_text(texto)
