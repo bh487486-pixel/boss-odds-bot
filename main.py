@@ -30,8 +30,9 @@ def obtener_juegos(league_id):
     }
 
     # FECHA ACTUAL
-    hoy = datetime.utcnow().strftime("%Y-%m-%d")
-
+    
+fecha1 = datetime.utcnow().strftime("%Y-%m-%d")
+fecha2 = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
     logging.info(f"Fecha consultada API: {hoy}")
 
     params = {
