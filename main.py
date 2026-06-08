@@ -2,7 +2,7 @@ import os
 import requests
 import logging
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -29,58 +29,59 @@ def obtener_juegos(league_id):
         "x-apisports-key": API_KEY
     }
 
-    # FECHA ACTUAL
-    
-fecha1 = datetime.utcnow().strftime("%Y-%m-%d")
-fecha2 = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
-    logging.info(f"Fecha consultada API: {hoy}")
+    fecha1 = datetime.utcnow().strftime("%Y-%m-%d")
+    fecha2 = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    params = {
-        "league": league_id,
-        "season": 2026,
-        "date": hoy
-    }
+    logging.info(f"Fecha API 1: {fecha1}")
+    logging.info(f"Fecha API 2: {fecha2}")
 
-    try:
-        r = requests.get(
-            f"{BASE_URL}/games",
-            headers=headers,
-            params=params,
-            timeout=30
-        )
+    juegos = []
 
-        r.raise_for_status()
+    for fecha in [fecha1, fecha2]:
 
-        data = r.json()
+        params = {
+            "league": league_id,
+            "season": 2026,
+            "date": fecha
+        }
 
-        juegos = []
-
-        for game in data.get("response", []):
-
-            status = game.get("status", {}).get("short")
-
-            if status != "NS":
-                continue
-
-            home = game["teams"]["home"]["name"]
-            away = game["teams"]["away"]["name"]
-
-            juegos.append(
-                f"{away} vs {home}"
+        try:
+            r = requests.get(
+                f"{BASE_URL}/games",
+                headers=headers,
+                params=params,
+                timeout=30
             )
 
-        return juegos
+            r.raise_for_status()
 
-    except Exception as e:
-        logging.error(f"Error API: {e}")
-        return []
+            data = r.json()
+
+            for game in data.get("response", []):
+
+                status = game.get("status", {}).get("short")
+
+                if status != "NS":
+                    continue
+
+                home = game["teams"]["home"]["name"]
+                away = game["teams"]["away"]["name"]
+
+                partido = f"{away} vs {home}"
+
+                if partido not in juegos:
+                    juegos.append(partido)
+
+        except Exception as e:
+            logging.error(f"Error API ({fecha}): {e}")
+
+    return juegos
 
 # ==========================
 # COMANDOS
 # ==========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await update.message.reply_text(
         "👋 Bienvenido a Boss Odds MX\n\n"
         "Comandos disponibles:\n"
@@ -88,7 +89,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     mensaje = await update.message.reply_text(
         "⏳ Analizando jornada..."
     )
@@ -99,14 +99,12 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = "📊 JUEGOS ENCONTRADOS\n\n"
 
     texto += f"⚾ MLB: {len(mlb)} juegos\n"
-
     for juego in mlb:
         texto += f"• {juego}\n"
 
     texto += "\n"
 
     texto += f"⚾ LMB: {len(lmb)} juegos\n"
-
     for juego in lmb:
         texto += f"• {juego}\n"
 
@@ -117,19 +115,12 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================
 
 def main():
-
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(
-        CommandHandler("start", start)
-    )
-
-    app.add_handler(
-        CommandHandler("analizar", analizar)
-    )
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("analizar", analizar))
 
     logging.info("🤖 Boss Odds iniciado")
-
     app.run_polling()
 
 if __name__ == "__main__":
