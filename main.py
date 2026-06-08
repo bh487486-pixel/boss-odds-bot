@@ -353,6 +353,10 @@ def procesar_bloque_especifico(lista_ligas, cantidad, modo_bloque="normal"):
                 for market in bookie.get("markets", []):
                     for o in market.get("outcomes", []):
                         if CUOTA_MIN <= o.get("price", 0) <= CUOTA_MAX:
+                            # CANDADO DE COHERENCIA CONTRA CUOTAS FANTASMA EN TOTALES
+                            if market['key'] == "totals":
+                                if o.get("point", 8.5) <= 8.5 and o.get("price", 0) > 2.20:
+                                    continue
                             candidatos_crudos.append({
                                 "deporte": mapear_icono_deporte(liga), "partido": f"{part['home_team']} vs {part['away_team']}",
                                 "home_team": part['home_team'], "away_team": part['away_team'], "fecha_hora": fh,
