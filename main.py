@@ -51,7 +51,7 @@ MARKET_WEIGHTS = {
     "Moneyline": 1.00,
     "Totales": 0.97,
     "F5 Totales": 0.92,
-    "Run Line": 0.74,
+    "Run Line": 0.50,  # bajado para que no domine
 }
 
 DEFAULT_MAX_PER_MARKET = {
@@ -169,6 +169,15 @@ def _form_summary(forma):
         return "N/A"
     return f"{forma.get('recent_record', 'N/A')} últimos 10 | {forma.get('last5_record', 'N/A')} últimos 5"
 
+def _confidence_label(confidence):
+    if confidence >= 88:
+        return "Elite"
+    if confidence >= 82:
+        return "Premium"
+    if confidence >= 74:
+        return "Fuerte"
+    return "Moderado"
+
 def _format_runline_label(label, juego):
     txt = str(label or "").strip().lower()
     if txt == "home -1.5":
@@ -209,11 +218,29 @@ def _market_caps_for_filter(market_filter, max_picks):
 def _filter_label(market_filter):
     return MARKET_FILTER_LABELS.get(market_filter, market_filter)
 
+def _is_reasonable_total_odd(odd):
+    try:
+        odd = float(odd)
+        return 1.20 <= odd <= 3.20
+    except Exception:
+        return False
+
+def _is_reasonable_runline_odd(odd):
+    try:
+        odd = float(odd)
+        return 1.20 <= odd <= 2.50
+    except Exception:
+        return False
+
+# ==========================
+# TEXT BUILDERS
+# ==========================
+
 def _main_menu_text(chat_id):
     s = USER_SETTINGS[chat_id]
     return (
-        "🔥 Boss Odds MX\n\n"
-        "Usa los botones para navegar.\n\n"
+        "🔥 BOSS ODDS MX\n\n"
+        "Todo se maneja con botones.\n\n"
         f"Modo por defecto: {_filter_label(s['market_filter'])}\n"
         f"Top por defecto: {s['max_picks']}\n"
         f"Forma reciente: {'ON' if s['use_recent_form'] else 'OFF'}\n"
@@ -223,36 +250,21 @@ def _main_menu_text(chat_id):
 def _picks_menu_text(chat_id):
     s = USER_SETTINGS[chat_id]
     return (
-        "🎯 Menú de Picks\n\n"
+        "🎯 CENTRO DE PICKS\n\n"
         f"Modo por defecto: {_filter_label(s['market_filter'])}\n"
         f"Top por defecto: {s['max_picks']}\n\n"
-        "Genera picks separados por mensaje."
+        "Cada pick se envía en un mensaje separado."
     )
 
 def _config_menu_text(chat_id):
     s = USER_SETTINGS[chat_id]
     return (
-        "⚙️ Configuración\n\n"
+        "⚙️ CONFIGURACIÓN\n\n"
         f"Forma reciente: {'ON' if s['use_recent_form'] else 'OFF'}\n"
         f"Run Line: {'ON' if s['enable_runline'] else 'OFF'}\n"
         f"Modo por defecto: {_filter_label(s['market_filter'])}\n"
         f"Top por defecto: {s['max_picks']}"
     )
-
-def _games_text():
-    mlb = obtener_juegos(1)
-    texto = "📊 JUEGOS MLB ENCONTRADOS\n\n"
-    texto += f"⚾ MLB ({len(mlb)})\n\n"
-
-    for juego in mlb:
-        texto += (
-            f"🆔 Juego: {juego['game_id']}\n"
-            f"🏠 Home ID: {juego['home_team_id']}\n"
-            f"✈️ Away ID: {juego['away_team_id']}\n"
-            f"{juego['partido']}\n\n"
-        )
-
-    return texto[:4000]
 
 def _build_history_text():
     historial = cargar_historial()
@@ -293,36 +305,44 @@ def _build_summary_text(meta, selected_picks, market_filter, max_picks, settings
     texto += "\n"
     texto += f"Forma reciente: {'ON' if settings['use_recent_form'] else 'OFF'}\n"
     texto += f"Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
-    texto += "\nCada pick llega separado con botones para marcar resultado.\n"
+    texto += "\nCada pick llega en un mensaje separado.\n"
 
     return texto[:4000]
 
+def _pick_header(idx):
+    if idx == 1:
+        return "🔥 PICK DEL DÍA"
+    if idx == 2:
+        return "🥈 PICK #2"
+    if idx == 3:
+        return "🥉 PICK #3"
+    return f"⭐ PICK #{idx}"
+
 def _build_pick_card(pick, idx):
-    medallas = {1: "🥇", 2: "🥈", 3: "🥉"}
-    emoji = medallas.get(idx, "⭐")
+    level = _confidence_label(pick["confidence"])
 
     texto = (
-        f"{emoji} PICK #{idx}\n"
-        f"UID: {pick['uid']}\n"
+        f"{_pick_header(idx)}\n"
         f"⚾ {pick['matchup']}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"✅ Selección: {pick['pick']}\n"
         f"🎯 Mercado: {pick['market']}\n"
-        f"Pick: {pick['pick']}\n"
+        f"💰 Cuota: {pick['odd']:.2f}\n"
     )
 
     if pick.get("line") is not None:
-        texto += f"Línea: {pick['line']:.1f}\n"
+        texto += f"📏 Línea: {pick['line']:.1f}\n"
 
     if pick.get("projection") is not None:
-        texto += f"Proyección: {pick['projection']:.2f}\n"
+        texto += f"📈 Proyección: {pick['projection']:.2f}\n"
 
     texto += (
-        f"Cuota: {pick['odd']:.2f}\n"
-        f"EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
-        f"Score: {pick.get('score', 0.0):.1f}\n"
-        f"Confianza: {pick['confidence']}/100\n"
-        f"Stake: {pick['stake']}\n"
-        f"Estado: pendiente\n"
-        f"Razón: {pick['reason']}\n"
+        f"🎲 Stake: {pick['stake']}/5\n"
+        f"📊 Confianza: {pick['confidence']}%\n"
+        f"⭐ Nivel: {level}\n"
+        f"📉 EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"Boss Odds MX\n"
     )
 
     return texto[:4000]
@@ -334,36 +354,117 @@ def _replace_status(text, new_status_label):
         return re.sub(r"Estado:\s*.*", f"Estado: {new_status_label}", text, count=1)
     return text + f"\n\nEstado: {new_status_label}"
 
-def _is_reasonable_total_odd(odd):
-    try:
-        odd = float(odd)
-        return 1.20 <= odd <= 3.20
-    except Exception:
-        return False
+def _build_vip_text():
+    return (
+        "👑 BOSS ODDS VIP\n\n"
+        "Planes de membresía:\n\n"
+        "1 mes: $500 MXN\n"
+        "3 meses: $900 MXN\n"
+        "12 meses: $2,000 MXN\n\n"
+        "Acceso a picks premium, análisis más profundo y selección diaria."
+    )
+
+def _build_rankings_text():
+    standings = obtener_standings(1)
+    if not standings:
+        return "No hay standings disponibles para rankings."
+
+    rows = []
+    for team_id, data in standings.items():
+        win_pct = _safe_float(data.get("win_pct"), 0.0)
+        games_played = _safe_int(data.get("games_played"), 1)
+        run_diff = _safe_float(data.get("run_diff"), 0.0)
+        pos = _safe_int(data.get("position"), 99)
+        score = (win_pct * 68.0) + ((run_diff / max(1, games_played)) * 7.0) + (max(0, 30 - pos) * 0.45)
+        rows.append((score, data))
+
+    rows.sort(key=lambda x: x[0], reverse=True)
+    top = rows[:10]
+
+    texto = "📈 POWER RANKINGS MLB\n\n"
+    for i, (score, data) in enumerate(top, start=1):
+        texto += (
+            f"{i}. {data.get('team_name')}\n"
+            f"   Win%: {(_safe_float(data.get('win_pct')) * 100):.1f}% | "
+            f"RD: {_safe_float(data.get('run_diff')):+.0f} | "
+            f"Score: {score:.1f}\n\n"
+        )
+
+    return texto[:4000]
+
+def _build_performance_text():
+    overall, by_market = resumen_historial()
+
+    if not overall:
+        return "Aún no hay picks cerrados para calcular ROI."
+
+    def _line(title, data):
+        settled = data["settled"]
+        wins = data["wins"]
+        losses = data["losses"]
+        pushes = data["pushes"]
+        staked = data["staked"]
+        profit = data["profit"]
+        winrate = (wins / settled * 100.0) if settled else 0.0
+        roi = (profit / staked * 100.0) if staked else 0.0
+        return (
+            f"{title}\n"
+            f"• Cerrados: {settled}\n"
+            f"• W-L-P: {wins}-{losses}-{pushes}\n"
+            f"• Win rate: {winrate:.1f}%\n"
+            f"• ROI: {roi:+.1f}%\n"
+        )
+
+    texto = "📊 RENDIMIENTO\n\n"
+    texto += _line("General", overall) + "\n"
+
+    for market in ["Moneyline", "Totales", "F5 Totales", "Run Line"]:
+        if market in by_market:
+            texto += _line(market, by_market[market]) + "\n"
+
+    return texto[:4000]
+
+def _games_text():
+    mlb = obtener_juegos(1)
+    texto = "📅 CARTELERA MLB\n\n"
+    texto += f"⚾ Juegos encontrados: {len(mlb)}\n\n"
+
+    for juego in mlb:
+        texto += f"• {juego['away']} vs {juego['home']}  (ID {juego['game_id']})\n"
+
+    return texto[:4000]
 
 # ==========================
-# MARKUP
+# KEYBOARDS
 # ==========================
 
 def main_menu_markup():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🎯 Picks", callback_data="menu:picks"),
-            InlineKeyboardButton("🗓 Juegos", callback_data="menu:analizar"),
+            InlineKeyboardButton("📅 Juegos", callback_data="menu:games"),
+        ],
+        [
+            InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
+            InlineKeyboardButton("📈 Rankings", callback_data="menu:rankings"),
         ],
         [
             InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
-            InlineKeyboardButton("📊 Resultados", callback_data="menu:resultados"),
+            InlineKeyboardButton("👑 VIP", callback_data="menu:vip"),
         ],
         [
-            InlineKeyboardButton("⚙️ Config", callback_data="menu:config"),
+            InlineKeyboardButton("⚙️ Configuración", callback_data="menu:config"),
         ]
     ])
 
 def picks_menu_markup():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("▶️ Generar (modo actual)", callback_data="gen:DEFAULT:0"),
+            InlineKeyboardButton("🔥 Pick del Día", callback_data="gen:DEFAULT:1"),
+        ],
+        [
+            InlineKeyboardButton("🥇 Top 3", callback_data="gen:DEFAULT:3"),
+            InlineKeyboardButton("⭐ Top 6", callback_data="gen:DEFAULT:6"),
         ],
         [
             InlineKeyboardButton("💰 Moneyline", callback_data="gen:ML:0"),
@@ -371,10 +472,6 @@ def picks_menu_markup():
         ],
         [
             InlineKeyboardButton("🏃 Run Line", callback_data="gen:RUNLINE:0"),
-            InlineKeyboardButton("🥇 Top 3", callback_data="gen:DEFAULT:3"),
-        ],
-        [
-            InlineKeyboardButton("⭐ Top 6", callback_data="gen:DEFAULT:6"),
             InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
         ]
     ])
@@ -388,7 +485,7 @@ def pick_result_markup(uid):
         ],
         [
             InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
-            InlineKeyboardButton("📊 Resultados", callback_data="menu:resultados"),
+            InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
         ]
     ])
 
@@ -724,7 +821,6 @@ def _parse_total_market(values):
 
         side = m.group(1).title()
         line = float(m.group(2))
-
         candidates.append({
             "line": line,
             "side": side,
@@ -1010,6 +1106,9 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
         if not odd:
             continue
 
+        if not _is_reasonable_runline_odd(odd):
+            continue
+
         nombre_norm = str(nombre).strip().lower()
 
         if nombre_norm == "home -1.5":
@@ -1180,38 +1279,6 @@ def resumen_historial():
 
     return overall, by_market
 
-def formatear_resumen():
-    overall, by_market = resumen_historial()
-
-    if not overall:
-        return "Aún no hay picks cerrados para calcular ROI."
-
-    def _line(title, data):
-        settled = data["settled"]
-        wins = data["wins"]
-        losses = data["losses"]
-        pushes = data["pushes"]
-        staked = data["staked"]
-        profit = data["profit"]
-        winrate = (wins / settled * 100.0) if settled else 0.0
-        roi = (profit / staked * 100.0) if staked else 0.0
-        return (
-            f"{title}\n"
-            f"• Cerrados: {settled}\n"
-            f"• W-L-P: {wins}-{losses}-{pushes}\n"
-            f"• Win rate: {winrate:.1f}%\n"
-            f"• ROI: {roi:+.1f}%\n"
-        )
-
-    texto = "📊 RESUMEN DE RESULTADOS\n\n"
-    texto += _line("General", overall) + "\n"
-
-    for market in ["Moneyline", "Totales", "F5 Totales", "Run Line"]:
-        if market in by_market:
-            texto += _line(market, by_market[market]) + "\n"
-
-    return texto[:4000]
-
 # ==========================
 # GENERACIÓN
 # ==========================
@@ -1291,6 +1358,7 @@ def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form
             if runline_pick:
                 candidatos.append(runline_pick)
 
+    # Un pick por partido, conservando el de mayor score
     mejores_por_partido = {}
     for pick in candidatos:
         partido = pick["matchup"]
@@ -1381,63 +1449,13 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
         )
 
 # ==========================
-# HANDLERS
+# MENÚS / CALLBACKS
 # ==========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     USER_SETTINGS[chat_id]
     await update.message.reply_text(_main_menu_text(chat_id), reply_markup=main_menu_markup())
-
-async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(_games_text(), reply_markup=main_menu_markup())
-
-async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    s = USER_SETTINGS[chat_id]
-    await enviar_picks(
-        chat_id=chat_id,
-        context=context,
-        market_filter="DEFAULT",
-        max_picks=s["max_picks"],
-        use_recent_form=s["use_recent_form"],
-        enable_runline=s["enable_runline"],
-        query=None
-    )
-
-async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(_build_history_text(), reply_markup=main_menu_markup())
-
-async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(formatear_resumen(), reply_markup=main_menu_markup())
-
-async def resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2:
-        await update.message.reply_text("Uso: /resultado <uid> <win|loss|push>")
-        return
-
-    uid = context.args[0].strip()
-    result = context.args[1].strip().lower()
-
-    if result not in {"win", "loss", "push"}:
-        await update.message.reply_text("Resultado inválido. Usa: win, loss o push.")
-        return
-
-    updated = marcar_resultado(uid, result)
-
-    if not updated:
-        await update.message.reply_text(f"No encontré un pick con UID: {uid}")
-        return
-
-    await update.message.reply_text(
-        f"Actualizado:\n"
-        f"UID: {uid}\n"
-        f"Pick: {updated.get('pick')}\n"
-        f"Estado: {result}",
-        reply_markup=main_menu_markup()
-    )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1455,9 +1473,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(_picks_menu_text(chat_id), reply_markup=picks_menu_markup())
         return
 
-    if data == "menu:analizar":
+    if data == "menu:games":
         await query.answer()
         await query.edit_message_text(_games_text(), reply_markup=main_menu_markup())
+        return
+
+    if data == "menu:rendimiento":
+        await query.answer()
+        await query.edit_message_text(_build_performance_text(), reply_markup=main_menu_markup())
+        return
+
+    if data == "menu:rankings":
+        await query.answer()
+        await query.edit_message_text(_build_rankings_text(), reply_markup=main_menu_markup())
         return
 
     if data == "menu:historial":
@@ -1465,9 +1493,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(_build_history_text(), reply_markup=main_menu_markup())
         return
 
-    if data == "menu:resultados":
+    if data == "menu:vip":
         await query.answer()
-        await query.edit_message_text(formatear_resumen(), reply_markup=main_menu_markup())
+        await query.edit_message_text(_build_vip_text(), reply_markup=main_menu_markup())
         return
 
     if data == "menu:config":
@@ -1551,12 +1579,6 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("analizar", analizar))
-    app.add_handler(CommandHandler("picks", picks))
-    app.add_handler(CommandHandler("historial", historial))
-    app.add_handler(CommandHandler("resultado", resultado))
-    app.add_handler(CommandHandler("resumen", resumen))
-
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     logging.info("🤖 Boss Odds iniciado")
