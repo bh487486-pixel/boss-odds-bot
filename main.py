@@ -334,6 +334,13 @@ def _replace_status(text, new_status_label):
         return re.sub(r"Estado:\s*.*", f"Estado: {new_status_label}", text, count=1)
     return text + f"\n\nEstado: {new_status_label}"
 
+def _is_reasonable_total_odd(odd):
+    try:
+        odd = float(odd)
+        return 1.20 <= odd <= 3.20
+    except Exception:
+        return False
+
 # ==========================
 # MARKUP
 # ==========================
@@ -705,7 +712,7 @@ def obtener_odds(game_id, league_id):
         return []
 
 def _parse_total_market(values):
-    lines = {}
+    candidates = []
 
     for v in values or []:
         label = str(v.get("value", "")).strip()
@@ -717,23 +724,44 @@ def _parse_total_market(values):
 
         side = m.group(1).title()
         line = float(m.group(2))
-        lines.setdefault(line, {})[side] = odd
 
-    complete = [
-        (line, odds)
-        for line, odds in lines.items()
-        if "Over" in odds and "Under" in odds
-    ]
+        candidates.append({
+            "line": line,
+            "side": side,
+            "odd": odd
+        })
+
+    if not candidates:
+        return None
+
+    grouped = {}
+    for c in candidates:
+        grouped.setdefault(c["line"], {})[c["side"]] = c["odd"]
+
+    complete = []
+    for line, odds in grouped.items():
+        if "Over" in odds and "Under" in odds:
+            complete.append((line, odds["Over"], odds["Under"]))
 
     if not complete:
         return None
 
-    line, odds = min(complete, key=lambda x: abs(x[0] - 8.5))
+    sane = [
+        item for item in complete
+        if _is_reasonable_total_odd(item[1]) and _is_reasonable_total_odd(item[2])
+    ]
+
+    pool = sane if sane else complete
+    line, over_odd, under_odd = min(pool, key=lambda x: abs(x[0] - 8.5))
+
+    logging.info(
+        f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}"
+    )
 
     return {
         "line": line,
-        "over": odds["Over"],
-        "under": odds["Under"]
+        "over": over_odd,
+        "under": under_odd
     }
 
 def extraer_mercados_odds(odds_response):
@@ -891,6 +919,12 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
     under_odd = market.get("under")
 
     if line is None or not over_odd or not under_odd:
+        return None
+
+    if not _is_reasonable_total_odd(over_odd) or not _is_reasonable_total_odd(under_odd):
+        logging.info(
+            f"[TOTALS DEBUG] descartado {juego['partido']} {market_name} line={line} over={over_odd} under={under_odd}"
+        )
         return None
 
     home_for = _blend(
