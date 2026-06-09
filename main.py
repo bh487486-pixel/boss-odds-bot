@@ -1,6 +1,7 @@
 import os
 import re
 import math
+import time
 import requests
 import logging
 
@@ -31,7 +32,7 @@ SEASON = 2026
 BOOKMAKER_ID = 4  # Pinnacle
 MIN_CONFIDENCE = 55
 MAX_PICKS = 6
-MAX_GAMES_TO_ANALYZE = 5
+MAX_GAMES_TO_ANALYZE = 1  # solo 1 juego MLB para probar
 
 # ==========================
 # CACHES
@@ -80,6 +81,30 @@ def _first_dict(response):
         first = response[0]
         return first if isinstance(first, dict) else {}
     return response if isinstance(response, dict) else {}
+
+def _fallback_stats_from_standing(standing):
+    if not standing:
+        return {}
+
+    return {
+        "team_id": standing.get("team_id"),
+        "team_name": standing.get("team_name"),
+        "games_played_all": standing.get("games_played", 0),
+        "games_played_home": 0,
+        "games_played_away": 0,
+        "win_pct_all": standing.get("win_pct", 0.0),
+        "win_pct_home": standing.get("win_pct", 0.0),
+        "win_pct_away": standing.get("win_pct", 0.0),
+        "loss_pct_all": standing.get("loss_pct", 0.0),
+        "loss_pct_home": 0.0,
+        "loss_pct_away": 0.0,
+        "runs_for_all": standing.get("points_for", 0.0) / max(1, standing.get("games_played", 1)),
+        "runs_for_home": standing.get("points_for", 0.0) / max(1, standing.get("games_played", 1)),
+        "runs_for_away": standing.get("points_for", 0.0) / max(1, standing.get("games_played", 1)),
+        "runs_against_all": standing.get("points_against", 0.0) / max(1, standing.get("games_played", 1)),
+        "runs_against_home": standing.get("points_against", 0.0) / max(1, standing.get("games_played", 1)),
+        "runs_against_away": standing.get("points_against", 0.0) / max(1, standing.get("games_played", 1)),
+    }
 
 # ==========================
 # API SPORTS
@@ -164,65 +189,65 @@ def obtener_estadisticas_equipo(team_id, league_id):
         "team": team_id
     }
 
-    try:
-        r = requests.get(
-            f"{BASE_URL}/teams",
-            headers=_headers(),
-            params=params,
-            timeout=30
-        )
-        r.raise_for_status()
+    for intento in range(3):
+        try:
+            r = requests.get(
+                f"{BASE_URL}/teams",
+                headers=_headers(),
+                params=params,
+                timeout=30
+            )
+            r.raise_for_status()
 
-        raw = r.json().get("response", {})
-        data = _first_dict(raw)
+            raw = r.json().get("response", {})
+            data = _first_dict(raw)
 
-        logging.info(
-            f"TEAM {team_id} league={league_id} "
-            f"type(raw)={type(raw)} "
-            f"type(data)={type(data)} "
-            f"keys={list(data.keys()) if isinstance(data, dict) else 'NO_DICT'}"
-        )
+            logging.info(
+                f"TEAM {team_id} league={league_id} "
+                f"type(raw)={type(raw)} "
+                f"type(data)={type(data)} "
+                f"keys={list(data.keys()) if isinstance(data, dict) else 'NO_DICT'}"
+            )
 
-        if not data:
-            return {}
+            if not data:
+                time.sleep(1.5)
+                continue
 
-        games = data.get("games", {})
-        wins = games.get("wins", {})
-        loses = games.get("loses", {}) or games.get("losses", {})
-        points = data.get("points", {})
-        points_for = points.get("for", {})
-        points_against = points.get("against", {})
+            games = data.get("games", {})
+            wins = games.get("wins", {})
+            loses = games.get("loses", {}) or games.get("losses", {})
+            points = data.get("points", {})
+            points_for = points.get("for", {})
+            points_against = points.get("against", {})
 
-        stats = {
-            "team_id": team_id,
-            "team_name": data.get("team", {}).get("name"),
-            "games_played_all": _safe_int(games.get("played", {}).get("all")),
-            "games_played_home": _safe_int(games.get("played", {}).get("home")),
-            "games_played_away": _safe_int(games.get("played", {}).get("away")),
+            stats = {
+                "team_id": team_id,
+                "team_name": data.get("team", {}).get("name"),
+                "games_played_all": _safe_int(games.get("played", {}).get("all")),
+                "games_played_home": _safe_int(games.get("played", {}).get("home")),
+                "games_played_away": _safe_int(games.get("played", {}).get("away")),
+                "win_pct_all": _safe_float(wins.get("all", {}).get("percentage")),
+                "win_pct_home": _safe_float(wins.get("home", {}).get("percentage")),
+                "win_pct_away": _safe_float(wins.get("away", {}).get("percentage")),
+                "loss_pct_all": _safe_float(loses.get("all", {}).get("percentage")),
+                "loss_pct_home": _safe_float(loses.get("home", {}).get("percentage")),
+                "loss_pct_away": _safe_float(loses.get("away", {}).get("percentage")),
+                "runs_for_all": _safe_float(points_for.get("average", {}).get("all")),
+                "runs_for_home": _safe_float(points_for.get("average", {}).get("home")),
+                "runs_for_away": _safe_float(points_for.get("average", {}).get("away")),
+                "runs_against_all": _safe_float(points_against.get("average", {}).get("all")),
+                "runs_against_home": _safe_float(points_against.get("average", {}).get("home")),
+                "runs_against_away": _safe_float(points_against.get("average", {}).get("away")),
+            }
 
-            "win_pct_all": _safe_float(wins.get("all", {}).get("percentage")),
-            "win_pct_home": _safe_float(wins.get("home", {}).get("percentage")),
-            "win_pct_away": _safe_float(wins.get("away", {}).get("percentage")),
+            STATS_CACHE[key] = stats
+            return stats
 
-            "loss_pct_all": _safe_float(loses.get("all", {}).get("percentage")),
-            "loss_pct_home": _safe_float(loses.get("home", {}).get("percentage")),
-            "loss_pct_away": _safe_float(loses.get("away", {}).get("percentage")),
+        except Exception as e:
+            logging.error(f"Error stats team={team_id} league={league_id} intento={intento+1}: {e}")
+            time.sleep(1.5)
 
-            "runs_for_all": _safe_float(points_for.get("average", {}).get("all")),
-            "runs_for_home": _safe_float(points_for.get("average", {}).get("home")),
-            "runs_for_away": _safe_float(points_for.get("average", {}).get("away")),
-
-            "runs_against_all": _safe_float(points_against.get("average", {}).get("all")),
-            "runs_against_home": _safe_float(points_against.get("average", {}).get("home")),
-            "runs_against_away": _safe_float(points_against.get("average", {}).get("away")),
-        }
-
-        STATS_CACHE[key] = stats
-        return stats
-
-    except Exception as e:
-        logging.error(f"Error stats team={team_id} league={league_id}: {e}")
-        return {}
+    return {}
 
 
 def obtener_standings(league_id):
@@ -539,7 +564,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Bienvenido a Boss Odds MX\n\n"
         "Comandos disponibles:\n"
-        "/analizar - Muestra los juegos MLB del día\n"
+        "/analizar - Muestra los juegos del día\n"
         "/picks - Genera los picks MLB"
     )
 
@@ -580,12 +605,18 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         home_stats = obtener_estadisticas_equipo(juego["home_team_id"], league_id)
         away_stats = obtener_estadisticas_equipo(juego["away_team_id"], league_id)
 
+        home_standing = standings.get(juego["home_team_id"])
+        away_standing = standings.get(juego["away_team_id"])
+
+        # respaldo si la API tarda o devuelve vacío
+        if not home_stats:
+            home_stats = _fallback_stats_from_standing(home_standing)
+        if not away_stats:
+            away_stats = _fallback_stats_from_standing(away_standing)
+
         if not home_stats or not away_stats:
             logging.info(f"Skipping stats-empty game: {juego['partido']} league={league_id}")
             continue
-
-        home_standing = standings.get(juego["home_team_id"])
-        away_standing = standings.get(juego["away_team_id"])
 
         odds_response = obtener_odds(juego["game_id"], league_id)
         markets = extraer_mercados_odds(odds_response)
