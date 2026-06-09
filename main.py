@@ -25,7 +25,6 @@ BASE_URL = "https://v1.baseball.api-sports.io"
 # ==========================
 
 def obtener_juegos(league_id):
-
     headers = {
         "x-apisports-key": API_KEY
     }
@@ -36,7 +35,6 @@ def obtener_juegos(league_id):
     juegos = []
 
     for fecha in [fecha1, fecha2]:
-
         params = {
             "league": league_id,
             "season": 2026,
@@ -44,7 +42,6 @@ def obtener_juegos(league_id):
         }
 
         try:
-
             r = requests.get(
                 f"{BASE_URL}/games",
                 headers=headers,
@@ -53,11 +50,9 @@ def obtener_juegos(league_id):
             )
 
             r.raise_for_status()
-
             data = r.json()
 
             for game in data.get("response", []):
-
                 status = game.get("status", {}).get("short")
 
                 if status != "NS":
@@ -74,18 +69,12 @@ def obtener_juegos(league_id):
                 partido = f"{away} vs {home}"
 
                 existe = False
-
                 for j in juegos:
-
-                    if (
-                        j["home"] == home and
-                        j["away"] == away
-                    ):
+                    if j["game_id"] == game_id:
                         existe = True
                         break
 
                 if not existe:
-
                     juegos.append({
                         "game_id": game_id,
                         "home_team_id": home_team_id,
@@ -96,7 +85,6 @@ def obtener_juegos(league_id):
                     })
 
         except Exception as e:
-
             logging.error(f"Error API ({fecha}): {e}")
 
     return juegos
@@ -106,7 +94,6 @@ def obtener_juegos(league_id):
 # ==========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await update.message.reply_text(
         "👋 Bienvenido a Boss Odds MX\n\n"
         "Comandos disponibles:\n"
@@ -114,7 +101,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     mensaje = await update.message.reply_text(
         "⏳ Analizando jornada..."
     )
@@ -125,9 +111,7 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = "📊 JUEGOS ENCONTRADOS\n\n"
 
     texto += f"⚾ MLB ({len(mlb)})\n\n"
-
     for juego in mlb:
-
         texto += (
             f"🆔 Juego: {juego['game_id']}\n"
             f"🏠 Home ID: {juego['home_team_id']}\n"
@@ -136,9 +120,7 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     texto += f"\n⚾ LMB ({len(lmb)})\n\n"
-
     for juego in lmb:
-
         texto += (
             f"🆔 Juego: {juego['game_id']}\n"
             f"🏠 Home ID: {juego['home_team_id']}\n"
@@ -153,15 +135,13 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================
 
 def main():
-
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(
-        CommandHandler("start", start)
-    )
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("analizar", analizar))
 
-    app.add_handler(
-        CommandHandler("analizar", analizar)
-    )
+    logging.info("🤖 Boss Odds iniciado")
+    app.run_polling()
 
-    logging.info("🤖 Boss Odds iniciado
+if __name__ == "__main__":
+    main()
