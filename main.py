@@ -1,7 +1,6 @@
 import os
 import re
 import math
-import time
 import requests
 import logging
 
@@ -30,15 +29,13 @@ if not API_KEY:
 BASE_URL = "https://v1.baseball.api-sports.io"
 SEASON = 2026
 BOOKMAKER_ID = 4  # Pinnacle
-MIN_CONFIDENCE = 55
+MAX_GAMES_TO_ANALYZE = 5
 MAX_PICKS = 6
-MAX_GAMES_TO_ANALYZE = 1  # solo 1 juego MLB para probar
 
 # ==========================
 # CACHES
 # ==========================
 
-STATS_CACHE = {}
 STANDINGS_CACHE = {}
 ODDS_CACHE = {}
 
@@ -73,38 +70,6 @@ def _sigmoid(x):
         return 1.0 / (1.0 + math.exp(-x))
     except OverflowError:
         return 1.0 if x > 0 else 0.0
-
-def _first_dict(response):
-    if isinstance(response, list):
-        if not response:
-            return {}
-        first = response[0]
-        return first if isinstance(first, dict) else {}
-    return response if isinstance(response, dict) else {}
-
-def _fallback_stats_from_standing(standing):
-    if not standing:
-        return {}
-
-    return {
-        "team_id": standing.get("team_id"),
-        "team_name": standing.get("team_name"),
-        "games_played_all": standing.get("games_played", 0),
-        "games_played_home": 0,
-        "games_played_away": 0,
-        "win_pct_all": standing.get("win_pct", 0.0),
-        "win_pct_home": standing.get("win_pct", 0.0),
-        "win_pct_away": standing.get("win_pct", 0.0),
-        "loss_pct_all": standing.get("loss_pct", 0.0),
-        "loss_pct_home": 0.0,
-        "loss_pct_away": 0.0,
-        "runs_for_all": standing.get("points_for", 0.0) / max(1, standing.get("games_played", 1)),
-        "runs_for_home": standing.get("points_for", 0.0) / max(1, standing.get("games_played", 1)),
-        "runs_for_away": standing.get("points_for", 0.0) / max(1, standing.get("games_played", 1)),
-        "runs_against_all": standing.get("points_against", 0.0) / max(1, standing.get("games_played", 1)),
-        "runs_against_home": standing.get("points_against", 0.0) / max(1, standing.get("games_played", 1)),
-        "runs_against_away": standing.get("points_against", 0.0) / max(1, standing.get("games_played", 1)),
-    }
 
 # ==========================
 # API SPORTS
@@ -178,78 +143,6 @@ def obtener_juegos(league_id):
     return juegos
 
 
-def obtener_estadisticas_equipo(team_id, league_id):
-    key = (league_id, team_id)
-    if key in STATS_CACHE:
-        return STATS_CACHE[key]
-
-    params = {
-        "league": league_id,
-        "season": SEASON,
-        "team": team_id
-    }
-
-    for intento in range(3):
-        try:
-            r = requests.get(
-                f"{BASE_URL}/teams",
-                headers=_headers(),
-                params=params,
-                timeout=30
-            )
-            r.raise_for_status()
-
-            raw = r.json().get("response", {})
-            data = _first_dict(raw)
-
-            logging.info(
-                f"TEAM {team_id} league={league_id} "
-                f"type(raw)={type(raw)} "
-                f"type(data)={type(data)} "
-                f"keys={list(data.keys()) if isinstance(data, dict) else 'NO_DICT'}"
-            )
-
-            if not data:
-                time.sleep(1.5)
-                continue
-
-            games = data.get("games", {})
-            wins = games.get("wins", {})
-            loses = games.get("loses", {}) or games.get("losses", {})
-            points = data.get("points", {})
-            points_for = points.get("for", {})
-            points_against = points.get("against", {})
-
-            stats = {
-                "team_id": team_id,
-                "team_name": data.get("team", {}).get("name"),
-                "games_played_all": _safe_int(games.get("played", {}).get("all")),
-                "games_played_home": _safe_int(games.get("played", {}).get("home")),
-                "games_played_away": _safe_int(games.get("played", {}).get("away")),
-                "win_pct_all": _safe_float(wins.get("all", {}).get("percentage")),
-                "win_pct_home": _safe_float(wins.get("home", {}).get("percentage")),
-                "win_pct_away": _safe_float(wins.get("away", {}).get("percentage")),
-                "loss_pct_all": _safe_float(loses.get("all", {}).get("percentage")),
-                "loss_pct_home": _safe_float(loses.get("home", {}).get("percentage")),
-                "loss_pct_away": _safe_float(loses.get("away", {}).get("percentage")),
-                "runs_for_all": _safe_float(points_for.get("average", {}).get("all")),
-                "runs_for_home": _safe_float(points_for.get("average", {}).get("home")),
-                "runs_for_away": _safe_float(points_for.get("average", {}).get("away")),
-                "runs_against_all": _safe_float(points_against.get("average", {}).get("all")),
-                "runs_against_home": _safe_float(points_against.get("average", {}).get("home")),
-                "runs_against_away": _safe_float(points_against.get("average", {}).get("away")),
-            }
-
-            STATS_CACHE[key] = stats
-            return stats
-
-        except Exception as e:
-            logging.error(f"Error stats team={team_id} league={league_id} intento={intento+1}: {e}")
-            time.sleep(1.5)
-
-    return {}
-
-
 def obtener_standings(league_id):
     if league_id in STANDINGS_CACHE:
         return STANDINGS_CACHE[league_id]
@@ -286,6 +179,7 @@ def obtener_standings(league_id):
 
             points_for = _safe_float(points.get("for"))
             points_against = _safe_float(points.get("against"))
+            games_played = _safe_int(games.get("played"))
 
             standings[team_id] = {
                 "team_id": team_id,
@@ -293,10 +187,12 @@ def obtener_standings(league_id):
                 "position": _safe_int(row.get("position"), 99),
                 "win_pct": _safe_float(win_block.get("percentage")),
                 "loss_pct": _safe_float(lose_block.get("percentage")),
-                "games_played": _safe_int(games.get("played")),
+                "games_played": games_played,
                 "points_for": points_for,
                 "points_against": points_against,
-                "run_diff": points_for - points_against
+                "run_diff": points_for - points_against,
+                "runs_for_pg": points_for / max(1, games_played),
+                "runs_against_pg": points_against / max(1, games_played),
             }
 
         STANDINGS_CACHE[league_id] = standings
@@ -421,71 +317,53 @@ def extraer_mercados_odds(odds_response):
     return markets
 
 # ==========================
-# MODELO DE SCORE
+# MODELO
 # ==========================
 
-def calcular_fuerza_equipo(stats, standing, es_local):
-    if not stats:
+def calcular_fuerza_equipo(standing):
+    if not standing:
         return 0.0
 
-    win_pct_all = stats.get("win_pct_all", 0.0)
-    loc_pct = stats.get("win_pct_home" if es_local else "win_pct_away", 0.0)
-    if loc_pct <= 0:
-        loc_pct = win_pct_all
+    win_pct = standing.get("win_pct", 0.0)
+    run_diff_pg = standing.get("run_diff", 0.0) / max(1, standing.get("games_played", 1))
+    position = standing.get("position", 99)
 
-    if standing:
-        run_diff = standing.get("run_diff", 0.0)
-    else:
-        run_diff = stats.get("runs_for_all", 0.0) - stats.get("runs_against_all", 0.0)
-
-    pos_bonus = 0.0
-    if standing:
-        pos = _safe_int(standing.get("position"), 99)
-        pos_bonus = max(0, 30 - pos) * 0.35
-
-    strength = (win_pct_all * 45.0) + (loc_pct * 25.0) + (run_diff * 0.20) + pos_bonus
-    return strength
+    # Más alto si gana más, tiene mejor diferencial y mejor posición
+    return (win_pct * 70.0) + (run_diff_pg * 8.0) + (max(0, 30 - position) * 0.5)
 
 
-def crear_pick_moneyline(juego, stats_home, stats_away, standing_home, standing_away, markets):
+def pick_moneyline(juego, standing_home, standing_away, markets):
     ml = markets.get("moneyline")
     if not ml:
         return None
 
     home_odd = ml.get("home")
     away_odd = ml.get("away")
-
     if not home_odd or not away_odd:
         return None
 
-    home_strength = calcular_fuerza_equipo(stats_home, standing_home, True)
-    away_strength = calcular_fuerza_equipo(stats_away, standing_away, False)
+    home_strength = calcular_fuerza_equipo(standing_home)
+    away_strength = calcular_fuerza_equipo(standing_away)
 
     gap = home_strength - away_strength
-    prob_home = _sigmoid(gap / 5.5)
+    prob_home = _sigmoid(gap / 8.0)
     prob_away = 1.0 - prob_home
 
     home_edge = prob_home - (1.0 / home_odd)
     away_edge = prob_away - (1.0 / away_odd)
 
-    if home_edge <= 0.01 and away_edge <= 0.01:
-        return None
-
     if home_edge >= away_edge:
         pick_team = juego["home"]
         odd = home_odd
         edge = home_edge
+        confidence = int(min(95, max(45, 50 + abs(gap) * 1.2 + edge * 100)))
         reason = "Mejor win%, diferencial y localía."
     else:
         pick_team = juego["away"]
         odd = away_odd
         edge = away_edge
-        reason = "Mejor win%, diferencial y rendimiento de visita."
-
-    confidence = int(min(95, max(50, 55 + abs(gap) * 1.3 + edge * 120)))
-
-    if confidence < MIN_CONFIDENCE:
-        return None
+        confidence = int(min(95, max(45, 50 + abs(gap) * 1.2 + edge * 100)))
+        reason = "Mejor win%, diferencial y visita."
 
     return {
         "league_name": juego["league_name"],
@@ -500,7 +378,7 @@ def crear_pick_moneyline(juego, stats_home, stats_away, standing_home, standing_
     }
 
 
-def crear_pick_total(juego, stats_home, stats_away, market, market_name):
+def pick_total(juego, standing_home, standing_away, market, market_name):
     if not market:
         return None
 
@@ -511,10 +389,10 @@ def crear_pick_total(juego, stats_home, stats_away, market, market_name):
     if line is None or not over_odd or not under_odd:
         return None
 
-    home_for = stats_home.get("runs_for_home", 0.0) or stats_home.get("runs_for_all", 0.0)
-    home_against = stats_home.get("runs_against_home", 0.0) or stats_home.get("runs_against_all", 0.0)
-    away_for = stats_away.get("runs_for_away", 0.0) or stats_away.get("runs_for_all", 0.0)
-    away_against = stats_away.get("runs_against_away", 0.0) or stats_away.get("runs_against_all", 0.0)
+    home_for = standing_home.get("runs_for_pg", 0.0) if standing_home else 0.0
+    home_against = standing_home.get("runs_against_pg", 0.0) if standing_home else 0.0
+    away_for = standing_away.get("runs_for_pg", 0.0) if standing_away else 0.0
+    away_against = standing_away.get("runs_against_pg", 0.0) if standing_away else 0.0
 
     proj_home = (home_for + away_against) / 2.0
     proj_away = (away_for + home_against) / 2.0
@@ -522,27 +400,20 @@ def crear_pick_total(juego, stats_home, stats_away, market, market_name):
 
     gap = proj_total - line
 
-    if abs(gap) < 0.35:
+    if abs(gap) < 0.25:
         return None
 
     if gap > 0:
         pick_side = "Over"
         odd = over_odd
-        model_prob = _sigmoid(gap * 1.8)
+        model_prob = _sigmoid(gap * 1.9)
     else:
         pick_side = "Under"
         odd = under_odd
-        model_prob = _sigmoid((-gap) * 1.8)
+        model_prob = _sigmoid((-gap) * 1.9)
 
     edge = model_prob - (1.0 / odd)
-
-    if edge <= 0.01:
-        return None
-
-    confidence = int(min(95, max(50, 55 + abs(gap) * 18 + edge * 120)))
-
-    if confidence < MIN_CONFIDENCE:
-        return None
+    confidence = int(min(95, max(45, 50 + abs(gap) * 16 + edge * 100)))
 
     return {
         "league_name": juego["league_name"],
@@ -565,7 +436,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Bienvenido a Boss Odds MX\n\n"
         "Comandos disponibles:\n"
         "/analizar - Muestra los juegos del día\n"
-        "/picks - Genera los picks MLB"
+        "/picks - Genera picks MLB"
     )
 
 
@@ -599,58 +470,23 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     candidatos = []
 
     for juego in juegos:
-        league_id = juego["league_id"]
-        standings = standings_mlb
+        home_standing = standings_mlb.get(juego["home_team_id"])
+        away_standing = standings_mlb.get(juego["away_team_id"])
 
-        home_stats = obtener_estadisticas_equipo(juego["home_team_id"], league_id)
-        away_stats = obtener_estadisticas_equipo(juego["away_team_id"], league_id)
-
-        home_standing = standings.get(juego["home_team_id"])
-        away_standing = standings.get(juego["away_team_id"])
-
-        # respaldo si la API tarda o devuelve vacío
-        if not home_stats:
-            home_stats = _fallback_stats_from_standing(home_standing)
-        if not away_stats:
-            away_stats = _fallback_stats_from_standing(away_standing)
-
-        if not home_stats or not away_stats:
-            logging.info(f"Skipping stats-empty game: {juego['partido']} league={league_id}")
-            continue
-
-        odds_response = obtener_odds(juego["game_id"], league_id)
+        odds_response = obtener_odds(juego["game_id"], 1)
         markets = extraer_mercados_odds(odds_response)
 
         logging.info(f"{juego['partido']} -> markets={list(markets.keys())}")
 
-        ml_pick = crear_pick_moneyline(
-            juego,
-            home_stats,
-            away_stats,
-            home_standing,
-            away_standing,
-            markets
-        )
+        ml_pick = pick_moneyline(juego, home_standing, away_standing, markets)
         if ml_pick:
             candidatos.append(ml_pick)
 
-        total_pick = crear_pick_total(
-            juego,
-            home_stats,
-            away_stats,
-            markets.get("total"),
-            "Totales"
-        )
+        total_pick = pick_total(juego, home_standing, away_standing, markets.get("total"), "Totales")
         if total_pick:
             candidatos.append(total_pick)
 
-        f5_pick = crear_pick_total(
-            juego,
-            home_stats,
-            away_stats,
-            markets.get("f5_total"),
-            "F5 Totales"
-        )
+        f5_pick = pick_total(juego, home_standing, away_standing, markets.get("f5_total"), "F5 Totales")
         if f5_pick:
             candidatos.append(f5_pick)
 
