@@ -27,9 +27,9 @@ if not API_KEY:
     raise ValueError("Falta BASEBALL_API_KEY en Render")
 
 BASE_URL = "https://v1.baseball.api-sports.io"
-SEASON = datetime.utcnow().year
+SEASON = 2026
 BOOKMAKER_ID = 4  # Pinnacle
-MIN_CONFIDENCE = 70
+MIN_CONFIDENCE = 55
 MAX_PICKS = 6
 
 # ==========================
@@ -289,15 +289,7 @@ def obtener_odds(game_id, league_id):
         return []
 
 
-def _parse_total_market(values, target_line):
-    """
-    Devuelve:
-    {
-        "line": 8.5,
-        "over": 1.91,
-        "under": 1.91
-    }
-    """
+def _parse_total_market(values):
     lines = {}
 
     for v in values or []:
@@ -321,7 +313,8 @@ def _parse_total_market(values, target_line):
     if not complete:
         return None
 
-    line, odds = min(complete, key=lambda x: abs(x[0] - target_line))
+    # Preferimos la línea más cercana a 8.5 si existe
+    line, odds = min(complete, key=lambda x: abs(x[0] - 8.5))
 
     return {
         "line": line,
@@ -331,14 +324,6 @@ def _parse_total_market(values, target_line):
 
 
 def extraer_mercados_odds(odds_response):
-    """
-    Devuelve:
-    {
-        "moneyline": {"home": 2.05, "away": 1.86},
-        "total": {"line": 8.5, "over": 1.91, "under": 1.91},
-        "f5_total": {"line": 4.5, "over": 1.87, "under": 1.95}
-    }
-    """
     if not odds_response:
         return {}
 
@@ -358,7 +343,6 @@ def extraer_mercados_odds(odds_response):
         bet_id = _safe_int(bet.get("id"))
         bet_name = str(bet.get("name", "")).strip()
 
-        # Moneyline / Home-Away
         if bet_id == 1 or bet_name == "Home/Away":
             vals = bet.get("values", [])
             home_odd = None
@@ -378,15 +362,13 @@ def extraer_mercados_odds(odds_response):
                     "away": away_odd
                 }
 
-        # Totales
         elif bet_id == 5 or bet_name == "Over/Under":
-            parsed = _parse_total_market(bet.get("values", []), 8.5)
+            parsed = _parse_total_market(bet.get("values", []))
             if parsed:
                 markets["total"] = parsed
 
-        # Totales 1st 5 innings
         elif bet_id == 6 or bet_name == "Over/Under (1st 5 Innings)":
-            parsed = _parse_total_market(bet.get("values", []), 4.5)
+            parsed = _parse_total_market(bet.get("values", []))
             if parsed:
                 markets["f5_total"] = parsed
 
@@ -405,7 +387,6 @@ def calcular_fuerza_equipo(stats, standing, es_local):
     if loc_pct <= 0:
         loc_pct = win_pct_all
 
-    run_diff = 0.0
     if standing:
         run_diff = standing.get("run_diff", 0.0)
     else:
@@ -416,7 +397,6 @@ def calcular_fuerza_equipo(stats, standing, es_local):
         pos = _safe_int(standing.get("position"), 99)
         pos_bonus = max(0, 30 - pos) * 0.35
 
-    # fuerza relativa
     strength = (win_pct_all * 45.0) + (loc_pct * 25.0) + (run_diff * 0.20) + pos_bonus
     return strength
 
@@ -442,7 +422,7 @@ def crear_pick_moneyline(juego, stats_home, stats_away, standing_home, standing_
     home_edge = prob_home - (1.0 / home_odd)
     away_edge = prob_away - (1.0 / away_odd)
 
-    if home_edge <= 0.02 and away_edge <= 0.02:
+    if home_edge <= 0.01 and away_edge <= 0.01:
         return None
 
     if home_edge >= away_edge:
@@ -496,7 +476,6 @@ def crear_pick_total(juego, stats_home, stats_away, market, market_name):
 
     gap = proj_total - line
 
-    # zona muerta: no vale la pena
     if abs(gap) < 0.35:
         return None
 
@@ -511,7 +490,7 @@ def crear_pick_total(juego, stats_home, stats_away, market, market_name):
 
     edge = model_prob - (1.0 / odd)
 
-    if edge <= 0.02:
+    if edge <= 0.01:
         return None
 
     confidence = int(min(95, max(50, 55 + abs(gap) * 18 + edge * 120)))
@@ -601,7 +580,8 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         odds_response = obtener_odds(juego["game_id"], league_id)
         markets = extraer_mercados_odds(odds_response)
 
-        # Moneyline
+        logging.info(f"{juego['partido']} -> markets={list(markets.keys())}")
+
         ml_pick = crear_pick_moneyline(
             juego,
             home_stats,
@@ -613,7 +593,6 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ml_pick:
             candidatos.append(ml_pick)
 
-        # Totales completos
         total_pick = crear_pick_total(
             juego,
             home_stats,
@@ -624,7 +603,6 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if total_pick:
             candidatos.append(total_pick)
 
-        # Totales F5
         f5_pick = crear_pick_total(
             juego,
             home_stats,
