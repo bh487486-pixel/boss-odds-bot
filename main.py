@@ -29,7 +29,7 @@ if not API_KEY:
 BASE_URL = "https://v1.baseball.api-sports.io"
 SEASON = 2026
 BOOKMAKER_ID = 4  # Pinnacle
-MAX_GAMES_TO_ANALYZE = 5
+MAX_GAMES_TO_ANALYZE = 15
 MAX_PICKS = 6
 
 # ==========================
@@ -328,7 +328,6 @@ def calcular_fuerza_equipo(standing):
     run_diff_pg = standing.get("run_diff", 0.0) / max(1, standing.get("games_played", 1))
     position = standing.get("position", 99)
 
-    # Más alto si gana más, tiene mejor diferencial y mejor posición
     return (win_pct * 70.0) + (run_diff_pg * 8.0) + (max(0, 30 - position) * 0.5)
 
 
@@ -356,13 +355,29 @@ def pick_moneyline(juego, standing_home, standing_away, markets):
         pick_team = juego["home"]
         odd = home_odd
         edge = home_edge
-        confidence = int(min(95, max(45, 50 + abs(gap) * 1.2 + edge * 100)))
+        confidence = int(
+            min(
+                88,
+                max(
+                    60,
+                    60 + abs(gap) * 0.8 + edge * 60
+                )
+            )
+        )
         reason = "Mejor win%, diferencial y localía."
     else:
         pick_team = juego["away"]
         odd = away_odd
         edge = away_edge
-        confidence = int(min(95, max(45, 50 + abs(gap) * 1.2 + edge * 100)))
+        confidence = int(
+            min(
+                88,
+                max(
+                    60,
+                    60 + abs(gap) * 0.8 + edge * 60
+                )
+            )
+        )
         reason = "Mejor win%, diferencial y visita."
 
     return {
@@ -413,7 +428,15 @@ def pick_total(juego, standing_home, standing_away, market, market_name):
         model_prob = _sigmoid((-gap) * 1.9)
 
     edge = model_prob - (1.0 / odd)
-    confidence = int(min(95, max(45, 50 + abs(gap) * 16 + edge * 100)))
+    confidence = int(
+        min(
+            85,
+            max(
+                60,
+                58 + abs(gap) * 10 + edge * 60
+            )
+        )
+    )
 
     return {
         "league_name": juego["league_name"],
@@ -482,13 +505,38 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ml_pick:
             candidatos.append(ml_pick)
 
-        total_pick = pick_total(juego, home_standing, away_standing, markets.get("total"), "Totales")
+        total_pick = pick_total(
+            juego,
+            home_standing,
+            away_standing,
+            markets.get("total"),
+            "Totales"
+        )
         if total_pick:
             candidatos.append(total_pick)
 
-        f5_pick = pick_total(juego, home_standing, away_standing, markets.get("f5_total"), "F5 Totales")
+        f5_pick = pick_total(
+            juego,
+            home_standing,
+            away_standing,
+            markets.get("f5_total"),
+            "F5 Totales"
+        )
         if f5_pick:
             candidatos.append(f5_pick)
+
+    # Eliminar picks repetidos del mismo partido, conservando el de mayor confianza
+    unicos = {}
+
+    for pick in candidatos:
+        partido = pick["matchup"]
+
+        if partido not in unicos:
+            unicos[partido] = pick
+        elif pick["confidence"] > unicos[partido]["confidence"]:
+            unicos[partido] = pick
+
+    candidatos = list(unicos.values())
 
     candidatos.sort(key=lambda x: x["confidence"], reverse=True)
     top = candidatos[:MAX_PICKS]
@@ -499,13 +547,29 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    def calcular_stake(confianza):
+        if confianza >= 85:
+            return 3
+        if confianza >= 75:
+            return 2
+        return 1
+
     texto = "🔥 TOP PICKS BOSS ODDS\n\n"
     texto += f"📊 MLB analizados: {len(juegos_mlb)}\n"
     texto += f"📈 Juegos usados en picks: {len(juegos)}\n"
     texto += f"📈 Candidatos detectados: {len(candidatos)}\n\n"
 
+    medallas = {
+        1: "🥇",
+        2: "🥈",
+        3: "🥉"
+    }
+
     for idx, pick in enumerate(top, start=1):
-        texto += f"#{idx} [{pick['league_name']}]\n"
+        stake = calcular_stake(pick["confidence"])
+        emoji = medallas.get(idx, "⭐")
+
+        texto += f"{emoji} PICK #{idx}\n"
         texto += f"⚾ {pick['matchup']}\n"
         texto += f"🎯 Mercado: {pick['market']}\n"
         texto += f"Pick: {pick['pick']}\n"
@@ -518,6 +582,7 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         texto += f"Cuota: {pick['odd']:.2f}\n"
         texto += f"Confianza: {pick['confidence']}/100\n"
+        texto += f"Stake: {stake}\n"
         texto += f"Razón: {pick['reason']}\n\n"
 
     await mensaje.edit_text(texto[:4000])
