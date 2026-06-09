@@ -22,6 +22,7 @@ logging.basicConfig(
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 API_KEY = os.getenv("BASEBALL_API_KEY")
+CHANNEL_ID_RAW = os.getenv("TELEGRAM_CHANNEL_ID") or os.getenv("CHANNEL_ID")
 
 if not TOKEN:
     raise ValueError("Falta TELEGRAM_TOKEN en Render")
@@ -39,6 +40,7 @@ FORM_LOOKBACK_DAYS = 30
 USE_RECENT_FORM_DEFAULT = True
 
 HISTORY_FILE = "picks_history.json"
+LAST_GENERATED_FILE = "last_generated.json"
 
 MARKET_FILTER_LABELS = {
     "ALL": "Todos",
@@ -51,7 +53,7 @@ MARKET_WEIGHTS = {
     "Moneyline": 1.00,
     "Totales": 0.97,
     "F5 Totales": 0.92,
-    "Run Line": 0.50,  # bajado para que no domine
+    "Run Line": 0.50,
 }
 
 DEFAULT_MAX_PER_MARKET = {
@@ -138,6 +140,22 @@ def cargar_historial():
 
 def guardar_historial(historial):
     _save_json(HISTORY_FILE, historial)
+
+def _load_last_generated_db():
+    data = _load_json(LAST_GENERATED_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+def _save_last_generated_db(data):
+    _save_json(LAST_GENERATED_FILE, data)
+
+def _store_last_generated(chat_id, payload):
+    db = _load_last_generated_db()
+    db[str(chat_id)] = payload
+    _save_last_generated_db(db)
+
+def _get_last_generated(chat_id):
+    db = _load_last_generated_db()
+    return db.get(str(chat_id))
 
 def _as_list(response):
     if isinstance(response, list):
@@ -232,6 +250,17 @@ def _is_reasonable_runline_odd(odd):
     except Exception:
         return False
 
+def _get_channel_chat_id():
+    if not CHANNEL_ID_RAW:
+        return None
+    raw = str(CHANNEL_ID_RAW).strip()
+    if raw.startswith("@"):
+        return raw
+    try:
+        return int(raw)
+    except Exception:
+        return raw
+
 # ==========================
 # TEXT BUILDERS
 # ==========================
@@ -253,7 +282,7 @@ def _picks_menu_text(chat_id):
         "🎯 CENTRO DE PICKS\n\n"
         f"Modo por defecto: {_filter_label(s['market_filter'])}\n"
         f"Top por defecto: {s['max_picks']}\n\n"
-        "Cada pick se envía en un mensaje separado."
+        "Genera picks por privado y luego publícalos al canal."
     )
 
 def _config_menu_text(chat_id):
@@ -345,6 +374,43 @@ def _build_pick_card(pick, idx):
         f"Boss Odds MX\n"
     )
 
+    return texto[:4000]
+
+def _build_channel_summary_text(payload):
+    meta = payload["meta"]
+    picks = payload["picks"]
+    settings = payload["settings"]
+    market_filter = payload["market_filter"]
+    max_picks = payload["max_picks"]
+
+    texto = "🔥 BOSS ODDS MX | TOP PICKS\n\n"
+    texto += f"🎛 Filtro: {_filter_label(market_filter)}\n"
+    texto += f"📊 MLB analizados: {meta['analizados']}\n"
+    texto += f"📈 Candidatos: {meta['candidatos']}\n"
+    texto += f"🎯 Publicados: {len(picks)}\n"
+    texto += f"🔢 Top: {max_picks}\n"
+    texto += f"🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+    texto += f"Forma reciente: {'ON' if settings['use_recent_form'] else 'OFF'} | Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
+    return texto[:4000]
+
+def _build_channel_pick_text(pick, idx):
+    level = _confidence_label(pick["confidence"])
+    texto = (
+        f"{_pick_header(idx)}\n"
+        f"⚾ {pick['matchup']}\n"
+        f"✅ {pick['pick']}\n"
+        f"🎯 Mercado: {pick['market']}\n"
+        f"💰 Cuota: {pick['odd']:.2f}\n"
+    )
+    if pick.get("line") is not None:
+        texto += f"📏 Línea: {pick['line']:.1f}\n"
+    texto += (
+        f"🎲 Stake: {pick['stake']}/5\n"
+        f"📊 Confianza: {pick['confidence']}% ({level})\n"
+        f"📉 EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"Boss Odds MX VIP\n"
+    )
     return texto[:4000]
 
 def _replace_status(text, new_status_label):
@@ -472,6 +538,19 @@ def picks_menu_markup():
         ],
         [
             InlineKeyboardButton("🏃 Run Line", callback_data="gen:RUNLINE:0"),
+            InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
+        ]
+    ])
+
+def publish_summary_markup():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
+        ],
+        [
             InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
         ]
     ])
@@ -1358,7 +1437,6 @@ def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form
             if runline_pick:
                 candidatos.append(runline_pick)
 
-    # Un pick por partido, conservando el de mayor score
     mejores_por_partido = {}
     for pick in candidatos:
         partido = pick["matchup"]
@@ -1427,18 +1505,28 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
 
     guardar_picks_en_historial(picks_guardados)
 
+    payload = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "market_filter": market_filter if market_filter != "DEFAULT" else settings["market_filter"],
+        "max_picks": max_picks if max_picks > 0 else settings["max_picks"],
+        "meta": meta,
+        "settings": settings,
+        "picks": picks_guardados,
+    }
+    _store_last_generated(chat_id, payload)
+
     summary_text = _build_summary_text(
         meta,
         picks_guardados,
-        market_filter if market_filter != "DEFAULT" else settings["market_filter"],
-        max_picks if max_picks > 0 else settings["max_picks"],
+        payload["market_filter"],
+        payload["max_picks"],
         settings
     )
 
     if query is not None:
-        await query.edit_message_text(summary_text, reply_markup=main_menu_markup())
+        await query.edit_message_text(summary_text, reply_markup=publish_summary_markup())
     else:
-        await context.bot.send_message(chat_id=chat_id, text=summary_text, reply_markup=main_menu_markup())
+        await context.bot.send_message(chat_id=chat_id, text=summary_text, reply_markup=publish_summary_markup())
 
     for idx, pick in enumerate(picks_guardados, start=1):
         texto = _build_pick_card(pick, idx)
@@ -1447,6 +1535,31 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
             text=texto,
             reply_markup=pick_result_markup(pick["uid"])
         )
+
+async def publish_last_to_channel(chat_id, context):
+    payload = _get_last_generated(chat_id)
+    if not payload or not payload.get("picks"):
+        return False, "No hay picks recientes para publicar. Genera primero un Top 3 o Top 6."
+
+    channel_id = _get_channel_chat_id()
+    if channel_id is None:
+        return False, "Falta configurar TELEGRAM_CHANNEL_ID en Render."
+
+    try:
+        summary = _build_channel_summary_text(payload)
+        await context.bot.send_message(chat_id=channel_id, text=summary)
+
+        for idx, pick in enumerate(payload["picks"], start=1):
+            texto = _build_channel_pick_text(pick, idx)
+            await context.bot.send_message(chat_id=channel_id, text=texto)
+
+        payload["published_at"] = datetime.utcnow().isoformat()
+        _store_last_generated(chat_id, payload)
+
+        return True, f"Publicado en el canal: {len(payload['picks'])} picks."
+    except Exception as e:
+        logging.error(f"Error publicando al canal: {e}")
+        return False, f"No se pudo publicar en el canal: {e}"
 
 # ==========================
 # MENÚS / CALLBACKS
@@ -1548,6 +1661,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             use_recent_form=settings["use_recent_form"],
             enable_runline=settings["enable_runline"],
             query=query
+        )
+        return
+
+    if data == "publish:last":
+        await query.answer("Publicando al canal...", show_alert=False)
+        ok, msg = await publish_last_to_channel(chat_id, context)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=("✅ " + msg) if ok else ("⚠️ " + msg),
+            reply_markup=main_menu_markup()
         )
         return
 
