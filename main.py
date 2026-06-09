@@ -31,6 +31,7 @@ SEASON = 2026
 BOOKMAKER_ID = 4  # Pinnacle
 MIN_CONFIDENCE = 55
 MAX_PICKS = 6
+MAX_GAMES_TO_ANALYZE = 5
 
 # ==========================
 # CACHES
@@ -135,7 +136,7 @@ def obtener_juegos(league_id):
 
                 juegos.append({
                     "league_id": league_id,
-                    "league_name": "MLB" if league_id == 1 else "LMB",
+                    "league_name": "MLB",
                     "game_id": game_id,
                     "home_team_id": home_team_id,
                     "away_team_id": away_team_id,
@@ -538,30 +539,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Bienvenido a Boss Odds MX\n\n"
         "Comandos disponibles:\n"
-        "/analizar - Muestra los juegos del día\n"
-        "/picks - Genera los picks de MLB y LMB"
+        "/analizar - Muestra los juegos MLB del día\n"
+        "/picks - Genera los picks MLB"
     )
 
 
 async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mensaje = await update.message.reply_text("⏳ Analizando jornada...")
+    mensaje = await update.message.reply_text("⏳ Analizando jornada MLB...")
 
     mlb = obtener_juegos(1)
-    lmb = obtener_juegos(21)
 
-    texto = "📊 JUEGOS ENCONTRADOS\n\n"
-
+    texto = "📊 JUEGOS MLB ENCONTRADOS\n\n"
     texto += f"⚾ MLB ({len(mlb)})\n\n"
-    for juego in mlb:
-        texto += (
-            f"🆔 Juego: {juego['game_id']}\n"
-            f"🏠 Home ID: {juego['home_team_id']}\n"
-            f"✈️ Away ID: {juego['away_team_id']}\n"
-            f"{juego['partido']}\n\n"
-        )
 
-    texto += f"\n⚾ LMB ({len(lmb)})\n\n"
-    for juego in lmb:
+    for juego in mlb:
         texto += (
             f"🆔 Juego: {juego['game_id']}\n"
             f"🏠 Home ID: {juego['home_team_id']}\n"
@@ -573,20 +564,18 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mensaje = await update.message.reply_text("⏳ Analizando MLB + LMB y buscando valor...")
+    mensaje = await update.message.reply_text("⏳ Analizando MLB y buscando valor...")
 
     juegos_mlb = obtener_juegos(1)
-    juegos_lmb = obtener_juegos(21)
-    juegos = juegos_mlb + juegos_lmb
+    juegos = juegos_mlb[:MAX_GAMES_TO_ANALYZE]
 
     standings_mlb = obtener_standings(1)
-    standings_lmb = obtener_standings(21)
 
     candidatos = []
 
     for juego in juegos:
         league_id = juego["league_id"]
-        standings = standings_mlb if league_id == 1 else standings_lmb
+        standings = standings_mlb
 
         home_stats = obtener_estadisticas_equipo(juego["home_team_id"], league_id)
         away_stats = obtener_estadisticas_equipo(juego["away_team_id"], league_id)
@@ -639,13 +628,13 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not top:
         await mensaje.edit_text(
-            "No se encontraron picks con ventaja suficiente para MLB + LMB."
+            "No se encontraron picks con ventaja suficiente para MLB."
         )
         return
 
     texto = "🔥 TOP PICKS BOSS ODDS\n\n"
     texto += f"📊 MLB analizados: {len(juegos_mlb)}\n"
-    texto += f"📊 LMB analizados: {len(juegos_lmb)}\n"
+    texto += f"📈 Juegos usados en picks: {len(juegos)}\n"
     texto += f"📈 Candidatos detectados: {len(candidatos)}\n\n"
 
     for idx, pick in enumerate(top, start=1):
