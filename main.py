@@ -71,6 +71,9 @@ def _sigmoid(x):
     except OverflowError:
         return 1.0 if x > 0 else 0.0
 
+def _clamp(value, low, high):
+    return max(low, min(high, value))
+
 # ==========================
 # API SPORTS
 # ==========================
@@ -304,6 +307,17 @@ def extraer_mercados_odds(odds_response):
                     "away": away_odd
                 }
 
+        elif bet_id == 2 or bet_name == "Asian Handicap":
+            handicap = {}
+
+            for v in bet.get("values", []):
+                value = str(v.get("value", "")).strip()
+                odd = _safe_float(v.get("odd"))
+                handicap[value] = odd
+
+            if handicap:
+                markets["runline"] = handicap
+
         elif bet_id == 5 or bet_name == "Over/Under":
             parsed = _parse_total_market(bet.get("values", []))
             if parsed:
@@ -355,29 +369,13 @@ def pick_moneyline(juego, standing_home, standing_away, markets):
         pick_team = juego["home"]
         odd = home_odd
         edge = home_edge
-        confidence = int(
-            min(
-                92,
-                max(
-                    55,
-                    55 + abs(gap) * 0.45 + edge * 35
-                )
-            )
-        )
+        confidence = int(_clamp(55 + abs(gap) * 0.45 + edge * 35, 55, 92))
         reason = "Mejor win%, diferencial y localía."
     else:
         pick_team = juego["away"]
         odd = away_odd
         edge = away_edge
-        confidence = int(
-            min(
-                92,
-                max(
-                    55,
-                    55 + abs(gap) * 0.45 + edge * 35
-                )
-            )
-        )
+        confidence = int(_clamp(55 + abs(gap) * 0.45 + edge * 35, 55, 92))
         reason = "Mejor win%, diferencial y visita."
 
     return {
@@ -428,15 +426,7 @@ def pick_total(juego, standing_home, standing_away, market, market_name):
         model_prob = _sigmoid((-gap) * 1.9)
 
     edge = model_prob - (1.0 / odd)
-    confidence = int(
-        min(
-            88,
-            max(
-                55,
-                55 + abs(gap) * 8 + edge * 35
-            )
-        )
-    )
+    confidence = int(_clamp(55 + abs(gap) * 8 + edge * 35, 55, 88))
 
     return {
         "league_name": juego["league_name"],
@@ -448,6 +438,62 @@ def pick_total(juego, standing_home, standing_away, market, market_name):
         "projection": proj_total,
         "confidence": confidence,
         "reason": f"Proyección de {proj_total:.2f} carreras vs línea {line:.1f}."
+    }
+
+
+def pick_runline(juego, standing_home, standing_away, markets):
+    runline = markets.get("runline")
+    if not runline:
+        return None
+
+    home_strength = calcular_fuerza_equipo(standing_home)
+    away_strength = calcular_fuerza_equipo(standing_away)
+    gap = home_strength - away_strength
+    home_prob = _sigmoid(gap / 8.0)
+
+    opciones = []
+
+    for nombre, odd in runline.items():
+        if not odd:
+            continue
+
+        nombre_norm = str(nombre).strip().lower()
+        est_prob = None
+
+        if nombre_norm == "home -1.5":
+            est_prob = _clamp(home_prob - 0.15, 0.05, 0.90)
+        elif nombre_norm == "away -1.5":
+            est_prob = _clamp((1.0 - home_prob) - 0.15, 0.05, 0.90)
+        elif nombre_norm == "home +1.5":
+            est_prob = _clamp(0.65 + home_prob * 0.30, 0.55, 0.97)
+        elif nombre_norm == "away +1.5":
+            est_prob = _clamp(0.65 + (1.0 - home_prob) * 0.30, 0.55, 0.97)
+
+        if est_prob is None:
+            continue
+
+        edge = est_prob - (1.0 / odd)
+        score = edge * 100.0 + abs(gap) * 0.5
+        opciones.append((score, nombre, odd, edge))
+
+    if not opciones:
+        return None
+
+    opciones.sort(reverse=True, key=lambda x: x[0])
+    _, pick_label, odd, edge = opciones[0]
+
+    confidence = int(_clamp(60 + edge * 100 + abs(gap) * 1.2, 60, 90))
+
+    return {
+        "league_name": juego["league_name"],
+        "matchup": juego["partido"],
+        "market": "Run Line",
+        "pick": pick_label,
+        "odd": odd,
+        "line": None,
+        "projection": None,
+        "confidence": confidence,
+        "reason": "Ventaja estadística ajustada por handicap."
     }
 
 # ==========================
@@ -524,6 +570,15 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if f5_pick:
             candidatos.append(f5_pick)
+
+        runline_pick = pick_runline(
+            juego,
+            home_standing,
+            away_standing,
+            markets
+        )
+        if runline_pick:
+            candidatos.append(runline_pick)
 
     # Eliminar picks repetidos del mismo partido, conservando el de mayor confianza
     unicos = {}
