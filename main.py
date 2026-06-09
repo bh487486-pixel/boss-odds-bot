@@ -107,6 +107,11 @@ def _sigmoid(x):
     except OverflowError:
         return 1.0 if x > 0 else 0.0
 
+def _blend(a, b, weight=0.7):
+    a = _safe_float(a)
+    b = _safe_float(b)
+    return (a * weight) + (b * (1 - weight))
+
 def _clamp(value, low, high):
     return max(low, min(high, value))
 
@@ -141,18 +146,6 @@ def _as_list(response):
         return [response]
     return []
 
-def _format_runline_label(label, juego):
-    txt = str(label or "").strip().lower()
-    if txt == "home -1.5":
-        return f"{juego['home']} -1.5"
-    if txt == "away -1.5":
-        return f"{juego['away']} -1.5"
-    if txt == "home +1.5":
-        return f"{juego['home']} +1.5"
-    if txt == "away +1.5":
-        return f"{juego['away']} +1.5"
-    return str(label).strip()
-
 def _make_uid():
     return datetime.utcnow().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:8]
 
@@ -175,6 +168,18 @@ def _form_summary(forma):
     if not forma:
         return "N/A"
     return f"{forma.get('recent_record', 'N/A')} últimos 10 | {forma.get('last5_record', 'N/A')} últimos 5"
+
+def _format_runline_label(label, juego):
+    txt = str(label or "").strip().lower()
+    if txt == "home -1.5":
+        return f"{juego['home']} -1.5"
+    if txt == "away -1.5":
+        return f"{juego['away']} -1.5"
+    if txt == "home +1.5":
+        return f"{juego['home']} +1.5"
+    if txt == "away +1.5":
+        return f"{juego['away']} +1.5"
+    return str(label).strip()
 
 def _market_allowed(market_filter, market_name, enable_runline=True):
     if market_name == "Run Line" and not enable_runline:
@@ -258,13 +263,12 @@ def _build_history_text():
     texto = "🗂 ÚLTIMOS PICKS\n\n"
 
     for item in reversed(ultimos):
+        odd = _safe_float(item.get("odd"), 0.0)
         texto += (
             f"UID: {item.get('uid')}\n"
             f"{item.get('market')} | {item.get('pick')}\n"
             f"{item.get('matchup')}\n"
-            f"Cuota: {float(item.get('odd', 0.0)):.2f} | "
-            f"Stake: {item.get('stake')} | "
-            f"Estado: {_result_label(item.get('status'))}\n\n"
+            f"Cuota: {odd:.2f} | Stake: {item.get('stake')} | Estado: {_result_label(item.get('status'))}\n\n"
         )
 
     return texto[:4000]
@@ -329,6 +333,10 @@ def _replace_status(text, new_status_label):
     if "Estado:" in text:
         return re.sub(r"Estado:\s*.*", f"Estado: {new_status_label}", text, count=1)
     return text + f"\n\nEstado: {new_status_label}"
+
+# ==========================
+# MARKUP
+# ==========================
 
 def main_menu_markup():
     return InlineKeyboardMarkup([
@@ -537,12 +545,12 @@ def obtener_standings(league_id):
         logging.error(f"Error standings league={league_id}: {e}")
         return {}
 
-def obtener_forma_equipo(team_id, league_id):
-    key = (league_id, team_id)
+def obtener_forma_equipo(team_id, league_id, use_recent_form=True):
+    key = (league_id, team_id, use_recent_form)
     if key in FORM_CACHE:
         return FORM_CACHE[key]
 
-    if not USER_SETTINGS[next(iter(USER_SETTINGS))]["use_recent_form"]:
+    if not use_recent_form:
         FORM_CACHE[key] = {}
         return {}
 
@@ -592,9 +600,6 @@ def obtener_forma_equipo(team_id, league_id):
             scores = game.get("scores", {})
             home_score = _safe_int(scores.get("home", {}).get("total"))
             away_score = _safe_int(scores.get("away", {}).get("total"))
-
-            if home_score is None or away_score is None:
-                continue
 
             team_is_home = team_id == home_id
             runs_for = home_score if team_is_home else away_score
@@ -1023,7 +1028,7 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
     }
 
 # ==========================
-# PICK GENERATION / HISTORY
+# HISTORIAL / RESULTADOS
 # ==========================
 
 def calcular_stake(confianza):
@@ -1173,8 +1178,11 @@ def formatear_resumen():
 
     return texto[:4000]
 
-def generar_picks(market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None):
-    chat_id = next(iter(USER_SETTINGS))
+# ==========================
+# GENERACIÓN
+# ==========================
+
+def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None):
     settings = USER_SETTINGS[chat_id]
 
     if market_filter == "DEFAULT":
@@ -1199,8 +1207,8 @@ def generar_picks(market_filter="DEFAULT", max_picks=0, use_recent_form=None, en
         home_standing = standings_mlb.get(juego["home_team_id"])
         away_standing = standings_mlb.get(juego["away_team_id"])
 
-        home_form = obtener_forma_equipo(juego["home_team_id"], 1) if use_recent_form else {}
-        away_form = obtener_forma_equipo(juego["away_team_id"], 1) if use_recent_form else {}
+        home_form = obtener_forma_equipo(juego["home_team_id"], 1, use_recent_form) if use_recent_form else {}
+        away_form = obtener_forma_equipo(juego["away_team_id"], 1, use_recent_form) if use_recent_form else {}
 
         odds_response = obtener_odds(juego["game_id"], 1)
         markets = extraer_mercados_odds(odds_response)
@@ -1249,7 +1257,6 @@ def generar_picks(market_filter="DEFAULT", max_picks=0, use_recent_form=None, en
             if runline_pick:
                 candidatos.append(runline_pick)
 
-    # Un pick por partido, conservando el de mayor score
     mejores_por_partido = {}
     for pick in candidatos:
         partido = pick["matchup"]
@@ -1287,10 +1294,6 @@ def generar_picks(market_filter="DEFAULT", max_picks=0, use_recent_form=None, en
 
     return seleccionados, meta, settings
 
-# ==========================
-# MENSAJES / ENVÍO
-# ==========================
-
 async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None, query=None):
     if query is not None:
         await query.edit_message_text("⏳ Analizando MLB y buscando valor...")
@@ -1298,6 +1301,7 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
         await context.bot.send_message(chat_id=chat_id, text="⏳ Analizando MLB y buscando valor...")
 
     seleccionados, meta, settings = generar_picks(
+        chat_id=chat_id,
         market_filter=market_filter,
         max_picks=max_picks,
         use_recent_form=use_recent_form,
@@ -1312,7 +1316,6 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
             await context.bot.send_message(chat_id=chat_id, text=no_picks, reply_markup=main_menu_markup())
         return
 
-    # Guardar historial y asignar UID + stake
     picks_guardados = []
     for pick in seleccionados:
         pick = dict(pick)
@@ -1322,7 +1325,13 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
 
     guardar_picks_en_historial(picks_guardados)
 
-    summary_text = _build_summary_text(meta, picks_guardados, market_filter if market_filter != "DEFAULT" else settings["market_filter"], max_picks if max_picks > 0 else settings["max_picks"], settings)
+    summary_text = _build_summary_text(
+        meta,
+        picks_guardados,
+        market_filter if market_filter != "DEFAULT" else settings["market_filter"],
+        max_picks if max_picks > 0 else settings["max_picks"],
+        settings
+    )
 
     if query is not None:
         await query.edit_message_text(summary_text, reply_markup=main_menu_markup())
@@ -1343,7 +1352,7 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    USER_SETTINGS[chat_id]  # init
+    USER_SETTINGS[chat_id]
     await update.message.reply_text(_main_menu_text(chat_id), reply_markup=main_menu_markup())
 
 async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1368,7 +1377,6 @@ async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(_build_history_text(), reply_markup=main_menu_markup())
 
 async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
     await update.message.reply_text(formatear_resumen(), reply_markup=main_menu_markup())
 
 async def resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
