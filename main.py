@@ -73,10 +73,6 @@ def _sigmoid(x):
         return 1.0 if x > 0 else 0.0
 
 def _first_dict(response):
-    """
-    API-Sports a veces devuelve dict y a veces lista.
-    Esta función normaliza eso.
-    """
     if isinstance(response, list):
         if not response:
             return {}
@@ -178,6 +174,13 @@ def obtener_estadisticas_equipo(team_id, league_id):
 
         raw = r.json().get("response", {})
         data = _first_dict(raw)
+
+        logging.info(
+            f"TEAM {team_id} league={league_id} "
+            f"type(raw)={type(raw)} "
+            f"type(data)={type(data)} "
+            f"keys={list(data.keys()) if isinstance(data, dict) else 'NO_DICT'}"
+        )
 
         if not data:
             return {}
