@@ -25,6 +25,7 @@ BASE_URL = "https://v1.baseball.api-sports.io"
 # ==========================
 
 def obtener_juegos(league_id):
+
     headers = {
         "x-apisports-key": API_KEY
     }
@@ -46,6 +47,7 @@ def obtener_juegos(league_id):
         }
 
         try:
+
             r = requests.get(
                 f"{BASE_URL}/games",
                 headers=headers,
@@ -64,15 +66,31 @@ def obtener_juegos(league_id):
                 if status != "NS":
                     continue
 
+                game_id = game["id"]
+
                 home = game["teams"]["home"]["name"]
                 away = game["teams"]["away"]["name"]
 
                 partido = f"{away} vs {home}"
 
-                if partido not in juegos:
-                    juegos.append(partido)
+                existe = False
+
+                for j in juegos:
+                    if j["game_id"] == game_id:
+                        existe = True
+                        break
+
+                if not existe:
+
+                    juegos.append({
+                        "game_id": game_id,
+                        "home": home,
+                        "away": away,
+                        "partido": partido
+                    })
 
         except Exception as e:
+
             logging.error(f"Error API ({fecha}): {e}")
 
     return juegos
@@ -82,6 +100,7 @@ def obtener_juegos(league_id):
 # ==========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
         "👋 Bienvenido a Boss Odds MX\n\n"
         "Comandos disponibles:\n"
@@ -89,6 +108,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     mensaje = await update.message.reply_text(
         "⏳ Analizando jornada..."
     )
@@ -98,15 +118,23 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     texto = "📊 JUEGOS ENCONTRADOS\n\n"
 
-    texto += f"⚾ MLB: {len(mlb)} juegos\n"
+    texto += f"⚾ MLB ({len(mlb)})\n\n"
+
     for juego in mlb:
-        texto += f"• {juego}\n"
 
-    texto += "\n"
+        texto += (
+            f"🆔 {juego['game_id']}\n"
+            f"{juego['partido']}\n\n"
+        )
 
-    texto += f"⚾ LMB: {len(lmb)} juegos\n"
+    texto += f"\n⚾ LMB ({len(lmb)})\n\n"
+
     for juego in lmb:
-        texto += f"• {juego}\n"
+
+        texto += (
+            f"🆔 {juego['game_id']}\n"
+            f"{juego['partido']}\n\n"
+        )
 
     await mensaje.edit_text(texto)
 
@@ -115,12 +143,19 @@ async def analizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================
 
 def main():
+
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("analizar", analizar))
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("analizar", analizar)
+    )
 
     logging.info("🤖 Boss Odds iniciado")
+
     app.run_polling()
 
 if __name__ == "__main__":
