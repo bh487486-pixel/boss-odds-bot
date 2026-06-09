@@ -357,10 +357,10 @@ def pick_moneyline(juego, standing_home, standing_away, markets):
         edge = home_edge
         confidence = int(
             min(
-                88,
+                92,
                 max(
-                    60,
-                    60 + abs(gap) * 0.8 + edge * 60
+                    55,
+                    55 + abs(gap) * 0.45 + edge * 35
                 )
             )
         )
@@ -371,10 +371,10 @@ def pick_moneyline(juego, standing_home, standing_away, markets):
         edge = away_edge
         confidence = int(
             min(
-                88,
+                92,
                 max(
-                    60,
-                    60 + abs(gap) * 0.8 + edge * 60
+                    55,
+                    55 + abs(gap) * 0.45 + edge * 35
                 )
             )
         )
@@ -430,10 +430,10 @@ def pick_total(juego, standing_home, standing_away, market, market_name):
     edge = model_prob - (1.0 / odd)
     confidence = int(
         min(
-            85,
+            88,
             max(
-                60,
-                58 + abs(gap) * 10 + edge * 60
+                55,
+                55 + abs(gap) * 8 + edge * 35
             )
         )
     )
@@ -548,9 +548,11 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     def calcular_stake(confianza):
-        if confianza >= 85:
+        if confianza >= 88:
+            return 4
+        if confianza >= 82:
             return 3
-        if confianza >= 75:
+        if confianza >= 74:
             return 2
         return 1
 
