@@ -72,6 +72,18 @@ def _sigmoid(x):
     except OverflowError:
         return 1.0 if x > 0 else 0.0
 
+def _first_dict(response):
+    """
+    API-Sports a veces devuelve dict y a veces lista.
+    Esta función normaliza eso.
+    """
+    if isinstance(response, list):
+        if not response:
+            return {}
+        first = response[0]
+        return first if isinstance(first, dict) else {}
+    return response if isinstance(response, dict) else {}
+
 # ==========================
 # API SPORTS
 # ==========================
@@ -163,7 +175,12 @@ def obtener_estadisticas_equipo(team_id, league_id):
             timeout=30
         )
         r.raise_for_status()
-        data = r.json().get("response", {})
+
+        raw = r.json().get("response", {})
+        data = _first_dict(raw)
+
+        if not data:
+            return {}
 
         games = data.get("games", {})
         wins = games.get("wins", {})
@@ -221,9 +238,10 @@ def obtener_standings(league_id):
             timeout=30
         )
         r.raise_for_status()
-        data = r.json().get("response", [])
 
-        rows = data[0] if data and isinstance(data[0], list) else data
+        raw = r.json().get("response", [])
+        rows = raw[0] if raw and isinstance(raw[0], list) else raw
+
         standings = {}
 
         for row in rows:
@@ -313,7 +331,6 @@ def _parse_total_market(values):
     if not complete:
         return None
 
-    # Preferimos la línea más cercana a 8.5 si existe
     line, odds = min(complete, key=lambda x: abs(x[0] - 8.5))
 
     return {
@@ -572,6 +589,7 @@ async def picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         away_stats = obtener_estadisticas_equipo(juego["away_team_id"], league_id)
 
         if not home_stats or not away_stats:
+            logging.info(f"Skipping stats-empty game: {juego['partido']} league={league_id}")
             continue
 
         home_standing = standings.get(juego["home_team_id"])
