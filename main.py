@@ -3,13 +3,14 @@ import re
 import math
 import json
 import uuid
+import time
 import requests
 import logging
 
 from collections import defaultdict
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 # ==========================
 # CONFIG
@@ -41,9 +42,12 @@ MAX_PICKS_PER_MATCHUP = 2
 FORM_LOOKBACK_DAYS = 30
 USE_RECENT_FORM_DEFAULT = True
 
+CACHE_TTL_SECONDS = 900  # 15 minutos
+
 PICK_DAY_MIN_CONFIDENCE = 85
 PICK_DAY_MIN_EV = 0.03
 
+PICK_DAY_FILE = "pick_day_cache.json"
 HISTORY_FILE = "picks_history.json"
 LAST_GENERATED_FILE = "last_generated.json"
 
@@ -75,12 +79,14 @@ DEFAULT_MAX_PER_MARKET = {
 STANDINGS_CACHE = {}
 ODDS_CACHE = {}
 FORM_CACHE = {}
+
 USER_SETTINGS = defaultdict(lambda: {
     "use_recent_form": USE_RECENT_FORM_DEFAULT,
     "enable_runline": True,
     "market_filter": "ALL",
     "max_picks": DEFAULT_MAX_PICKS,
 })
+
 
 # ==========================
 # HELPERS
@@ -139,6 +145,19 @@ def _save_json(path, data):
     except Exception as e:
         logging.error(f"Error guardando {path}: {e}")
 
+def _cache_get(cache, key):
+    entry = cache.get(key)
+    if not entry:
+        return None
+    ts = entry.get("ts", 0)
+    if time.time() - ts > CACHE_TTL_SECONDS:
+        cache.pop(key, None)
+        return None
+    return entry.get("data")
+
+def _cache_set(cache, key, data):
+    cache[key] = {"ts": time.time(), "data": data}
+
 def cargar_historial():
     data = _load_json(HISTORY_FILE, [])
     return data if isinstance(data, list) else []
@@ -161,6 +180,24 @@ def _store_last_generated(chat_id, payload):
 def _get_last_generated(chat_id):
     db = _load_last_generated_db()
     return db.get(str(chat_id))
+
+def _load_pick_day_state():
+    data = _load_json(PICK_DAY_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+def _save_pick_day_state(state):
+    _save_json(PICK_DAY_FILE, state)
+
+def _get_channel_chat_id():
+    if not CHANNEL_ID_RAW:
+        return None
+    raw = str(CHANNEL_ID_RAW).strip()
+    if raw.startswith("@"):
+        return raw
+    try:
+        return int(raw)
+    except Exception:
+        return raw
 
 def _as_list(response):
     if isinstance(response, list):
@@ -255,17 +292,6 @@ def _is_reasonable_runline_odd(odd):
     except Exception:
         return False
 
-def _get_channel_chat_id():
-    if not CHANNEL_ID_RAW:
-        return None
-    raw = str(CHANNEL_ID_RAW).strip()
-    if raw.startswith("@"):
-        return raw
-    try:
-        return int(raw)
-    except Exception:
-        return raw
-
 def _correlation_key(pick):
     matchup = str(pick.get("matchup", ""))
     market = str(pick.get("market", ""))
@@ -285,8 +311,15 @@ def _correlation_key(pick):
 
     return f"{matchup}|{market}|{pick_norm}"
 
-def _select_candidates(candidates, max_picks, strict_day=False):
-    candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+def _rank_candidates(candidates, rank_by="score"):
+    if rank_by == "odd":
+        return sorted(candidates, key=lambda x: (x["odd"], x["score"]), reverse=True)
+    if rank_by == "premium":
+        return sorted(candidates, key=lambda x: (x["confidence"], x["ev"], x["score"]), reverse=True)
+    return sorted(candidates, key=lambda x: x["score"], reverse=True)
+
+def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score"):
+    candidates = _rank_candidates(candidates, rank_by=rank_by)
 
     if strict_day:
         for pick in candidates:
@@ -318,6 +351,41 @@ def _select_candidates(candidates, max_picks, strict_day=False):
             break
 
     return selected
+
+def _current_date():
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+def _today_pick_day_cached():
+    state = _load_pick_day_state()
+    if state.get("date") == _current_date():
+        return state.get("payload")
+    return None
+
+def _latest_payload_for_analysis(chat_id):
+    payload = _get_last_generated(chat_id)
+    if payload:
+        return payload
+    return _today_pick_day_cached()
+
+def _build_payload(selected_picks, meta, settings, market_filter, max_picks, mode_label, strict_day=False):
+    picks_guardados = []
+    for pick in selected_picks:
+        pick = dict(pick)
+        pick["uid"] = _make_uid()
+        pick["stake"] = calcular_stake(pick["confidence"])
+        picks_guardados.append(pick)
+
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "market_filter": market_filter,
+        "max_picks": max_picks,
+        "meta": meta,
+        "settings": settings,
+        "picks": picks_guardados,
+        "mode_label": mode_label,
+        "strict_day": strict_day,
+    }
+
 
 # ==========================
 # TEXT BUILDERS
@@ -372,13 +440,13 @@ def _build_history_text():
 
     return texto[:4000]
 
-def _build_summary_text(meta, selected_picks, market_filter, max_picks, settings, strict_day=False):
+def _build_summary_text(meta, selected_picks, market_filter, max_picks, settings, mode_label="Top Picks"):
     counts = defaultdict(int)
     for pick in selected_picks:
         counts[pick["market"]] += 1
 
     texto = "🔥 TOP PICKS BOSS ODDS\n\n"
-    texto += f"🎛 Modo: {'Pick del Día' if strict_day else 'Top Picks'}\n"
+    texto += f"🎛 Modo: {mode_label}\n"
     texto += f"🎛 Filtro: {_filter_label(market_filter)}\n"
     texto += f"📊 MLB analizados: {meta['analizados']}\n"
     texto += f"📈 Juegos usados en picks: {meta['usados']}\n"
@@ -435,21 +503,43 @@ def _build_pick_card(pick, idx):
 
     return texto[:4000]
 
+def _build_analysis_text(payload):
+    if not payload or not payload.get("picks"):
+        return "Todavía no hay una selección reciente para mostrar análisis."
+
+    meta = payload["meta"]
+    picks = payload["picks"]
+
+    texto = "📋 ANÁLISIS DETALLADO\n\n"
+    texto += f"Modo: {payload.get('mode_label', 'Top Picks')}\n"
+    texto += f"Filtro: {_filter_label(payload.get('market_filter', 'ALL'))}\n"
+    texto += f"Generado: {payload.get('generated_at', 'N/A')}\n"
+    texto += f"Analizados: {meta.get('analizados', 0)} | Candidatos: {meta.get('candidatos', 0)}\n\n"
+
+    for idx, pick in enumerate(picks, start=1):
+        texto += f"{idx}. {pick['matchup']}\n"
+        texto += f"   {pick['market']} -> {pick['pick']}\n"
+        texto += f"   Cuota: {pick['odd']:.2f} | Confianza: {pick['confidence']}% | EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
+        if pick.get("line") is not None:
+            texto += f"   Línea: {pick['line']:.1f}\n"
+        if pick.get("projection") is not None:
+            texto += f"   Proyección: {pick['projection']:.2f}\n"
+        texto += f"   Razón: {pick.get('reason', '')}\n\n"
+
+    return texto[:4000]
+
 def _build_channel_summary_text(payload):
     meta = payload["meta"]
     picks = payload["picks"]
     settings = payload["settings"]
-    market_filter = payload["market_filter"]
-    max_picks = payload["max_picks"]
-    strict_day = payload.get("strict_day", False)
 
     texto = "🔥 BOSS ODDS MX | TOP PICKS\n\n"
-    texto += f"🎛 Modo: {'Pick del Día' if strict_day else 'Top Picks'}\n"
-    texto += f"🎛 Filtro: {_filter_label(market_filter)}\n"
+    texto += f"🎛 Modo: {payload.get('mode_label', 'Top Picks')}\n"
+    texto += f"🎛 Filtro: {_filter_label(payload.get('market_filter', 'ALL'))}\n"
     texto += f"📊 MLB analizados: {meta['analizados']}\n"
     texto += f"📈 Candidatos: {meta['candidatos']}\n"
     texto += f"🎯 Publicados: {len(picks)}\n"
-    texto += f"🔢 Top: {max_picks}\n"
+    texto += f"🔢 Top: {payload.get('max_picks', len(picks))}\n"
     texto += f"🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
     texto += f"Forma reciente: {'ON' if settings['use_recent_form'] else 'OFF'} | Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
     return texto[:4000]
@@ -561,6 +651,7 @@ def _games_text():
 
     return texto[:4000]
 
+
 # ==========================
 # KEYBOARDS
 # ==========================
@@ -569,7 +660,7 @@ def main_menu_markup():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🎯 Picks", callback_data="menu:picks"),
-            InlineKeyboardButton("📅 Juegos", callback_data="menu:games"),
+            InlineKeyboardButton("📋 Análisis", callback_data="analysis:last"),
         ],
         [
             InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
@@ -594,6 +685,10 @@ def picks_menu_markup():
             InlineKeyboardButton("⭐ Top 6", callback_data="gen:DEFAULT:6"),
         ],
         [
+            InlineKeyboardButton("💎 Top Premium", callback_data="gen:PREMIUM:3"),
+            InlineKeyboardButton("💰 Mejor Cuota del Día", callback_data="gen:ODDS:1"),
+        ],
+        [
             InlineKeyboardButton("💰 Moneyline", callback_data="gen:ML:0"),
             InlineKeyboardButton("📈 Totales", callback_data="gen:TOTALS:0"),
         ],
@@ -602,12 +697,18 @@ def picks_menu_markup():
             InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
         ],
         [
+            InlineKeyboardButton("📋 Ver análisis", callback_data="analysis:last"),
+        ],
+        [
             InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
         ]
     ])
 
 def publish_summary_markup():
     return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Ver análisis", callback_data="analysis:last"),
+        ],
         [
             InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
         ],
@@ -659,13 +760,18 @@ def config_menu_markup(chat_id):
         ]
     ])
 
+
 # ==========================
 # API SPORTS
 # ==========================
 
 def obtener_juegos(league_id):
-    headers = _headers()
+    cache_key = ("games", league_id, SEASON, _current_date())
+    cached = _cache_get(STANDINGS_CACHE, cache_key)
+    if cached is not None:
+        return cached
 
+    headers = _headers()
     fecha1 = datetime.utcnow().strftime("%Y-%m-%d")
     fecha2 = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -728,11 +834,14 @@ def obtener_juegos(league_id):
         except Exception as e:
             logging.error(f"Error API games ({fecha}) league={league_id}: {e}")
 
+    _cache_set(STANDINGS_CACHE, cache_key, juegos)
     return juegos
 
 def obtener_standings(league_id):
-    if league_id in STANDINGS_CACHE:
-        return STANDINGS_CACHE[league_id]
+    cache_key = ("standings", league_id, SEASON)
+    cached = _cache_get(STANDINGS_CACHE, cache_key)
+    if cached is not None:
+        return cached
 
     params = {
         "league": league_id,
@@ -782,7 +891,7 @@ def obtener_standings(league_id):
                 "runs_against_pg": points_against / max(1, games_played),
             }
 
-        STANDINGS_CACHE[league_id] = standings
+        _cache_set(STANDINGS_CACHE, cache_key, standings)
         return standings
 
     except Exception as e:
@@ -790,12 +899,13 @@ def obtener_standings(league_id):
         return {}
 
 def obtener_forma_equipo(team_id, league_id, use_recent_form=True):
-    key = (league_id, team_id, use_recent_form)
-    if key in FORM_CACHE:
-        return FORM_CACHE[key]
+    cache_key = ("form", league_id, team_id, use_recent_form, SEASON)
+    cached = _cache_get(FORM_CACHE, cache_key)
+    if cached is not None:
+        return cached
 
     if not use_recent_form:
-        FORM_CACHE[key] = {}
+        _cache_set(FORM_CACHE, cache_key, {})
         return {}
 
     date_to = datetime.utcnow().strftime("%Y-%m-%d")
@@ -858,7 +968,7 @@ def obtener_forma_equipo(team_id, league_id, use_recent_form=True):
             })
 
         if not valid_games:
-            FORM_CACHE[key] = {}
+            _cache_set(FORM_CACHE, cache_key, {})
             return {}
 
         valid_games.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -912,18 +1022,19 @@ def obtener_forma_equipo(team_id, league_id, use_recent_form=True):
             "last5_run_diff_pg": r5["run_diff_pg"],
         }
 
-        FORM_CACHE[key] = forma
+        _cache_set(FORM_CACHE, cache_key, forma)
         return forma
 
     except Exception as e:
         logging.error(f"Error forma team={team_id} league={league_id}: {e}")
-        FORM_CACHE[key] = {}
+        _cache_set(FORM_CACHE, cache_key, {})
         return {}
 
 def obtener_odds(game_id, league_id):
-    key = (league_id, game_id)
-    if key in ODDS_CACHE:
-        return ODDS_CACHE[key]
+    cache_key = ("odds", league_id, game_id, SEASON, BOOKMAKER_ID)
+    cached = _cache_get(ODDS_CACHE, cache_key)
+    if cached is not None:
+        return cached
 
     params = {
         "league": league_id,
@@ -941,7 +1052,7 @@ def obtener_odds(game_id, league_id):
         )
         r.raise_for_status()
         data = r.json().get("response", [])
-        ODDS_CACHE[key] = data
+        _cache_set(ODDS_CACHE, cache_key, data)
         return data
 
     except Exception as e:
@@ -1059,6 +1170,7 @@ def extraer_mercados_odds(odds_response):
                 markets["f5_total"] = parsed
 
     return markets
+
 
 # ==========================
 # MODELO
@@ -1300,6 +1412,7 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
         "notes": []
     }
 
+
 # ==========================
 # HISTORIAL / RESULTADOS
 # ==========================
@@ -1419,16 +1532,22 @@ def resumen_historial():
 
     return overall, by_market
 
+
 # ==========================
 # GENERACIÓN
 # ==========================
 
-def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None, strict_day=False):
+def generar_picks(
+    chat_id,
+    market_filter="DEFAULT",
+    max_picks=0,
+    use_recent_form=None,
+    enable_runline=None,
+    strict_day=False,
+    premium_mode=False,
+    best_odds_mode=False
+):
     settings = USER_SETTINGS[chat_id]
-
-    if strict_day:
-        market_filter = "ALL"
-        max_picks = 1
 
     if market_filter == "DEFAULT":
         market_filter = settings["market_filter"]
@@ -1441,6 +1560,16 @@ def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form
 
     if enable_runline is None:
         enable_runline = settings["enable_runline"]
+
+    if strict_day:
+        market_filter = "ALL"
+        max_picks = 1
+
+    if premium_mode and max_picks > 3:
+        max_picks = 3
+
+    if best_odds_mode:
+        max_picks = 1
 
     juegos_mlb = obtener_juegos(1)
     juegos = juegos_mlb[:MAX_GAMES_TO_ANALYZE]
@@ -1502,15 +1631,31 @@ def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form
             if runline_pick:
                 candidatos.append(runline_pick)
 
-    candidatos.sort(key=lambda x: x["score"], reverse=True)
+    if premium_mode:
+        candidatos = [
+            c for c in candidatos
+            if c.get("confidence", 0) >= 82 and c.get("ev", 0.0) >= 0.04
+        ]
+
+    if best_odds_mode:
+        candidatos = [
+            c for c in candidatos
+            if c.get("confidence", 0) >= 75 and c.get("ev", 0.0) >= 0.02
+        ]
 
     if strict_day:
-        seleccionados = _select_candidates(candidatos, 1, strict_day=True)
+        seleccionados = _select_candidates(candidatos, 1, strict_day=True, rank_by="score")
     else:
+        rank_by = "score"
+        if premium_mode:
+            rank_by = "premium"
+        elif best_odds_mode:
+            rank_by = "odd"
+
+        candidatos = _rank_candidates(candidatos, rank_by=rank_by)
+
         market_caps = _market_caps_for_filter(market_filter, max_picks)
-        # Selección por mercado con límite por partido y correlación
-        # (aplicamos el límite máximo final por mercado posteriormente)
-        preliminares = _select_candidates(candidatos, max_picks * 2, strict_day=False)
+        preliminares = _select_candidates(candidatos, max_picks * 2, strict_day=False, rank_by=rank_by)
 
         seleccionados = []
         conteo_mercados = defaultdict(int)
@@ -1535,26 +1680,30 @@ def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form
 
     return seleccionados, meta, settings
 
-async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None, query=None, strict_day=False):
-    if query is not None:
-        await query.edit_message_text("⏳ Analizando MLB y buscando valor...")
-    else:
-        await context.bot.send_message(chat_id=chat_id, text="⏳ Analizando MLB y buscando valor...")
+def _build_payload_from_selection(selected, meta, settings, market_filter, max_picks, mode_label, strict_day=False):
+    picks_guardados = []
+    for pick in selected:
+        pick = dict(pick)
+        pick["uid"] = _make_uid()
+        pick["stake"] = calcular_stake(pick["confidence"])
+        picks_guardados.append(pick)
 
-    seleccionados, meta, settings = generar_picks(
-        chat_id=chat_id,
-        market_filter=market_filter,
-        max_picks=max_picks,
-        use_recent_form=use_recent_form,
-        enable_runline=enable_runline,
-        strict_day=strict_day
-    )
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "market_filter": market_filter,
+        "max_picks": max_picks,
+        "meta": meta,
+        "settings": settings,
+        "picks": picks_guardados,
+        "mode_label": mode_label,
+        "strict_day": strict_day,
+    }
 
-    if not seleccionados:
-        if strict_day:
+async def _dispatch_payload(chat_id, context, payload, query=None):
+    if not payload.get("picks"):
+        no_picks = "No se encontraron picks con ventaja suficiente para MLB."
+        if payload.get("strict_day"):
             no_picks = "No se encontró un Pick del Día con el umbral actual."
-        else:
-            no_picks = "No se encontraron picks con ventaja suficiente para MLB."
 
         if query is not None:
             await query.edit_message_text(no_picks, reply_markup=main_menu_markup())
@@ -1562,33 +1711,15 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
             await context.bot.send_message(chat_id=chat_id, text=no_picks, reply_markup=main_menu_markup())
         return
 
-    picks_guardados = []
-    for pick in seleccionados:
-        pick = dict(pick)
-        pick["uid"] = _make_uid()
-        pick["stake"] = calcular_stake(pick["confidence"])
-        picks_guardados.append(pick)
-
-    guardar_picks_en_historial(picks_guardados)
-
-    payload = {
-        "generated_at": datetime.utcnow().isoformat(),
-        "market_filter": market_filter if market_filter != "DEFAULT" else settings["market_filter"],
-        "max_picks": max_picks if max_picks > 0 else settings["max_picks"],
-        "meta": meta,
-        "settings": settings,
-        "picks": picks_guardados,
-        "strict_day": strict_day,
-    }
     _store_last_generated(chat_id, payload)
 
     summary_text = _build_summary_text(
-        meta,
-        picks_guardados,
+        payload["meta"],
+        payload["picks"],
         payload["market_filter"],
         payload["max_picks"],
-        settings,
-        strict_day=strict_day
+        payload["settings"],
+        mode_label=payload.get("mode_label", "Top Picks")
     )
 
     if query is not None:
@@ -1596,13 +1727,133 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
     else:
         await context.bot.send_message(chat_id=chat_id, text=summary_text, reply_markup=publish_summary_markup())
 
-    for idx, pick in enumerate(picks_guardados, start=1):
+    for idx, pick in enumerate(payload["picks"], start=1):
         texto = _build_pick_card(pick, idx)
         await context.bot.send_message(
             chat_id=chat_id,
             text=texto,
             reply_markup=pick_result_markup(pick["uid"])
         )
+
+async def enviar_picks(
+    chat_id,
+    context,
+    market_filter="DEFAULT",
+    max_picks=0,
+    use_recent_form=None,
+    enable_runline=None,
+    query=None,
+    strict_day=False,
+    premium_mode=False,
+    best_odds_mode=False
+):
+    if query is not None:
+        await query.edit_message_text("⏳ Analizando MLB y buscando valor...")
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="⏳ Analizando MLB y buscando valor...")
+
+    selected, meta, settings = generar_picks(
+        chat_id=chat_id,
+        market_filter=market_filter,
+        max_picks=max_picks,
+        use_recent_form=use_recent_form,
+        enable_runline=enable_runline,
+        strict_day=strict_day,
+        premium_mode=premium_mode,
+        best_odds_mode=best_odds_mode
+    )
+
+    if strict_day:
+        mode_label = "Pick del Día"
+    elif premium_mode:
+        mode_label = "Top Premium"
+    elif best_odds_mode:
+        mode_label = "Mejor Cuota del Día"
+    else:
+        mode_label = "Top Picks"
+
+    payload = _build_payload_from_selection(
+        selected,
+        meta,
+        settings,
+        market_filter if market_filter != "DEFAULT" else settings["market_filter"],
+        max_picks if max_picks > 0 else settings["max_picks"],
+        mode_label=mode_label,
+        strict_day=strict_day
+    )
+
+    guardar_picks_en_historial(payload["picks"])
+
+    await _dispatch_payload(chat_id, context, payload, query=query)
+
+async def enviar_pick_del_dia(chat_id, context, query=None):
+    state = _load_pick_day_state()
+    today = _current_date()
+
+    if state.get("date") == today and state.get("payload"):
+        payload = state["payload"]
+        _store_last_generated(chat_id, payload)
+        if query is not None:
+            await query.edit_message_text(
+                _build_summary_text(
+                    payload["meta"],
+                    payload["picks"],
+                    payload["market_filter"],
+                    payload["max_picks"],
+                    payload["settings"],
+                    mode_label=payload.get("mode_label", "Pick del Día")
+                ),
+                reply_markup=publish_summary_markup()
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=_build_summary_text(
+                    payload["meta"],
+                    payload["picks"],
+                    payload["market_filter"],
+                    payload["max_picks"],
+                    payload["settings"],
+                    mode_label=payload.get("mode_label", "Pick del Día")
+                ),
+                reply_markup=publish_summary_markup()
+            )
+
+        for idx, pick in enumerate(payload["picks"], start=1):
+            texto = _build_pick_card(pick, idx)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=texto,
+                reply_markup=pick_result_markup(pick["uid"])
+            )
+        return
+
+    selected, meta, settings = generar_picks(
+        chat_id=chat_id,
+        market_filter="ALL",
+        max_picks=1,
+        use_recent_form=settings["use_recent_form"] if "settings" in locals() else None,
+        enable_runline=settings["enable_runline"] if "settings" in locals() else None,
+        strict_day=True
+    )
+
+    payload = _build_payload_from_selection(
+        selected,
+        meta,
+        settings,
+        market_filter="ALL",
+        max_picks=1,
+        mode_label="Pick del Día",
+        strict_day=True
+    )
+
+    _save_pick_day_state({
+        "date": today,
+        "payload": payload
+    })
+
+    guardar_picks_en_historial(payload["picks"])
+    await _dispatch_payload(chat_id, context, payload, query=query)
 
 async def publish_last_to_channel(chat_id, context):
     payload = _get_last_generated(chat_id)
@@ -1628,6 +1879,7 @@ async def publish_last_to_channel(chat_id, context):
     except Exception as e:
         logging.error(f"Error publicando al canal: {e}")
         return False, f"No se pudo publicar en el canal: {e}"
+
 
 # ==========================
 # MENÚS / CALLBACKS
@@ -1684,6 +1936,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
         return
 
+    if data == "analysis:last":
+        await query.answer()
+        payload = _latest_payload_for_analysis(chat_id)
+        await query.edit_message_text(
+            _build_analysis_text(payload),
+            reply_markup=main_menu_markup()
+        )
+        return
+
     if data == "config:toggle_form":
         settings["use_recent_form"] = not settings["use_recent_form"]
         await query.answer("Forma reciente actualizada")
@@ -1714,10 +1975,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, mode, limit_s = data.split(":", 2)
 
         strict_day = False
+        premium_mode = False
+        best_odds_mode = False
         filter_key = settings["market_filter"]
 
         if mode == "DAY":
-            strict_day = True
+            await query.answer("Generando Pick del Día...", show_alert=False)
+            await enviar_pick_del_dia(chat_id=chat_id, context=context, query=query)
+            return
+
+        if mode == "PREMIUM":
+            premium_mode = True
+            filter_key = "ALL"
+            limit = _safe_int(limit_s, 3)
+        elif mode == "ODDS":
+            best_odds_mode = True
             filter_key = "ALL"
             limit = 1
         elif mode == "DEFAULT":
@@ -1739,7 +2011,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             use_recent_form=settings["use_recent_form"],
             enable_runline=settings["enable_runline"],
             query=query,
-            strict_day=strict_day
+            strict_day=strict_day,
+            premium_mode=premium_mode,
+            best_odds_mode=best_odds_mode
         )
         return
 
@@ -1772,6 +2046,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await query.answer()
+
 
 # ==========================
 # MAIN
