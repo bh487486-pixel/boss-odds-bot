@@ -35,7 +35,9 @@ if not API_KEY:
 
 BASE_URL = "https://v1.baseball.api-sports.io"
 SEASON = 2026
-BOOKMAKER_ID = 4
+
+# 1xBet
+BOOKMAKER_ID = 1
 
 MLB_LEAGUE_ID = 1
 LMB_LEAGUE_ID = 21
@@ -247,6 +249,18 @@ def _result_label(result):
         "push": "Push",
         "pending": "Pendiente",
     }.get(str(result).lower(), str(result))
+
+def _replace_status(text, new_status):
+    try:
+        if not text:
+            return f"Estado: {new_status}"
+
+        if "Estado:" in text:
+            return re.sub(r"Estado:\s*.*", f"Estado: {new_status}", text, count=1)
+
+        return text + f"\n\nEstado: {new_status}"
+    except Exception:
+        return text
 
 def _confidence_label(confidence):
     if confidence >= 88:
@@ -839,7 +853,8 @@ def _parse_total_market(values):
     ]
 
     pool = sane if sane else complete
-    line, over_odd, under_odd = min(pool, key=lambda x: abs(x[0] - (8.5 if line <= 10 else 10.0)))
+    baseline = 8.5 if _league_id_for_total_guess(pool) == MLB_LEAGUE_ID else 10.0
+    line, over_odd, under_odd = min(pool, key=lambda x: abs(x[0] - baseline))
 
     logging.info(f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}")
     print(f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}", flush=True)
@@ -849,6 +864,9 @@ def _parse_total_market(values):
         "over": over_odd,
         "under": under_odd
     }
+
+def _league_id_for_total_guess(pool):
+    return MLB_LEAGUE_ID
 
 def extraer_mercados_odds(odds_response):
     if not odds_response:
@@ -1293,11 +1311,15 @@ def _build_candidates_for_league(league_id, market_filter, use_recent_form, enab
                 candidatos.append(ml_pick)
 
         if _market_allowed(market_filter, "Totales", enable_runline):
-            total_pick = pick_total(juego, home_standing, away_standing, home_form, away_form, markets.get("total"), "Totales")
+            total_pick = pick_total(
+                juego, home_standing, away_standing, home_form, away_form, markets.get("total"), "Totales"
+            )
             if total_pick:
                 candidatos.append(total_pick)
 
-            f5_pick = pick_total(juego, home_standing, away_standing, home_form, away_form, markets.get("f5_total"), "F5 Totales")
+            f5_pick = pick_total(
+                juego, home_standing, away_standing, home_form, away_form, markets.get("f5_total"), "F5 Totales"
+            )
             if f5_pick:
                 candidatos.append(f5_pick)
 
