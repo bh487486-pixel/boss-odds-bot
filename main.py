@@ -35,9 +35,12 @@ BASE_URL = "https://v1.baseball.api-sports.io"
 SEASON = 2026
 BOOKMAKER_ID = 4
 
+MLB_LEAGUE_ID = 1
+LMB_LEAGUE_ID = 21
+
 LEAGUES = {
-    1: "MLB",
-    2: "LMB",
+    MLB_LEAGUE_ID: "MLB",
+    LMB_LEAGUE_ID: "LMB",
 }
 
 MAX_GAMES_TO_ANALYZE = 15
@@ -70,9 +73,8 @@ DEFAULT_MAX_PER_MARKET = {
     "Run Line": 1,
 }
 
-# Pesos por liga
 LEAGUE_MODEL = {
-    1: {  # MLB
+    MLB_LEAGUE_ID: {  # MLB
         "base_win": 68.0,
         "base_diff": 7.0,
         "base_pos": 0.45,
@@ -91,7 +93,7 @@ LEAGUE_MODEL = {
             "Run Line": 0.40,
         }
     },
-    2: {  # LMB
+    LMB_LEAGUE_ID: {  # LMB
         "base_win": 55.0,
         "base_diff": 4.5,
         "base_pos": 0.25,
@@ -126,7 +128,7 @@ USER_SETTINGS = defaultdict(lambda: {
     "enable_runline": True,
     "market_filter": "ALL",
     "max_picks": DEFAULT_MAX_PICKS,
-    "league_id": 1,  # default MLB
+    "league_id": MLB_LEAGUE_ID,
 })
 
 # ==========================
@@ -291,7 +293,7 @@ def _league_name(league_id):
     return LEAGUES.get(league_id, f"Liga {league_id}")
 
 def _league_short(league_id):
-    return "MLB" if league_id == 1 else "LMB" if league_id == 2 else f"L{league_id}"
+    return "MLB" if league_id == MLB_LEAGUE_ID else "LMB" if league_id == LMB_LEAGUE_ID else f"L{league_id}"
 
 def _is_reasonable_total_odd(odd):
     try:
@@ -311,7 +313,7 @@ def _current_date():
     return datetime.utcnow().strftime("%Y-%m-%d")
 
 def _league_settings(league_id):
-    return LEAGUE_MODEL.get(league_id, LEAGUE_MODEL[1])
+    return LEAGUE_MODEL.get(league_id, LEAGUE_MODEL[MLB_LEAGUE_ID])
 
 def _format_runline_label(label, juego):
     txt = str(label or "").strip().lower()
@@ -357,12 +359,15 @@ def _correlation_key(pick):
 
     if market == "Moneyline":
         return f"{matchup}|team|{pick_norm}"
+
     if market == "Run Line":
         team = re.sub(r"\s*[+-]1\.5\s*$", "", pick_text).strip()
         return f"{matchup}|team|{_norm(team)}"
+
     if market in {"Totales", "F5 Totales"}:
         side = "over" if pick_text.lower().startswith("over") else "under"
         return f"{matchup}|{market}|{side}"
+
     return f"{matchup}|{market}|{pick_norm}"
 
 def _rank_candidates(candidates, rank_by="score"):
@@ -746,9 +751,7 @@ def _parse_total_market(values):
     pool = sane if sane else complete
     line, over_odd, under_odd = min(pool, key=lambda x: abs(x[0] - 8.5))
 
-    logging.info(
-        f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}"
-    )
+    logging.info(f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}")
 
     return {
         "line": line,
@@ -790,10 +793,7 @@ def extraer_mercados_odds(odds_response):
                     away_odd = odd
 
             if home_odd and away_odd:
-                markets["moneyline"] = {
-                    "home": home_odd,
-                    "away": away_odd
-                }
+                markets["moneyline"] = {"home": home_odd, "away": away_odd}
 
         elif bet_id == 2 or bet_name == "Asian Handicap":
             handicap = {}
@@ -820,10 +820,7 @@ def extraer_mercados_odds(odds_response):
 # MODELO
 # ==========================
 
-def calcular_fuerza_equipo(standing, forma=None, league_id=1):
-    return _league_strength(standing, forma, league_id)
-
-def _league_strength(standing, forma=None, league_id=1):
+def calcular_fuerza_equipo(standing, forma=None, league_id=MLB_LEAGUE_ID):
     if not standing:
         return 0.0
 
@@ -1368,7 +1365,7 @@ def _build_summary_text(payload):
 
     texto = f"🔥 TOP PICKS BOSS ODDS | {league_name}\n\n"
     texto += f"🎛 Modo: {mode_label}\n"
-    texto += f"🎛 Filtro: {_league_short(payload.get('league_id', 1))} / {_filter_label(payload['market_filter'])}\n"
+    texto += f"🎛 Filtro: {_league_short(payload.get('league_id', MLB_LEAGUE_ID))} / {_filter_label(payload['market_filter'])}\n"
     texto += f"📊 Juegos analizados: {meta['analizados']}\n"
     texto += f"📈 Juegos usados: {meta['usados']}\n"
     texto += f"📈 Candidatos: {meta['candidatos']}\n"
@@ -1444,7 +1441,7 @@ def _build_channel_summary_text(payload):
     meta = payload["meta"]
     settings = payload["settings"]
 
-    texto = f"🔥 BOSS ODDS MX | {_league_name(payload.get('league_id', 1))}\n\n"
+    texto = f"🔥 BOSS ODDS MX | {_league_name(payload.get('league_id', MLB_LEAGUE_ID))}\n\n"
     texto += f"🎛 Modo: {payload.get('mode_label', 'Top Picks')}\n"
     texto += f"🎛 Filtro: {_filter_label(payload.get('market_filter', 'ALL'))}\n"
     texto += f"📊 Juegos analizados: {meta['analizados']}\n"
@@ -1474,6 +1471,13 @@ def _build_channel_pick_text(pick, idx):
         f"Boss Odds MX VIP\n"
     )
     return texto[:4000]
+
+def _replace_status(text, new_status_label):
+    if not text:
+        return f"Estado: {new_status_label}"
+    if "Estado:" in text:
+        return re.sub(r"Estado:\s*.*", f"Estado: {new_status_label}", text, count=1)
+    return text + f"\n\nEstado: {new_status_label}"
 
 def _build_vip_text():
     return (
@@ -1637,15 +1641,15 @@ def _config_menu_text(chat_id):
 def main_menu_markup():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🎯 MLB", callback_data="league:1"),
-            InlineKeyboardButton("🇲🇽 LMB", callback_data="league:2"),
+            InlineKeyboardButton("🎯 MLB", callback_data=f"league:{MLB_LEAGUE_ID}"),
+            InlineKeyboardButton("🇲🇽 LMB", callback_data=f"league:{LMB_LEAGUE_ID}"),
         ],
         [
             InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
-            InlineKeyboardButton("📈 Rankings MLB", callback_data="rankings:1"),
+            InlineKeyboardButton("📈 Rankings MLB", callback_data=f"rankings:{MLB_LEAGUE_ID}"),
         ],
         [
-            InlineKeyboardButton("📈 Rankings LMB", callback_data="rankings:2"),
+            InlineKeyboardButton("📈 Rankings LMB", callback_data=f"rankings:{LMB_LEAGUE_ID}"),
             InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
         ],
         [
@@ -1678,8 +1682,8 @@ def league_menu_markup(league_id):
         ]
     ]
 
-    if league_id == 2:
-        rows.insert(4, [InlineKeyboardButton("🧪 Test LMB", callback_data="test:2")])
+    if league_id == LMB_LEAGUE_ID:
+        rows.insert(4, [InlineKeyboardButton("🧪 Test LMB", callback_data=f"test:{LMB_LEAGUE_ID}")])
 
     rows.append([InlineKeyboardButton("🔙 Menú", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
@@ -1768,84 +1772,139 @@ async def _send_payload(chat_id, context, payload, query=None):
             reply_markup=pick_result_markup(pick["uid"])
         )
 
-async def ejecutar_generacion(chat_id, context, league_id, market_filter="DEFAULT", max_picks=0, strict_day=False, premium_mode=False, best_odds_mode=False, query=None):
+async def ejecutar_generacion(
+    chat_id,
+    context,
+    league_id,
+    market_filter="DEFAULT",
+    max_picks=0,
+    strict_day=False,
+    premium_mode=False,
+    best_odds_mode=False,
+    query=None
+):
     settings = USER_SETTINGS[chat_id]
-    if query is not None:
-        await query.edit_message_text("⏳ Analizando y buscando valor...")
-    else:
-        await context.bot.send_message(chat_id=chat_id, text="⏳ Analizando y buscando valor...")
 
-    selected, meta, settings = generar_picks(
-        chat_id=chat_id,
-        league_id=league_id,
-        market_filter=market_filter,
-        max_picks=max_picks,
-        use_recent_form=settings["use_recent_form"],
-        enable_runline=settings["enable_runline"],
-        strict_day=strict_day,
-        premium_mode=premium_mode,
-        best_odds_mode=best_odds_mode
-    )
+    try:
+        if query is not None:
+            await query.edit_message_text("⏳ Analizando y buscando valor...")
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="⏳ Analizando y buscando valor...")
 
-    if strict_day:
-        mode_label = "Pick del Día"
-    elif premium_mode:
-        mode_label = "Top Premium"
-    elif best_odds_mode:
-        mode_label = "Mejor Cuota del Día"
-    else:
-        mode_label = "Top Picks"
+        selected, meta, settings = generar_picks(
+            chat_id=chat_id,
+            league_id=league_id,
+            market_filter=market_filter,
+            max_picks=max_picks,
+            use_recent_form=settings["use_recent_form"],
+            enable_runline=settings["enable_runline"],
+            strict_day=strict_day,
+            premium_mode=premium_mode,
+            best_odds_mode=best_odds_mode
+        )
 
-    payload = _build_payload_from_selection(
-        selected=selected,
-        meta=meta,
-        settings=settings,
-        league_id=league_id,
-        market_filter=market_filter if market_filter != "DEFAULT" else settings["market_filter"],
-        max_picks=max_picks if max_picks > 0 else settings["max_picks"],
-        mode_label=mode_label,
-        strict_day=strict_day
-    )
+        if strict_day:
+            mode_label = "Pick del Día"
+        elif premium_mode:
+            mode_label = "Top Premium"
+        elif best_odds_mode:
+            mode_label = "Mejor Cuota del Día"
+        else:
+            mode_label = "Top Picks"
 
-    guardar_historial(payload["picks"])
-    _store_last_generated(chat_id, payload)
+        payload = _build_payload_from_selection(
+            selected=selected,
+            meta=meta,
+            settings=settings,
+            league_id=league_id,
+            market_filter=market_filter if market_filter != "DEFAULT" else settings["market_filter"],
+            max_picks=max_picks if max_picks > 0 else settings["max_picks"],
+            mode_label=mode_label,
+            strict_day=strict_day
+        )
 
-    await _send_payload(chat_id, context, payload, query=query)
+        guardar_historial(payload["picks"])
+        _store_last_generated(chat_id, payload)
+
+        await _send_payload(chat_id, context, payload, query=query)
+
+    except Exception as e:
+        logging.exception(f"Error en ejecutar_generacion league={league_id}: {e}")
+        if query is not None:
+            try:
+                await query.edit_message_text(
+                    f"⚠️ Ocurrió un error al generar picks.\n\n{e}",
+                    reply_markup=main_menu_markup()
+                )
+            except Exception:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⚠️ Ocurrió un error al generar picks.\n\n{e}",
+                    reply_markup=main_menu_markup()
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ Ocurrió un error al generar picks.\n\n{e}",
+                reply_markup=main_menu_markup()
+            )
 
 async def ejecutar_pick_del_dia(chat_id, context, league_id, query=None):
-    cached = _get_pick_day_payload(league_id)
-    if cached:
-        _store_last_generated(chat_id, cached)
-        await _send_payload(chat_id, context, cached, query=query)
-        return
+    try:
+        cached = _get_pick_day_payload(league_id)
+        if cached:
+            _store_last_generated(chat_id, cached)
+            await _send_payload(chat_id, context, cached, query=query)
+            return
 
-    settings = USER_SETTINGS[chat_id]
-    selected, meta, _ = generar_picks(
-        chat_id=chat_id,
-        league_id=league_id,
-        market_filter="ALL",
-        max_picks=1,
-        use_recent_form=settings["use_recent_form"],
-        enable_runline=settings["enable_runline"],
-        strict_day=True
-    )
+        settings = USER_SETTINGS[chat_id]
+        selected, meta, _ = generar_picks(
+            chat_id=chat_id,
+            league_id=league_id,
+            market_filter="ALL",
+            max_picks=1,
+            use_recent_form=settings["use_recent_form"],
+            enable_runline=settings["enable_runline"],
+            strict_day=True
+        )
 
-    payload = _build_payload_from_selection(
-        selected=selected,
-        meta=meta,
-        settings=settings,
-        league_id=league_id,
-        market_filter="ALL",
-        max_picks=1,
-        mode_label="Pick del Día",
-        strict_day=True
-    )
+        payload = _build_payload_from_selection(
+            selected=selected,
+            meta=meta,
+            settings=settings,
+            league_id=league_id,
+            market_filter="ALL",
+            max_picks=1,
+            mode_label="Pick del Día",
+            strict_day=True
+        )
 
-    _set_pick_day_payload(league_id, payload)
-    guardar_historial(payload["picks"])
-    _store_last_generated(chat_id, payload)
+        _set_pick_day_payload(league_id, payload)
+        guardar_historial(payload["picks"])
+        _store_last_generated(chat_id, payload)
 
-    await _send_payload(chat_id, context, payload, query=query)
+        await _send_payload(chat_id, context, payload, query=query)
+
+    except Exception as e:
+        logging.exception(f"Error en ejecutar_pick_del_dia league={league_id}: {e}")
+        if query is not None:
+            try:
+                await query.edit_message_text(
+                    f"⚠️ Ocurrió un error al generar el Pick del Día.\n\n{e}",
+                    reply_markup=main_menu_markup()
+                )
+            except Exception:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⚠️ Ocurrió un error al generar el Pick del Día.\n\n{e}",
+                    reply_markup=main_menu_markup()
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ Ocurrió un error al generar el Pick del Día.\n\n{e}",
+                reply_markup=main_menu_markup()
+            )
 
 async def publish_last_to_channel(chat_id, context):
     payload = _get_last_generated(chat_id)
@@ -1884,173 +1943,191 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    chat_id = query.message.chat.id
-    settings = USER_SETTINGS[chat_id]
+    try:
+        query = update.callback_query
+        data = query.data
+        chat_id = query.message.chat.id
+        settings = USER_SETTINGS[chat_id]
 
-    if data == "menu:main":
-        await query.answer()
-        await query.edit_message_text(
-            _main_menu_text(chat_id),
-            reply_markup=main_menu_markup()
-        )
-        return
-
-    if data == "menu:rendimiento":
-        await query.answer()
-        await query.edit_message_text(_build_performance_text(), reply_markup=main_menu_markup())
-        return
-
-    if data == "menu:historial":
-        await query.answer()
-        await query.edit_message_text(_build_history_text(), reply_markup=main_menu_markup())
-        return
-
-    if data == "menu:vip":
-        await query.answer()
-        await query.edit_message_text(_build_vip_text(), reply_markup=main_menu_markup())
-        return
-
-    if data == "menu:config":
-        await query.answer()
-        await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
-        return
-
-    if data.startswith("league:"):
-        _, lid = data.split(":", 1)
-        league_id = _safe_int(lid, 1)
-        settings["league_id"] = league_id
-        await query.answer()
-        await query.edit_message_text(
-            f"🎯 {_league_name(league_id)}\n\nElige una opción.",
-            reply_markup=league_menu_markup(league_id)
-        )
-        return
-
-    if data.startswith("rankings:"):
-        _, lid = data.split(":", 1)
-        league_id = _safe_int(lid, 1)
-        await query.answer()
-        await query.edit_message_text(_build_rankings_text(league_id), reply_markup=main_menu_markup())
-        return
-
-    if data == "analysis:last":
-        await query.answer()
-        payload = _get_last_generated(chat_id) or _get_pick_day_payload(settings["league_id"])
-        await query.edit_message_text(_build_analysis_text(payload), reply_markup=main_menu_markup())
-        return
-
-    if data == "config:toggle_form":
-        settings["use_recent_form"] = not settings["use_recent_form"]
-        await query.answer("Forma reciente actualizada")
-        await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
-        return
-
-    if data == "config:toggle_runline":
-        settings["enable_runline"] = not settings["enable_runline"]
-        await query.answer("Run Line actualizado")
-        await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
-        return
-
-    if data.startswith("config:set_filter:"):
-        _, _, filter_key = data.split(":", 2)
-        settings["market_filter"] = filter_key
-        await query.answer("Modo por defecto actualizado")
-        await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
-        return
-
-    if data.startswith("config:set_top:"):
-        _, _, top_s = data.split(":", 2)
-        settings["max_picks"] = _safe_int(top_s, DEFAULT_MAX_PICKS)
-        await query.answer("Top por defecto actualizado")
-        await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
-        return
-
-    if data.startswith("test:"):
-        _, lid = data.split(":", 1)
-        league_id = _safe_int(lid, 2)
-        await query.answer()
-        await query.edit_message_text(_build_test_text(league_id), reply_markup=league_menu_markup(league_id))
-        return
-
-    if data.startswith("gen:"):
-        _, lid, mode, limit_s = data.split(":", 3)
-        league_id = _safe_int(lid, settings["league_id"])
-
-        strict_day = False
-        premium_mode = False
-        best_odds_mode = False
-        filter_key = settings["market_filter"]
-
-        if mode == "DAY":
-            await query.answer("Generando Pick del Día...", show_alert=False)
-            await ejecutar_pick_del_dia(chat_id=chat_id, context=context, league_id=league_id, query=query)
+        if data == "menu:main":
+            await query.answer()
+            await query.edit_message_text(
+                _main_menu_text(chat_id),
+                reply_markup=main_menu_markup()
+            )
             return
 
-        if mode == "PREMIUM":
-            premium_mode = True
-            filter_key = "ALL"
-            limit = _safe_int(limit_s, 3)
-        elif mode == "ODDS":
-            best_odds_mode = True
-            filter_key = "ALL"
-            limit = 1
-        elif mode == "DEFAULT":
-            limit = _safe_int(limit_s, settings["max_picks"])
+        if data == "menu:rendimiento":
+            await query.answer()
+            await query.edit_message_text(_build_performance_text(), reply_markup=main_menu_markup())
+            return
+
+        if data == "menu:historial":
+            await query.answer()
+            await query.edit_message_text(_build_history_text(), reply_markup=main_menu_markup())
+            return
+
+        if data == "menu:vip":
+            await query.answer()
+            await query.edit_message_text(_build_vip_text(), reply_markup=main_menu_markup())
+            return
+
+        if data == "menu:config":
+            await query.answer()
+            await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
+            return
+
+        if data.startswith("league:"):
+            _, lid = data.split(":", 1)
+            league_id = _safe_int(lid, MLB_LEAGUE_ID)
+            settings["league_id"] = league_id
+            await query.answer()
+            await query.edit_message_text(
+                f"🎯 {_league_name(league_id)}\n\nElige una opción.",
+                reply_markup=league_menu_markup(league_id)
+            )
+            return
+
+        if data.startswith("rankings:"):
+            _, lid = data.split(":", 1)
+            league_id = _safe_int(lid, MLB_LEAGUE_ID)
+            await query.answer()
+            await query.edit_message_text(_build_rankings_text(league_id), reply_markup=main_menu_markup())
+            return
+
+        if data == "analysis:last":
+            await query.answer()
+            payload = _get_last_generated(chat_id) or _get_pick_day_payload(settings["league_id"])
+            await query.edit_message_text(_build_analysis_text(payload), reply_markup=main_menu_markup())
+            return
+
+        if data == "config:toggle_form":
+            settings["use_recent_form"] = not settings["use_recent_form"]
+            await query.answer("Forma reciente actualizada")
+            await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
+            return
+
+        if data == "config:toggle_runline":
+            settings["enable_runline"] = not settings["enable_runline"]
+            await query.answer("Run Line actualizado")
+            await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
+            return
+
+        if data.startswith("config:set_filter:"):
+            _, _, filter_key = data.split(":", 2)
+            settings["market_filter"] = filter_key
+            await query.answer("Modo por defecto actualizado")
+            await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
+            return
+
+        if data.startswith("config:set_top:"):
+            _, _, top_s = data.split(":", 2)
+            settings["max_picks"] = _safe_int(top_s, DEFAULT_MAX_PICKS)
+            await query.answer("Top por defecto actualizado")
+            await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
+            return
+
+        if data.startswith("test:"):
+            _, lid = data.split(":", 1)
+            league_id = _safe_int(lid, LMB_LEAGUE_ID)
+            await query.answer()
+            await query.edit_message_text(_build_test_text(league_id), reply_markup=league_menu_markup(league_id))
+            return
+
+        if data.startswith("gen:"):
+            _, lid, mode, limit_s = data.split(":", 3)
+            league_id = _safe_int(lid, settings["league_id"])
+
+            strict_day = False
+            premium_mode = False
+            best_odds_mode = False
             filter_key = settings["market_filter"]
-        else:
-            limit = _safe_int(limit_s, settings["max_picks"])
-            filter_key = mode
 
-        if limit <= 0:
-            limit = settings["max_picks"]
+            if mode == "DAY":
+                await query.answer("Generando Pick del Día...", show_alert=False)
+                await ejecutar_pick_del_dia(chat_id=chat_id, context=context, league_id=league_id, query=query)
+                return
 
-        await query.answer("Generando picks...", show_alert=False)
-        await ejecutar_generacion(
-            chat_id=chat_id,
-            context=context,
-            league_id=league_id,
-            market_filter=filter_key,
-            max_picks=limit,
-            strict_day=strict_day,
-            premium_mode=premium_mode,
-            best_odds_mode=best_odds_mode,
-            query=query
-        )
-        return
+            if mode == "PREMIUM":
+                premium_mode = True
+                filter_key = "ALL"
+                limit = _safe_int(limit_s, 3)
+            elif mode == "ODDS":
+                best_odds_mode = True
+                filter_key = "ALL"
+                limit = 1
+            elif mode == "DEFAULT":
+                limit = _safe_int(limit_s, settings["max_picks"])
+                filter_key = settings["market_filter"]
+            else:
+                limit = _safe_int(limit_s, settings["max_picks"])
+                filter_key = mode
 
-    if data == "publish:last":
-        await query.answer("Publicando al canal...", show_alert=False)
-        ok, msg = await publish_last_to_channel(chat_id, context)
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=("✅ " + msg) if ok else ("⚠️ " + msg),
-            reply_markup=main_menu_markup()
-        )
-        return
+            if limit <= 0:
+                limit = settings["max_picks"]
 
-    if data.startswith("res:"):
-        _, uid, result = data.split(":", 2)
-        updated = marcar_resultado(uid, result)
-
-        if not updated:
-            await query.answer("No encontré ese pick")
+            await query.answer("Generando picks...", show_alert=False)
+            await ejecutar_generacion(
+                chat_id=chat_id,
+                context=context,
+                league_id=league_id,
+                market_filter=filter_key,
+                max_picks=limit,
+                strict_day=strict_day,
+                premium_mode=premium_mode,
+                best_odds_mode=best_odds_mode,
+                query=query
+            )
             return
 
-        current_text = query.message.text or ""
-        new_text = re.sub(r"Estado:\s*.*", f"Estado: {_result_label(result)}", current_text)
-        if new_text == current_text:
-            new_text += f"\n\nEstado: {_result_label(result)}"
+        if data == "publish:last":
+            await query.answer("Publicando al canal...", show_alert=False)
+            ok, msg = await publish_last_to_channel(chat_id, context)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=("✅ " + msg) if ok else ("⚠️ " + msg),
+                reply_markup=main_menu_markup()
+            )
+            return
 
-        await query.edit_message_text(
-            text=new_text,
-            reply_markup=pick_result_markup(uid)
-        )
-        await query.answer(f"Marcado como {_result_label(result)}")
-        return
+        if data.startswith("res:"):
+            _, uid, result = data.split(":", 2)
+            updated = marcar_resultado(uid, result)
 
-    await query.answer()
+            if not updated:
+                await query.answer("No encontré ese pick")
+                return
+
+            current_text = query.message.text or ""
+            new_text = _replace_status(current_text, _result_label(result))
+
+            await query.edit_message_text(
+                text=new_text,
+                reply_markup=pick_result_markup(uid)
+            )
+            await query.answer(f"Marcado como {_result_label(result)}")
+            return
+
+        await query.answer()
+
+    except Exception as e:
+        logging.exception(f"Error en handle_callback: {e}")
+        try:
+            if update.callback_query:
+                await update.callback_query.answer("Ocurrió un error")
+                await update.callback_query.edit_message_text(
+                    f"⚠️ Ocurrió un error.\n\n{e}",
+                    reply_markup=main_menu_markup()
+                )
+        except Exception:
+            pass
+
+# ==========================
+# ERROR HANDLER
+# ==========================
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logging.exception("Error no manejado", exc_info=context.error)
 
 # ==========================
 # MAIN
@@ -2060,6 +2137,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_error_handler(on_error)
 
     logging.info("🤖 Boss Odds iniciado")
     app.run_polling()
