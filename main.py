@@ -33,7 +33,12 @@ if not API_KEY:
 
 BASE_URL = "https://v1.baseball.api-sports.io"
 SEASON = 2026
-BOOKMAKER_ID = 4  # Pinnacle
+BOOKMAKER_ID = 4
+
+LEAGUES = {
+    1: "MLB",
+    2: "LMB",
+}
 
 MAX_GAMES_TO_ANALYZE = 15
 DEFAULT_MAX_PICKS = 6
@@ -58,13 +63,6 @@ MARKET_FILTER_LABELS = {
     "RUNLINE": "Run Line",
 }
 
-MARKET_WEIGHTS = {
-    "Moneyline": 1.00,
-    "Totales": 0.97,
-    "F5 Totales": 0.92,
-    "Run Line": 0.40,
-}
-
 DEFAULT_MAX_PER_MARKET = {
     "Moneyline": 3,
     "Totales": 2,
@@ -72,10 +70,53 @@ DEFAULT_MAX_PER_MARKET = {
     "Run Line": 1,
 }
 
+# Pesos por liga
+LEAGUE_MODEL = {
+    1: {  # MLB
+        "base_win": 68.0,
+        "base_diff": 7.0,
+        "base_pos": 0.45,
+        "recent_win": 15.0,
+        "last5_win": 6.0,
+        "recent_diff": 2.5,
+        "moneyline_gap_div": 7.0,
+        "totals_gap_mult": 1.7,
+        "runline_gap_div": 7.5,
+        "runline_ev_min": 0.03,
+        "totals_ev_min": 0.012,
+        "market_weights": {
+            "Moneyline": 1.00,
+            "Totales": 0.97,
+            "F5 Totales": 0.92,
+            "Run Line": 0.40,
+        }
+    },
+    2: {  # LMB
+        "base_win": 55.0,
+        "base_diff": 4.5,
+        "base_pos": 0.25,
+        "recent_win": 22.0,
+        "last5_win": 10.0,
+        "recent_diff": 4.0,
+        "moneyline_gap_div": 6.2,
+        "totals_gap_mult": 1.9,
+        "runline_gap_div": 6.8,
+        "runline_ev_min": 0.035,
+        "totals_ev_min": 0.015,
+        "market_weights": {
+            "Moneyline": 0.95,
+            "Totales": 1.05,
+            "F5 Totales": 0.95,
+            "Run Line": 0.30,
+        }
+    }
+}
+
 # ==========================
 # CACHES / STATE
 # ==========================
 
+GAMES_CACHE = {}
 STANDINGS_CACHE = {}
 ODDS_CACHE = {}
 FORM_CACHE = {}
@@ -85,8 +126,8 @@ USER_SETTINGS = defaultdict(lambda: {
     "enable_runline": True,
     "market_filter": "ALL",
     "max_picks": DEFAULT_MAX_PICKS,
+    "league_id": 1,  # default MLB
 })
-
 
 # ==========================
 # HELPERS
@@ -188,6 +229,19 @@ def _load_pick_day_state():
 def _save_pick_day_state(state):
     _save_json(PICK_DAY_FILE, state)
 
+def _get_pick_day_payload(league_id):
+    state = _load_pick_day_state()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    key = f"{league_id}:{today}"
+    return state.get(key)
+
+def _set_pick_day_payload(league_id, payload):
+    state = _load_pick_day_state()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    key = f"{league_id}:{today}"
+    state[key] = payload
+    _save_pick_day_state(state)
+
 def _get_channel_chat_id():
     if not CHANNEL_ID_RAW:
         return None
@@ -224,11 +278,6 @@ def _result_label(result):
         "pending": "Pendiente",
     }.get(str(result).lower(), str(result))
 
-def _form_summary(forma):
-    if not forma:
-        return "N/A"
-    return f"{forma.get('recent_record', 'N/A')} últimos 10 | {forma.get('last5_record', 'N/A')} últimos 5"
-
 def _confidence_label(confidence):
     if confidence >= 88:
         return "Elite"
@@ -237,6 +286,32 @@ def _confidence_label(confidence):
     if confidence >= 74:
         return "Fuerte"
     return "Moderado"
+
+def _league_name(league_id):
+    return LEAGUES.get(league_id, f"Liga {league_id}")
+
+def _league_short(league_id):
+    return "MLB" if league_id == 1 else "LMB" if league_id == 2 else f"L{league_id}"
+
+def _is_reasonable_total_odd(odd):
+    try:
+        odd = float(odd)
+        return 1.20 <= odd <= 3.20
+    except Exception:
+        return False
+
+def _is_reasonable_runline_odd(odd):
+    try:
+        odd = float(odd)
+        return 1.20 <= odd <= 2.30
+    except Exception:
+        return False
+
+def _current_date():
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+def _league_settings(league_id):
+    return LEAGUE_MODEL.get(league_id, LEAGUE_MODEL[1])
 
 def _format_runline_label(label, juego):
     txt = str(label or "").strip().lower()
@@ -253,7 +328,6 @@ def _format_runline_label(label, juego):
 def _market_allowed(market_filter, market_name, enable_runline=True):
     if market_name == "Run Line" and not enable_runline:
         return False
-
     if market_filter == "ALL":
         return True
     if market_filter == "ML":
@@ -275,23 +349,6 @@ def _market_caps_for_filter(market_filter, max_picks):
         return {"Run Line": max_picks}
     return dict(DEFAULT_MAX_PER_MARKET)
 
-def _filter_label(market_filter):
-    return MARKET_FILTER_LABELS.get(market_filter, market_filter)
-
-def _is_reasonable_total_odd(odd):
-    try:
-        odd = float(odd)
-        return 1.20 <= odd <= 3.20
-    except Exception:
-        return False
-
-def _is_reasonable_runline_odd(odd):
-    try:
-        odd = float(odd)
-        return 1.20 <= odd <= 2.30
-    except Exception:
-        return False
-
 def _correlation_key(pick):
     matchup = str(pick.get("matchup", ""))
     market = str(pick.get("market", ""))
@@ -300,15 +357,12 @@ def _correlation_key(pick):
 
     if market == "Moneyline":
         return f"{matchup}|team|{pick_norm}"
-
     if market == "Run Line":
         team = re.sub(r"\s*[+-]1\.5\s*$", "", pick_text).strip()
         return f"{matchup}|team|{_norm(team)}"
-
     if market in {"Totales", "F5 Totales"}:
         side = "over" if pick_text.lower().startswith("over") else "under"
         return f"{matchup}|{market}|{side}"
-
     return f"{matchup}|{market}|{pick_norm}"
 
 def _rank_candidates(candidates, rank_by="score"):
@@ -352,422 +406,13 @@ def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score")
 
     return selected
 
-def _current_date():
-    return datetime.utcnow().strftime("%Y-%m-%d")
-
-def _today_pick_day_cached():
-    state = _load_pick_day_state()
-    if state.get("date") == _current_date():
-        return state.get("payload")
-    return None
-
-def _latest_payload_for_analysis(chat_id):
-    payload = _get_last_generated(chat_id)
-    if payload:
-        return payload
-    return _today_pick_day_cached()
-
-def _build_payload(selected_picks, meta, settings, market_filter, max_picks, mode_label, strict_day=False):
-    picks_guardados = []
-    for pick in selected_picks:
-        pick = dict(pick)
-        pick["uid"] = _make_uid()
-        pick["stake"] = calcular_stake(pick["confidence"])
-        picks_guardados.append(pick)
-
-    return {
-        "generated_at": datetime.utcnow().isoformat(),
-        "market_filter": market_filter,
-        "max_picks": max_picks,
-        "meta": meta,
-        "settings": settings,
-        "picks": picks_guardados,
-        "mode_label": mode_label,
-        "strict_day": strict_day,
-    }
-
-
 # ==========================
-# TEXT BUILDERS
-# ==========================
-
-def _main_menu_text(chat_id):
-    s = USER_SETTINGS[chat_id]
-    return (
-        "🔥 BOSS ODDS MX\n\n"
-        "Todo se maneja con botones.\n\n"
-        f"Modo por defecto: {_filter_label(s['market_filter'])}\n"
-        f"Top por defecto: {s['max_picks']}\n"
-        f"Forma reciente: {'ON' if s['use_recent_form'] else 'OFF'}\n"
-        f"Run Line: {'ON' if s['enable_runline'] else 'OFF'}"
-    )
-
-def _picks_menu_text(chat_id):
-    s = USER_SETTINGS[chat_id]
-    return (
-        "🎯 CENTRO DE PICKS\n\n"
-        f"Modo por defecto: {_filter_label(s['market_filter'])}\n"
-        f"Top por defecto: {s['max_picks']}\n\n"
-        "Genera picks por privado y luego publícalos al canal."
-    )
-
-def _config_menu_text(chat_id):
-    s = USER_SETTINGS[chat_id]
-    return (
-        "⚙️ CONFIGURACIÓN\n\n"
-        f"Forma reciente: {'ON' if s['use_recent_form'] else 'OFF'}\n"
-        f"Run Line: {'ON' if s['enable_runline'] else 'OFF'}\n"
-        f"Modo por defecto: {_filter_label(s['market_filter'])}\n"
-        f"Top por defecto: {s['max_picks']}"
-    )
-
-def _build_history_text():
-    historial = cargar_historial()
-    if not historial:
-        return "Todavía no hay picks guardados."
-
-    ultimos = historial[-10:]
-    texto = "🗂 ÚLTIMOS PICKS\n\n"
-
-    for item in reversed(ultimos):
-        odd = _safe_float(item.get("odd"), 0.0)
-        texto += (
-            f"UID: {item.get('uid')}\n"
-            f"{item.get('market')} | {item.get('pick')}\n"
-            f"{item.get('matchup')}\n"
-            f"Cuota: {odd:.2f} | Stake: {item.get('stake')} | Estado: {_result_label(item.get('status'))}\n\n"
-        )
-
-    return texto[:4000]
-
-def _build_summary_text(meta, selected_picks, market_filter, max_picks, settings, mode_label="Top Picks"):
-    counts = defaultdict(int)
-    for pick in selected_picks:
-        counts[pick["market"]] += 1
-
-    texto = "🔥 TOP PICKS BOSS ODDS\n\n"
-    texto += f"🎛 Modo: {mode_label}\n"
-    texto += f"🎛 Filtro: {_filter_label(market_filter)}\n"
-    texto += f"📊 MLB analizados: {meta['analizados']}\n"
-    texto += f"📈 Juegos usados en picks: {meta['usados']}\n"
-    texto += f"📈 Candidatos detectados: {meta['candidatos']}\n"
-    texto += f"🎯 Seleccionados: {len(selected_picks)}\n"
-    texto += f"🔢 Top solicitado: {max_picks}\n\n"
-
-    for market in ["Moneyline", "Totales", "F5 Totales", "Run Line"]:
-        if counts.get(market):
-            texto += f"• {market}: {counts[market]}\n"
-
-    texto += "\n"
-    texto += f"Forma reciente: {'ON' if settings['use_recent_form'] else 'OFF'}\n"
-    texto += f"Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
-    texto += "\nCada pick llega en un mensaje separado.\n"
-
-    return texto[:4000]
-
-def _pick_header(idx):
-    if idx == 1:
-        return "🔥 PICK DEL DÍA"
-    if idx == 2:
-        return "🥈 PICK #2"
-    if idx == 3:
-        return "🥉 PICK #3"
-    return f"⭐ PICK #{idx}"
-
-def _build_pick_card(pick, idx):
-    level = _confidence_label(pick["confidence"])
-
-    texto = (
-        f"{_pick_header(idx)}\n"
-        f"⚾ {pick['matchup']}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"✅ Selección: {pick['pick']}\n"
-        f"🎯 Mercado: {pick['market']}\n"
-        f"💰 Cuota: {pick['odd']:.2f}\n"
-    )
-
-    if pick.get("line") is not None:
-        texto += f"📏 Línea: {pick['line']:.1f}\n"
-
-    if pick.get("projection") is not None:
-        texto += f"📈 Proyección: {pick['projection']:.2f}\n"
-
-    texto += (
-        f"🎲 Stake: {pick['stake']}/5\n"
-        f"📊 Confianza: {pick['confidence']}%\n"
-        f"⭐ Nivel: {level}\n"
-        f"📉 EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"Boss Odds MX\n"
-    )
-
-    return texto[:4000]
-
-def _build_analysis_text(payload):
-    if not payload or not payload.get("picks"):
-        return "Todavía no hay una selección reciente para mostrar análisis."
-
-    meta = payload["meta"]
-    picks = payload["picks"]
-
-    texto = "📋 ANÁLISIS DETALLADO\n\n"
-    texto += f"Modo: {payload.get('mode_label', 'Top Picks')}\n"
-    texto += f"Filtro: {_filter_label(payload.get('market_filter', 'ALL'))}\n"
-    texto += f"Generado: {payload.get('generated_at', 'N/A')}\n"
-    texto += f"Analizados: {meta.get('analizados', 0)} | Candidatos: {meta.get('candidatos', 0)}\n\n"
-
-    for idx, pick in enumerate(picks, start=1):
-        texto += f"{idx}. {pick['matchup']}\n"
-        texto += f"   {pick['market']} -> {pick['pick']}\n"
-        texto += f"   Cuota: {pick['odd']:.2f} | Confianza: {pick['confidence']}% | EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
-        if pick.get("line") is not None:
-            texto += f"   Línea: {pick['line']:.1f}\n"
-        if pick.get("projection") is not None:
-            texto += f"   Proyección: {pick['projection']:.2f}\n"
-        texto += f"   Razón: {pick.get('reason', '')}\n\n"
-
-    return texto[:4000]
-
-def _build_channel_summary_text(payload):
-    meta = payload["meta"]
-    picks = payload["picks"]
-    settings = payload["settings"]
-
-    texto = "🔥 BOSS ODDS MX | TOP PICKS\n\n"
-    texto += f"🎛 Modo: {payload.get('mode_label', 'Top Picks')}\n"
-    texto += f"🎛 Filtro: {_filter_label(payload.get('market_filter', 'ALL'))}\n"
-    texto += f"📊 MLB analizados: {meta['analizados']}\n"
-    texto += f"📈 Candidatos: {meta['candidatos']}\n"
-    texto += f"🎯 Publicados: {len(picks)}\n"
-    texto += f"🔢 Top: {payload.get('max_picks', len(picks))}\n"
-    texto += f"🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-    texto += f"Forma reciente: {'ON' if settings['use_recent_form'] else 'OFF'} | Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
-    return texto[:4000]
-
-def _build_channel_pick_text(pick, idx):
-    level = _confidence_label(pick["confidence"])
-    texto = (
-        f"{_pick_header(idx)}\n"
-        f"⚾ {pick['matchup']}\n"
-        f"✅ {pick['pick']}\n"
-        f"🎯 Mercado: {pick['market']}\n"
-        f"💰 Cuota: {pick['odd']:.2f}\n"
-    )
-    if pick.get("line") is not None:
-        texto += f"📏 Línea: {pick['line']:.1f}\n"
-    texto += (
-        f"🎲 Stake: {pick['stake']}/5\n"
-        f"📊 Confianza: {pick['confidence']}% ({level})\n"
-        f"📉 EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"Boss Odds MX VIP\n"
-    )
-    return texto[:4000]
-
-def _replace_status(text, new_status_label):
-    if not text:
-        return f"Estado: {new_status_label}"
-    if "Estado:" in text:
-        return re.sub(r"Estado:\s*.*", f"Estado: {new_status_label}", text, count=1)
-    return text + f"\n\nEstado: {new_status_label}"
-
-def _build_vip_text():
-    return (
-        "👑 BOSS ODDS VIP\n\n"
-        "Planes de membresía:\n\n"
-        "1 mes: $500 MXN\n"
-        "3 meses: $900 MXN\n"
-        "12 meses: $2,000 MXN\n\n"
-        "Acceso a picks premium, análisis más profundo y selección diaria."
-    )
-
-def _build_rankings_text():
-    standings = obtener_standings(1)
-    if not standings:
-        return "No hay standings disponibles para rankings."
-
-    rows = []
-    for team_id, data in standings.items():
-        win_pct = _safe_float(data.get("win_pct"), 0.0)
-        games_played = _safe_int(data.get("games_played"), 1)
-        run_diff = _safe_float(data.get("run_diff"), 0.0)
-        pos = _safe_int(data.get("position"), 99)
-        score = (win_pct * 68.0) + ((run_diff / max(1, games_played)) * 7.0) + (max(0, 30 - pos) * 0.45)
-        rows.append((score, data))
-
-    rows.sort(key=lambda x: x[0], reverse=True)
-    top = rows[:10]
-
-    texto = "📈 POWER RANKINGS MLB\n\n"
-    for i, (score, data) in enumerate(top, start=1):
-        texto += (
-            f"{i}. {data.get('team_name')}\n"
-            f"   Win%: {(_safe_float(data.get('win_pct')) * 100):.1f}% | "
-            f"RD: {_safe_float(data.get('run_diff')):+.0f} | "
-            f"Score: {score:.1f}\n\n"
-        )
-
-    return texto[:4000]
-
-def _build_performance_text():
-    overall, by_market = resumen_historial()
-
-    if not overall:
-        return "Aún no hay picks cerrados para calcular ROI."
-
-    def _line(title, data):
-        settled = data["settled"]
-        wins = data["wins"]
-        losses = data["losses"]
-        pushes = data["pushes"]
-        staked = data["staked"]
-        profit = data["profit"]
-        winrate = (wins / settled * 100.0) if settled else 0.0
-        roi = (profit / staked * 100.0) if staked else 0.0
-        return (
-            f"{title}\n"
-            f"• Cerrados: {settled}\n"
-            f"• W-L-P: {wins}-{losses}-{pushes}\n"
-            f"• Win rate: {winrate:.1f}%\n"
-            f"• ROI: {roi:+.1f}%\n"
-        )
-
-    texto = "📊 RENDIMIENTO\n\n"
-    texto += _line("General", overall) + "\n"
-
-    for market in ["Moneyline", "Totales", "F5 Totales", "Run Line"]:
-        if market in by_market:
-            texto += _line(market, by_market[market]) + "\n"
-
-    return texto[:4000]
-
-def _games_text():
-    mlb = obtener_juegos(1)
-    texto = "📅 CARTELERA MLB\n\n"
-    texto += f"⚾ Juegos encontrados: {len(mlb)}\n\n"
-
-    for juego in mlb:
-        texto += f"• {juego['away']} vs {juego['home']}  (ID {juego['game_id']})\n"
-
-    return texto[:4000]
-
-
-# ==========================
-# KEYBOARDS
-# ==========================
-
-def main_menu_markup():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎯 Picks", callback_data="menu:picks"),
-            InlineKeyboardButton("📋 Análisis", callback_data="analysis:last"),
-        ],
-        [
-            InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
-            InlineKeyboardButton("📈 Rankings", callback_data="menu:rankings"),
-        ],
-        [
-            InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
-            InlineKeyboardButton("👑 VIP", callback_data="menu:vip"),
-        ],
-        [
-            InlineKeyboardButton("⚙️ Configuración", callback_data="menu:config"),
-        ]
-    ])
-
-def picks_menu_markup():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔥 Pick del Día", callback_data="gen:DAY:1"),
-        ],
-        [
-            InlineKeyboardButton("🥇 Top 3", callback_data="gen:DEFAULT:3"),
-            InlineKeyboardButton("⭐ Top 6", callback_data="gen:DEFAULT:6"),
-        ],
-        [
-            InlineKeyboardButton("💎 Top Premium", callback_data="gen:PREMIUM:3"),
-            InlineKeyboardButton("💰 Mejor Cuota del Día", callback_data="gen:ODDS:1"),
-        ],
-        [
-            InlineKeyboardButton("💰 Moneyline", callback_data="gen:ML:0"),
-            InlineKeyboardButton("📈 Totales", callback_data="gen:TOTALS:0"),
-        ],
-        [
-            InlineKeyboardButton("🏃 Run Line", callback_data="gen:RUNLINE:0"),
-            InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
-        ],
-        [
-            InlineKeyboardButton("📋 Ver análisis", callback_data="analysis:last"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
-        ]
-    ])
-
-def publish_summary_markup():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📋 Ver análisis", callback_data="analysis:last"),
-        ],
-        [
-            InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
-        ]
-    ])
-
-def pick_result_markup(uid):
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Win", callback_data=f"res:{uid}:win"),
-            InlineKeyboardButton("❌ Loss", callback_data=f"res:{uid}:loss"),
-            InlineKeyboardButton("➖ Push", callback_data=f"res:{uid}:push"),
-        ],
-        [
-            InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
-            InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
-        ]
-    ])
-
-def config_menu_markup(chat_id):
-    s = USER_SETTINGS[chat_id]
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                f"Forma reciente: {'ON' if s['use_recent_form'] else 'OFF'}",
-                callback_data="config:toggle_form"
-            ),
-            InlineKeyboardButton(
-                f"Run Line: {'ON' if s['enable_runline'] else 'OFF'}",
-                callback_data="config:toggle_runline"
-            ),
-        ],
-        [
-            InlineKeyboardButton("Modo: Todos", callback_data="config:set_filter:ALL"),
-            InlineKeyboardButton("Modo: Moneyline", callback_data="config:set_filter:ML"),
-        ],
-        [
-            InlineKeyboardButton("Modo: Totales", callback_data="config:set_filter:TOTALS"),
-            InlineKeyboardButton("Modo: Run Line", callback_data="config:set_filter:RUNLINE"),
-        ],
-        [
-            InlineKeyboardButton("Top 3", callback_data="config:set_top:3"),
-            InlineKeyboardButton("Top 6", callback_data="config:set_top:6"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
-        ]
-    ])
-
-
-# ==========================
-# API SPORTS
+# DATA FETCH
 # ==========================
 
 def obtener_juegos(league_id):
     cache_key = ("games", league_id, SEASON, _current_date())
-    cached = _cache_get(STANDINGS_CACHE, cache_key)
+    cached = _cache_get(GAMES_CACHE, cache_key)
     if cached is not None:
         return cached
 
@@ -820,7 +465,7 @@ def obtener_juegos(league_id):
 
                 juegos.append({
                     "league_id": league_id,
-                    "league_name": "MLB" if league_id == 1 else "LMB",
+                    "league_name": _league_name(league_id),
                     "game_id": game_id,
                     "home_team_id": home_team_id,
                     "away_team_id": away_team_id,
@@ -834,7 +479,7 @@ def obtener_juegos(league_id):
         except Exception as e:
             logging.error(f"Error API games ({fecha}) league={league_id}: {e}")
 
-    _cache_set(STANDINGS_CACHE, cache_key, juegos)
+    _cache_set(GAMES_CACHE, cache_key, juegos)
     return juegos
 
 def obtener_standings(league_id):
@@ -1171,20 +816,24 @@ def extraer_mercados_odds(odds_response):
 
     return markets
 
-
 # ==========================
 # MODELO
 # ==========================
 
-def calcular_fuerza_equipo(standing, forma=None):
+def calcular_fuerza_equipo(standing, forma=None, league_id=1):
+    return _league_strength(standing, forma, league_id)
+
+def _league_strength(standing, forma=None, league_id=1):
     if not standing:
         return 0.0
+
+    cfg = _league_settings(league_id)
 
     win_pct = standing.get("win_pct", 0.0)
     run_diff_pg = standing.get("run_diff", 0.0) / max(1, standing.get("games_played", 1))
     position = standing.get("position", 99)
 
-    score = (win_pct * 68.0) + (run_diff_pg * 7.0) + (max(0, 30 - position) * 0.45)
+    score = (win_pct * cfg["base_win"]) + (run_diff_pg * cfg["base_diff"]) + (max(0, 30 - position) * cfg["base_pos"])
 
     if forma:
         recent_win_pct = forma.get("recent_win_pct")
@@ -1192,15 +841,23 @@ def calcular_fuerza_equipo(standing, forma=None):
         recent_run_diff_pg = forma.get("recent_run_diff_pg")
 
         if recent_win_pct is not None:
-            score += recent_win_pct * 15.0
+            score += recent_win_pct * cfg["recent_win"]
         if last5_win_pct is not None:
-            score += last5_win_pct * 6.0
+            score += last5_win_pct * cfg["last5_win"]
         if recent_run_diff_pg is not None:
-            score += recent_run_diff_pg * 2.5
+            score += recent_run_diff_pg * cfg["recent_diff"]
 
     return score
 
+def _summary_form(forma):
+    if not forma:
+        return "N/A"
+    return f"{forma.get('recent_record', 'N/A')} últimos 10 | {forma.get('last5_record', 'N/A')} últimos 5"
+
 def pick_moneyline(juego, standing_home, standing_away, form_home, form_away, markets):
+    league_id = juego["league_id"]
+    cfg = _league_settings(league_id)
+
     ml = markets.get("moneyline")
     if not ml:
         return None
@@ -1210,11 +867,11 @@ def pick_moneyline(juego, standing_home, standing_away, form_home, form_away, ma
     if not home_odd or not away_odd:
         return None
 
-    home_strength = calcular_fuerza_equipo(standing_home, form_home)
-    away_strength = calcular_fuerza_equipo(standing_away, form_away)
+    home_strength = calcular_fuerza_equipo(standing_home, form_home, league_id)
+    away_strength = calcular_fuerza_equipo(standing_away, form_away, league_id)
 
     gap = home_strength - away_strength
-    prob_home = _sigmoid(gap / 7.0)
+    prob_home = _sigmoid(gap / cfg["moneyline_gap_div"])
 
     implied_home = 1.0 / home_odd
     implied_away = 1.0 / away_odd
@@ -1238,12 +895,13 @@ def pick_moneyline(juego, standing_home, standing_away, form_home, form_away, ma
 
     form_note = ""
     if form_home and form_away:
-        form_note = f" Forma: {juego['home']} {_form_summary(form_home)} | {juego['away']} {_form_summary(form_away)}."
+        form_note = f" Forma: {juego['home']} {_league_short(league_id)} {_summary_form(form_home)} | {juego['away']} {_summary_form(form_away)}."
 
-    confidence = int(_clamp(58 + abs(gap) * 0.35 + ev * 30.0, 58, 88))
-    score = (confidence * MARKET_WEIGHTS["Moneyline"]) + (max(ev, 0.0) * 100.0 * 0.45)
+    confidence = int(_clamp(58 + abs(gap) * 0.35 + ev * 30.0, 58, 90))
+    score = (confidence * cfg["market_weights"]["Moneyline"]) + (max(ev, 0.0) * 100.0 * 0.45)
 
     return {
+        "league_id": league_id,
         "league_name": juego["league_name"],
         "matchup": juego["partido"],
         "market": "Moneyline",
@@ -1255,10 +913,13 @@ def pick_moneyline(juego, standing_home, standing_away, form_home, form_away, ma
         "ev": ev,
         "score": score,
         "reason": f"Mejor win%, diferencial y {side_note}.{form_note}",
-        "notes": []
+        "notes": [],
     }
 
 def pick_total(juego, standing_home, standing_away, form_home, form_away, market, market_name):
+    league_id = juego["league_id"]
+    cfg = _league_settings(league_id)
+
     if not market:
         return None
 
@@ -1270,9 +931,7 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
         return None
 
     if not _is_reasonable_total_odd(over_odd) or not _is_reasonable_total_odd(under_odd):
-        logging.info(
-            f"[TOTALS DEBUG] descartado {juego['partido']} {market_name} line={line} over={over_odd} under={under_odd}"
-        )
+        logging.info(f"[TOTALS DEBUG] descartado {juego['partido']} {market_name} line={line} over={over_odd} under={under_odd}")
         return None
 
     home_for = _blend(
@@ -1308,26 +967,27 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
     if gap > 0:
         pick_side = "Over"
         odd = over_odd
-        model_prob = _sigmoid(gap * 1.7)
+        model_prob = _sigmoid(gap * cfg["totals_gap_mult"])
     else:
         pick_side = "Under"
         odd = under_odd
-        model_prob = _sigmoid((-gap) * 1.7)
+        model_prob = _sigmoid((-gap) * cfg["totals_gap_mult"])
 
     implied = 1.0 / odd
     ev = model_prob - implied
 
-    if ev < 0.012:
+    if ev < cfg["totals_ev_min"]:
         return None
 
-    confidence = int(_clamp(58 + abs(gap) * 7.5 + ev * 25.0, 58, 86))
-    score = (confidence * MARKET_WEIGHTS[market_name]) + (max(ev, 0.0) * 100.0 * 0.40)
+    confidence = int(_clamp(58 + abs(gap) * 7.5 + ev * 25.0, 58, 88))
+    score = (confidence * cfg["market_weights"][market_name]) + (max(ev, 0.0) * 100.0 * 0.40)
 
     form_note = ""
     if form_home and form_away:
-        form_note = f" Forma: {_form_summary(form_home)} | {_form_summary(form_away)}."
+        form_note = f" Forma: {_summary_form(form_home)} | {_summary_form(form_away)}."
 
     return {
+        "league_id": league_id,
         "league_name": juego["league_name"],
         "matchup": juego["partido"],
         "market": market_name,
@@ -1339,25 +999,27 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
         "ev": ev,
         "score": score,
         "reason": f"Proyección de {proj_total:.2f} carreras vs línea {line:.1f}.{form_note}",
-        "notes": []
+        "notes": [],
     }
 
 def pick_runline(juego, standing_home, standing_away, form_home, form_away, markets):
+    league_id = juego["league_id"]
+    cfg = _league_settings(league_id)
+
     runline = markets.get("runline")
     if not runline:
         return None
 
-    home_strength = calcular_fuerza_equipo(standing_home, form_home)
-    away_strength = calcular_fuerza_equipo(standing_away, form_away)
+    home_strength = calcular_fuerza_equipo(standing_home, form_home, league_id)
+    away_strength = calcular_fuerza_equipo(standing_away, form_away, league_id)
     gap = home_strength - away_strength
-    home_prob = _sigmoid(gap / 7.5)
+    home_prob = _sigmoid(gap / cfg["runline_gap_div"])
 
     opciones = []
 
     for nombre, odd in runline.items():
         if not odd:
             continue
-
         if not _is_reasonable_runline_odd(odd):
             continue
 
@@ -1377,7 +1039,7 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
         implied = 1.0 / odd
         ev = est_prob - implied
 
-        if ev < 0.03:
+        if ev < cfg["runline_ev_min"]:
             continue
 
         score = (ev * 100.0 * 0.35) + abs(gap) * 0.5
@@ -1390,14 +1052,15 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
     _, raw_pick, odd, ev = opciones[0]
 
     friendly_pick = _format_runline_label(raw_pick, juego)
-    confidence = int(_clamp(58 + abs(gap) * 0.2 + ev * 22.0, 58, 82))
-    score = (confidence * MARKET_WEIGHTS["Run Line"]) + (max(ev, 0.0) * 100.0 * 0.25)
+    confidence = int(_clamp(58 + abs(gap) * 0.2 + ev * 22.0, 58, 84))
+    score = (confidence * cfg["market_weights"]["Run Line"]) + (max(ev, 0.0) * 100.0 * 0.25)
 
     form_note = ""
     if form_home and form_away:
-        form_note = f" Forma: {_form_summary(form_home)} | {_form_summary(form_away)}."
+        form_note = f" Forma: {_summary_form(form_home)} | {_summary_form(form_away)}."
 
     return {
+        "league_id": league_id,
         "league_name": juego["league_name"],
         "matchup": juego["partido"],
         "market": "Run Line",
@@ -1409,9 +1072,8 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
         "ev": ev,
         "score": score,
         "reason": f"Ventaja estadística ajustada por handicap.{form_note}",
-        "notes": []
+        "notes": [],
     }
-
 
 # ==========================
 # HISTORIAL / RESULTADOS
@@ -1438,6 +1100,7 @@ def guardar_picks_en_historial(picks):
             "uid": pick["uid"],
             "timestamp": now,
             "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "league_id": pick.get("league_id"),
             "league_name": pick.get("league_name"),
             "matchup": pick.get("matchup"),
             "market": pick.get("market"),
@@ -1487,7 +1150,7 @@ def resumen_historial():
         "losses": 0,
         "pushes": 0,
         "staked": 0.0,
-        "profit": 0.0
+        "profit": 0.0,
     }
 
     by_market = defaultdict(lambda: {
@@ -1496,7 +1159,7 @@ def resumen_historial():
         "losses": 0,
         "pushes": 0,
         "staked": 0.0,
-        "profit": 0.0
+        "profit": 0.0,
     })
 
     for p in settled:
@@ -1504,7 +1167,6 @@ def resumen_historial():
         stake = _safe_float(p.get("stake"), 1.0)
         odd = _safe_float(p.get("odd"), 1.0)
         result = p.get("status")
-
         profit = _market_profit(stake, odd, result)
 
         overall["settled"] += 1
@@ -1532,13 +1194,96 @@ def resumen_historial():
 
     return overall, by_market
 
+# ==========================
+# GENERATION CORE
+# ==========================
 
-# ==========================
-# GENERACIÓN
-# ==========================
+def _build_candidates_for_league(league_id, market_filter, use_recent_form, enable_runline):
+    juegos_all = obtener_juegos(league_id)
+    juegos = juegos_all[:MAX_GAMES_TO_ANALYZE]
+    standings = obtener_standings(league_id)
+
+    candidatos = []
+
+    for juego in juegos:
+        home_standing = standings.get(juego["home_team_id"])
+        away_standing = standings.get(juego["away_team_id"])
+
+        home_form = obtener_forma_equipo(juego["home_team_id"], league_id, use_recent_form) if use_recent_form else {}
+        away_form = obtener_forma_equipo(juego["away_team_id"], league_id, use_recent_form) if use_recent_form else {}
+
+        odds_response = obtener_odds(juego["game_id"], league_id)
+        markets = extraer_mercados_odds(odds_response)
+
+        logging.info(f"{juego['partido']} ({_league_short(league_id)}) -> markets={list(markets.keys())}")
+
+        if not markets:
+            continue
+
+        if _market_allowed(market_filter, "Moneyline", enable_runline):
+            ml_pick = pick_moneyline(juego, home_standing, away_standing, home_form, away_form, markets)
+            if ml_pick:
+                candidatos.append(ml_pick)
+
+        if _market_allowed(market_filter, "Totales", enable_runline):
+            total_pick = pick_total(
+                juego, home_standing, away_standing, home_form, away_form, markets.get("total"), "Totales"
+            )
+            if total_pick:
+                candidatos.append(total_pick)
+
+            f5_pick = pick_total(
+                juego, home_standing, away_standing, home_form, away_form, markets.get("f5_total"), "F5 Totales"
+            )
+            if f5_pick:
+                candidatos.append(f5_pick)
+
+        if _market_allowed(market_filter, "Run Line", enable_runline):
+            runline_pick = pick_runline(juego, home_standing, away_standing, home_form, away_form, markets)
+            if runline_pick:
+                candidatos.append(runline_pick)
+
+    return juegos_all, juegos, candidatos
+
+def _select_final_picks(candidatos, market_filter, max_picks, strict_day=False, premium_mode=False, best_odds_mode=False):
+    if premium_mode:
+        candidatos = [c for c in candidatos if c.get("confidence", 0) >= 82 and c.get("ev", 0.0) >= 0.04]
+    if best_odds_mode:
+        candidatos = [c for c in candidatos if c.get("confidence", 0) >= 75 and c.get("ev", 0.0) >= 0.02]
+
+    rank_by = "score"
+    if premium_mode:
+        rank_by = "premium"
+    elif best_odds_mode:
+        rank_by = "odd"
+
+    if strict_day:
+        return _select_candidates(candidatos, 1, strict_day=True, rank_by="score")
+
+    market_caps = _market_caps_for_filter(market_filter, max_picks)
+    preliminares = _select_candidates(candidatos, max_picks * 2, strict_day=False, rank_by=rank_by)
+
+    seleccionados = []
+    conteo_mercados = defaultdict(int)
+
+    for pick in preliminares:
+        mercado = pick["market"]
+        limite = market_caps.get(mercado, max_picks)
+
+        if conteo_mercados[mercado] >= limite:
+            continue
+
+        seleccionados.append(pick)
+        conteo_mercados[mercado] += 1
+
+        if len(seleccionados) >= max_picks:
+            break
+
+    return seleccionados
 
 def generar_picks(
     chat_id,
+    league_id,
     market_filter="DEFAULT",
     max_picks=0,
     use_recent_form=None,
@@ -1565,122 +1310,31 @@ def generar_picks(
         market_filter = "ALL"
         max_picks = 1
 
-    if premium_mode and max_picks > 3:
-        max_picks = 3
+    juegos_all, juegos, candidatos = _build_candidates_for_league(
+        league_id=league_id,
+        market_filter=market_filter,
+        use_recent_form=use_recent_form,
+        enable_runline=enable_runline
+    )
 
-    if best_odds_mode:
-        max_picks = 1
-
-    juegos_mlb = obtener_juegos(1)
-    juegos = juegos_mlb[:MAX_GAMES_TO_ANALYZE]
-    standings_mlb = obtener_standings(1)
-
-    candidatos = []
-
-    for juego in juegos:
-        home_standing = standings_mlb.get(juego["home_team_id"])
-        away_standing = standings_mlb.get(juego["away_team_id"])
-
-        home_form = obtener_forma_equipo(juego["home_team_id"], 1, use_recent_form) if use_recent_form else {}
-        away_form = obtener_forma_equipo(juego["away_team_id"], 1, use_recent_form) if use_recent_form else {}
-
-        odds_response = obtener_odds(juego["game_id"], 1)
-        markets = extraer_mercados_odds(odds_response)
-
-        logging.info(f"{juego['partido']} -> markets={list(markets.keys())}")
-
-        if _market_allowed(market_filter, "Moneyline", enable_runline):
-            ml_pick = pick_moneyline(juego, home_standing, away_standing, home_form, away_form, markets)
-            if ml_pick:
-                candidatos.append(ml_pick)
-
-        if _market_allowed(market_filter, "Totales", enable_runline):
-            total_pick = pick_total(
-                juego,
-                home_standing,
-                away_standing,
-                home_form,
-                away_form,
-                markets.get("total"),
-                "Totales"
-            )
-            if total_pick:
-                candidatos.append(total_pick)
-
-            f5_pick = pick_total(
-                juego,
-                home_standing,
-                away_standing,
-                home_form,
-                away_form,
-                markets.get("f5_total"),
-                "F5 Totales"
-            )
-            if f5_pick:
-                candidatos.append(f5_pick)
-
-        if _market_allowed(market_filter, "Run Line", enable_runline):
-            runline_pick = pick_runline(
-                juego,
-                home_standing,
-                away_standing,
-                home_form,
-                away_form,
-                markets
-            )
-            if runline_pick:
-                candidatos.append(runline_pick)
-
-    if premium_mode:
-        candidatos = [
-            c for c in candidatos
-            if c.get("confidence", 0) >= 82 and c.get("ev", 0.0) >= 0.04
-        ]
-
-    if best_odds_mode:
-        candidatos = [
-            c for c in candidatos
-            if c.get("confidence", 0) >= 75 and c.get("ev", 0.0) >= 0.02
-        ]
-
-    if strict_day:
-        seleccionados = _select_candidates(candidatos, 1, strict_day=True, rank_by="score")
-    else:
-        rank_by = "score"
-        if premium_mode:
-            rank_by = "premium"
-        elif best_odds_mode:
-            rank_by = "odd"
-
-        candidatos = _rank_candidates(candidatos, rank_by=rank_by)
-
-        market_caps = _market_caps_for_filter(market_filter, max_picks)
-        preliminares = _select_candidates(candidatos, max_picks * 2, strict_day=False, rank_by=rank_by)
-
-        seleccionados = []
-        conteo_mercados = defaultdict(int)
-        for pick in preliminares:
-            mercado = pick["market"]
-            limite = market_caps.get(mercado, max_picks)
-
-            if conteo_mercados[mercado] >= limite:
-                continue
-
-            seleccionados.append(pick)
-            conteo_mercados[mercado] += 1
-
-            if len(seleccionados) >= max_picks:
-                break
+    seleccionados = _select_final_picks(
+        candidatos,
+        market_filter=market_filter,
+        max_picks=max_picks,
+        strict_day=strict_day,
+        premium_mode=premium_mode,
+        best_odds_mode=best_odds_mode
+    )
 
     meta = {
-        "analizados": len(juegos_mlb),
+        "analizados": len(juegos_all),
         "usados": len(juegos),
         "candidatos": len(candidatos),
     }
 
     return seleccionados, meta, settings
 
-def _build_payload_from_selection(selected, meta, settings, market_filter, max_picks, mode_label, strict_day=False):
+def _build_payload_from_selection(selected, meta, settings, league_id, market_filter, max_picks, mode_label, strict_day=False):
     picks_guardados = []
     for pick in selected:
         pick = dict(pick)
@@ -1690,6 +1344,8 @@ def _build_payload_from_selection(selected, meta, settings, market_filter, max_p
 
     return {
         "generated_at": datetime.utcnow().isoformat(),
+        "league_id": league_id,
+        "league_name": _league_name(league_id),
         "market_filter": market_filter,
         "max_picks": max_picks,
         "meta": meta,
@@ -1699,65 +1355,433 @@ def _build_payload_from_selection(selected, meta, settings, market_filter, max_p
         "strict_day": strict_day,
     }
 
-async def _dispatch_payload(chat_id, context, payload, query=None):
-    if not payload.get("picks"):
-        no_picks = "No se encontraron picks con ventaja suficiente para MLB."
-        if payload.get("strict_day"):
-            no_picks = "No se encontró un Pick del Día con el umbral actual."
+def _build_summary_text(payload):
+    meta = payload["meta"]
+    picks = payload["picks"]
+    settings = payload["settings"]
+    league_name = payload.get("league_name", "Liga")
+    mode_label = payload.get("mode_label", "Top Picks")
 
-        if query is not None:
-            await query.edit_message_text(no_picks, reply_markup=main_menu_markup())
-        else:
-            await context.bot.send_message(chat_id=chat_id, text=no_picks, reply_markup=main_menu_markup())
-        return
+    counts = defaultdict(int)
+    for pick in picks:
+        counts[pick["market"]] += 1
 
-    _store_last_generated(chat_id, payload)
+    texto = f"🔥 TOP PICKS BOSS ODDS | {league_name}\n\n"
+    texto += f"🎛 Modo: {mode_label}\n"
+    texto += f"🎛 Filtro: {_league_short(payload.get('league_id', 1))} / {_filter_label(payload['market_filter'])}\n"
+    texto += f"📊 Juegos analizados: {meta['analizados']}\n"
+    texto += f"📈 Juegos usados: {meta['usados']}\n"
+    texto += f"📈 Candidatos: {meta['candidatos']}\n"
+    texto += f"🎯 Seleccionados: {len(picks)}\n"
+    texto += f"🔢 Top solicitado: {payload['max_picks']}\n\n"
 
-    summary_text = _build_summary_text(
-        payload["meta"],
-        payload["picks"],
-        payload["market_filter"],
-        payload["max_picks"],
-        payload["settings"],
-        mode_label=payload.get("mode_label", "Top Picks")
+    for market in ["Moneyline", "Totales", "F5 Totales", "Run Line"]:
+        if counts.get(market):
+            texto += f"• {market}: {counts[market]}\n"
+
+    texto += "\n"
+    texto += f"Forma reciente: {'ON' if settings['use_recent_form'] else 'OFF'}\n"
+    texto += f"Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
+    texto += "\nCada pick llega en un mensaje separado.\n"
+
+    return texto[:4000]
+
+def _build_pick_card(pick, idx):
+    level = _confidence_label(pick["confidence"])
+    texto = (
+        f"{'🔥' if idx == 1 else '🥈' if idx == 2 else '🥉' if idx == 3 else '⭐'} PICK #{idx}\n"
+        f"⚾ {pick['matchup']}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"✅ Selección: {pick['pick']}\n"
+        f"🎯 Mercado: {pick['market']}\n"
+        f"💰 Cuota: {pick['odd']:.2f}\n"
     )
 
+    if pick.get("line") is not None:
+        texto += f"📏 Línea: {pick['line']:.1f}\n"
+
+    if pick.get("projection") is not None:
+        texto += f"📈 Proyección: {pick['projection']:.2f}\n"
+
+    texto += (
+        f"🎲 Stake: {pick['stake']}/5\n"
+        f"📊 Confianza: {pick['confidence']}%\n"
+        f"⭐ Nivel: {level}\n"
+        f"📉 EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"Boss Odds MX\n"
+    )
+
+    return texto[:4000]
+
+def _build_analysis_text(payload):
+    if not payload or not payload.get("picks"):
+        return "Todavía no hay una selección reciente para mostrar análisis."
+
+    meta = payload["meta"]
+    picks = payload["picks"]
+
+    texto = "📋 ANÁLISIS DETALLADO\n\n"
+    texto += f"Liga: {payload.get('league_name', 'N/A')}\n"
+    texto += f"Modo: {payload.get('mode_label', 'Top Picks')}\n"
+    texto += f"Filtro: {_filter_label(payload.get('market_filter', 'ALL'))}\n"
+    texto += f"Generado: {payload.get('generated_at', 'N/A')}\n"
+    texto += f"Analizados: {meta.get('analizados', 0)} | Candidatos: {meta.get('candidatos', 0)}\n\n"
+
+    for idx, pick in enumerate(picks, start=1):
+        texto += f"{idx}. {pick['matchup']}\n"
+        texto += f"   {pick['market']} -> {pick['pick']}\n"
+        texto += f"   Cuota: {pick['odd']:.2f} | Confianza: {pick['confidence']}% | EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
+        if pick.get("line") is not None:
+            texto += f"   Línea: {pick['line']:.1f}\n"
+        if pick.get("projection") is not None:
+            texto += f"   Proyección: {pick['projection']:.2f}\n"
+        texto += f"   Razón: {pick.get('reason', '')}\n\n"
+
+    return texto[:4000]
+
+def _build_channel_summary_text(payload):
+    meta = payload["meta"]
+    settings = payload["settings"]
+
+    texto = f"🔥 BOSS ODDS MX | {_league_name(payload.get('league_id', 1))}\n\n"
+    texto += f"🎛 Modo: {payload.get('mode_label', 'Top Picks')}\n"
+    texto += f"🎛 Filtro: {_filter_label(payload.get('market_filter', 'ALL'))}\n"
+    texto += f"📊 Juegos analizados: {meta['analizados']}\n"
+    texto += f"📈 Candidatos: {meta['candidatos']}\n"
+    texto += f"🎯 Publicados: {len(payload.get('picks', []))}\n"
+    texto += f"🔢 Top: {payload.get('max_picks', len(payload.get('picks', [])))}\n"
+    texto += f"🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+    texto += f"Forma reciente: {'ON' if settings['use_recent_form'] else 'OFF'} | Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
+    return texto[:4000]
+
+def _build_channel_pick_text(pick, idx):
+    level = _confidence_label(pick["confidence"])
+    texto = (
+        f"{'🔥' if idx == 1 else '🥈' if idx == 2 else '🥉' if idx == 3 else '⭐'} PICK #{idx}\n"
+        f"⚾ {pick['matchup']}\n"
+        f"✅ {pick['pick']}\n"
+        f"🎯 Mercado: {pick['market']}\n"
+        f"💰 Cuota: {pick['odd']:.2f}\n"
+    )
+    if pick.get("line") is not None:
+        texto += f"📏 Línea: {pick['line']:.1f}\n"
+    texto += (
+        f"🎲 Stake: {pick['stake']}/5\n"
+        f"📊 Confianza: {pick['confidence']}% ({level})\n"
+        f"📉 EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"Boss Odds MX VIP\n"
+    )
+    return texto[:4000]
+
+def _build_vip_text():
+    return (
+        "👑 BOSS ODDS VIP\n\n"
+        "Planes de membresía:\n\n"
+        "1 mes: $500 MXN\n"
+        "3 meses: $900 MXN\n"
+        "12 meses: $2,000 MXN\n\n"
+        "Acceso a picks premium, análisis más profundo y selección diaria."
+    )
+
+def _build_history_text():
+    historial = cargar_historial()
+    if not historial:
+        return "Todavía no hay picks guardados."
+
+    ultimos = historial[-10:]
+    texto = "🗂 ÚLTIMOS PICKS\n\n"
+
+    for item in reversed(ultimos):
+        odd = _safe_float(item.get("odd"), 0.0)
+        texto += (
+            f"UID: {item.get('uid')}\n"
+            f"{item.get('market')} | {item.get('pick')}\n"
+            f"{item.get('matchup')}\n"
+            f"Cuota: {odd:.2f} | Stake: {item.get('stake')} | Estado: {_result_label(item.get('status'))}\n\n"
+        )
+
+    return texto[:4000]
+
+def _build_performance_text():
+    overall, by_market = resumen_historial()
+
+    if not overall:
+        return "Aún no hay picks cerrados para calcular ROI."
+
+    def _line(title, data):
+        settled = data["settled"]
+        wins = data["wins"]
+        losses = data["losses"]
+        pushes = data["pushes"]
+        staked = data["staked"]
+        profit = data["profit"]
+        winrate = (wins / settled * 100.0) if settled else 0.0
+        roi = (profit / staked * 100.0) if staked else 0.0
+        return (
+            f"{title}\n"
+            f"• Cerrados: {settled}\n"
+            f"• W-L-P: {wins}-{losses}-{pushes}\n"
+            f"• Win rate: {winrate:.1f}%\n"
+            f"• ROI: {roi:+.1f}%\n"
+        )
+
+    texto = "📊 RENDIMIENTO\n\n"
+    texto += _line("General", overall) + "\n"
+
+    for market in ["Moneyline", "Totales", "F5 Totales", "Run Line"]:
+        if market in by_market:
+            texto += _line(market, by_market[market]) + "\n"
+
+    return texto[:4000]
+
+def _build_rankings_text(league_id):
+    standings = obtener_standings(league_id)
+    if not standings:
+        return f"No hay standings disponibles para {_league_name(league_id)}."
+
+    rows = []
+    for team_id, data in standings.items():
+        win_pct = _safe_float(data.get("win_pct"), 0.0)
+        games_played = _safe_int(data.get("games_played"), 1)
+        run_diff = _safe_float(data.get("run_diff"), 0.0)
+        pos = _safe_int(data.get("position"), 99)
+        score = (win_pct * 68.0) + ((run_diff / max(1, games_played)) * 7.0) + (max(0, 30 - pos) * 0.45)
+        rows.append((score, data))
+
+    rows.sort(key=lambda x: x[0], reverse=True)
+    top = rows[:10]
+
+    texto = f"📈 POWER RANKINGS {_league_name(league_id)}\n\n"
+    for i, (score, data) in enumerate(top, start=1):
+        texto += (
+            f"{i}. {data.get('team_name')}\n"
+            f"   Win%: {(_safe_float(data.get('win_pct')) * 100):.1f}% | "
+            f"RD: {_safe_float(data.get('run_diff')):+.0f} | "
+            f"Score: {score:.1f}\n\n"
+        )
+
+    return texto[:4000]
+
+def _build_games_text(league_id):
+    mlb = obtener_juegos(league_id)
+    texto = f"📅 CARTELERA {_league_name(league_id)}\n\n"
+    texto += f"⚾ Juegos encontrados: {len(mlb)}\n\n"
+
+    for juego in mlb:
+        texto += f"• {juego['away']} vs {juego['home']}  (ID {juego['game_id']})\n"
+
+    return texto[:4000]
+
+def _build_test_text(league_id):
+    juegos = obtener_juegos(league_id)
+    standings = obtener_standings(league_id)
+
+    total_odds = 0
+    ml = 0
+    totals = 0
+    f5 = 0
+    runline = 0
+
+    for j in juegos:
+        odds_response = obtener_odds(j["game_id"], league_id)
+        if odds_response:
+            total_odds += 1
+            markets = extraer_mercados_odds(odds_response)
+            if markets.get("moneyline"):
+                ml += 1
+            if markets.get("total"):
+                totals += 1
+            if markets.get("f5_total"):
+                f5 += 1
+            if markets.get("runline"):
+                runline += 1
+
+    texto = f"🧪 TEST {_league_name(league_id)}\n\n"
+    texto += f"Juegos próximos: {len(juegos)}\n"
+    texto += f"Juegos con odds: {total_odds}\n"
+    texto += f"Moneyline disponible: {ml}\n"
+    texto += f"Totales disponibles: {totals}\n"
+    texto += f"F5 Totales disponibles: {f5}\n"
+    texto += f"Run Line disponible: {runline}\n"
+    texto += f"Standings cargados: {'Sí' if standings else 'No'}\n"
+    return texto[:4000]
+
+def _main_menu_text(chat_id):
+    s = USER_SETTINGS[chat_id]
+    return (
+        "🔥 BOSS ODDS MX\n\n"
+        "Selecciona una liga.\n\n"
+        f"Liga por defecto: {_league_name(s['league_id'])}\n"
+        f"Top por defecto: {s['max_picks']}\n"
+        f"Forma reciente: {'ON' if s['use_recent_form'] else 'OFF'}\n"
+        f"Run Line: {'ON' if s['enable_runline'] else 'OFF'}"
+    )
+
+def _config_menu_text(chat_id):
+    s = USER_SETTINGS[chat_id]
+    return (
+        "⚙️ CONFIGURACIÓN\n\n"
+        f"Liga por defecto: {_league_name(s['league_id'])}\n"
+        f"Forma reciente: {'ON' if s['use_recent_form'] else 'OFF'}\n"
+        f"Run Line: {'ON' if s['enable_runline'] else 'OFF'}\n"
+        f"Modo por defecto: {_filter_label(s['market_filter'])}\n"
+        f"Top por defecto: {s['max_picks']}"
+    )
+
+# ==========================
+# KEYBOARDS
+# ==========================
+
+def main_menu_markup():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎯 MLB", callback_data="league:1"),
+            InlineKeyboardButton("🇲🇽 LMB", callback_data="league:2"),
+        ],
+        [
+            InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
+            InlineKeyboardButton("📈 Rankings MLB", callback_data="rankings:1"),
+        ],
+        [
+            InlineKeyboardButton("📈 Rankings LMB", callback_data="rankings:2"),
+            InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
+        ],
+        [
+            InlineKeyboardButton("👑 VIP", callback_data="menu:vip"),
+            InlineKeyboardButton("⚙️ Configuración", callback_data="menu:config"),
+        ]
+    ])
+
+def league_menu_markup(league_id):
+    rows = [
+        [InlineKeyboardButton("🔥 Pick del Día", callback_data=f"gen:{league_id}:DAY:1")],
+        [
+            InlineKeyboardButton("🥇 Top 3", callback_data=f"gen:{league_id}:DEFAULT:3"),
+            InlineKeyboardButton("⭐ Top 6", callback_data=f"gen:{league_id}:DEFAULT:6"),
+        ],
+        [
+            InlineKeyboardButton("💎 Top Premium", callback_data=f"gen:{league_id}:PREMIUM:3"),
+            InlineKeyboardButton("💰 Mejor Cuota del Día", callback_data=f"gen:{league_id}:ODDS:1"),
+        ],
+        [
+            InlineKeyboardButton("💰 Moneyline", callback_data=f"gen:{league_id}:ML:0"),
+            InlineKeyboardButton("📈 Totales", callback_data=f"gen:{league_id}:TOTALS:0"),
+        ],
+        [
+            InlineKeyboardButton("🏃 Run Line", callback_data=f"gen:{league_id}:RUNLINE:0"),
+            InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
+        ],
+        [
+            InlineKeyboardButton("📋 Ver análisis", callback_data="analysis:last"),
+        ]
+    ]
+
+    if league_id == 2:
+        rows.insert(4, [InlineKeyboardButton("🧪 Test LMB", callback_data="test:2")])
+
+    rows.append([InlineKeyboardButton("🔙 Menú", callback_data="menu:main")])
+    return InlineKeyboardMarkup(rows)
+
+def publish_summary_markup():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Ver análisis", callback_data="analysis:last")],
+        [InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last")],
+        [InlineKeyboardButton("🔙 Menú", callback_data="menu:main")],
+    ])
+
+def pick_result_markup(uid):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Win", callback_data=f"res:{uid}:win"),
+            InlineKeyboardButton("❌ Loss", callback_data=f"res:{uid}:loss"),
+            InlineKeyboardButton("➖ Push", callback_data=f"res:{uid}:push"),
+        ],
+        [
+            InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
+            InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
+        ]
+    ])
+
+def config_menu_markup(chat_id):
+    s = USER_SETTINGS[chat_id]
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                f"Liga: {_league_name(s['league_id'])}",
+                callback_data=f"league:{s['league_id']}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"Forma reciente: {'ON' if s['use_recent_form'] else 'OFF'}",
+                callback_data="config:toggle_form"
+            ),
+            InlineKeyboardButton(
+                f"Run Line: {'ON' if s['enable_runline'] else 'OFF'}",
+                callback_data="config:toggle_runline"
+            ),
+        ],
+        [
+            InlineKeyboardButton("Modo: Todos", callback_data="config:set_filter:ALL"),
+            InlineKeyboardButton("Modo: Moneyline", callback_data="config:set_filter:ML"),
+        ],
+        [
+            InlineKeyboardButton("Modo: Totales", callback_data="config:set_filter:TOTALS"),
+            InlineKeyboardButton("Modo: Run Line", callback_data="config:set_filter:RUNLINE"),
+        ],
+        [
+            InlineKeyboardButton("Top 3", callback_data="config:set_top:3"),
+            InlineKeyboardButton("Top 6", callback_data="config:set_top:6"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
+        ]
+    ])
+
+# ==========================
+# ACTIONS
+# ==========================
+
+async def _send_payload(chat_id, context, payload, query=None):
+    if not payload.get("picks"):
+        msg = "No se encontraron picks con ventaja suficiente."
+        if payload.get("strict_day"):
+            msg = "No se encontró un Pick del Día con el umbral actual."
+        if query is not None:
+            await query.edit_message_text(msg, reply_markup=main_menu_markup())
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=main_menu_markup())
+        return
+
+    summary_text = _build_summary_text(payload)
     if query is not None:
         await query.edit_message_text(summary_text, reply_markup=publish_summary_markup())
     else:
         await context.bot.send_message(chat_id=chat_id, text=summary_text, reply_markup=publish_summary_markup())
 
     for idx, pick in enumerate(payload["picks"], start=1):
-        texto = _build_pick_card(pick, idx)
         await context.bot.send_message(
             chat_id=chat_id,
-            text=texto,
+            text=_build_pick_card(pick, idx),
             reply_markup=pick_result_markup(pick["uid"])
         )
 
-async def enviar_picks(
-    chat_id,
-    context,
-    market_filter="DEFAULT",
-    max_picks=0,
-    use_recent_form=None,
-    enable_runline=None,
-    query=None,
-    strict_day=False,
-    premium_mode=False,
-    best_odds_mode=False
-):
+async def ejecutar_generacion(chat_id, context, league_id, market_filter="DEFAULT", max_picks=0, strict_day=False, premium_mode=False, best_odds_mode=False, query=None):
+    settings = USER_SETTINGS[chat_id]
     if query is not None:
-        await query.edit_message_text("⏳ Analizando MLB y buscando valor...")
+        await query.edit_message_text("⏳ Analizando y buscando valor...")
     else:
-        await context.bot.send_message(chat_id=chat_id, text="⏳ Analizando MLB y buscando valor...")
+        await context.bot.send_message(chat_id=chat_id, text="⏳ Analizando y buscando valor...")
 
     selected, meta, settings = generar_picks(
         chat_id=chat_id,
+        league_id=league_id,
         market_filter=market_filter,
         max_picks=max_picks,
-        use_recent_form=use_recent_form,
-        enable_runline=enable_runline,
+        use_recent_form=settings["use_recent_form"],
+        enable_runline=settings["enable_runline"],
         strict_day=strict_day,
         premium_mode=premium_mode,
         best_odds_mode=best_odds_mode
@@ -1773,87 +1797,55 @@ async def enviar_picks(
         mode_label = "Top Picks"
 
     payload = _build_payload_from_selection(
-        selected,
-        meta,
-        settings,
-        market_filter if market_filter != "DEFAULT" else settings["market_filter"],
-        max_picks if max_picks > 0 else settings["max_picks"],
+        selected=selected,
+        meta=meta,
+        settings=settings,
+        league_id=league_id,
+        market_filter=market_filter if market_filter != "DEFAULT" else settings["market_filter"],
+        max_picks=max_picks if max_picks > 0 else settings["max_picks"],
         mode_label=mode_label,
         strict_day=strict_day
     )
 
-    guardar_picks_en_historial(payload["picks"])
+    guardar_historial(payload["picks"])
+    _store_last_generated(chat_id, payload)
 
-    await _dispatch_payload(chat_id, context, payload, query=query)
+    await _send_payload(chat_id, context, payload, query=query)
 
-async def enviar_pick_del_dia(chat_id, context, query=None):
-    state = _load_pick_day_state()
-    today = _current_date()
-
-    if state.get("date") == today and state.get("payload"):
-        payload = state["payload"]
-        _store_last_generated(chat_id, payload)
-        if query is not None:
-            await query.edit_message_text(
-                _build_summary_text(
-                    payload["meta"],
-                    payload["picks"],
-                    payload["market_filter"],
-                    payload["max_picks"],
-                    payload["settings"],
-                    mode_label=payload.get("mode_label", "Pick del Día")
-                ),
-                reply_markup=publish_summary_markup()
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=_build_summary_text(
-                    payload["meta"],
-                    payload["picks"],
-                    payload["market_filter"],
-                    payload["max_picks"],
-                    payload["settings"],
-                    mode_label=payload.get("mode_label", "Pick del Día")
-                ),
-                reply_markup=publish_summary_markup()
-            )
-
-        for idx, pick in enumerate(payload["picks"], start=1):
-            texto = _build_pick_card(pick, idx)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=texto,
-                reply_markup=pick_result_markup(pick["uid"])
-            )
+async def ejecutar_pick_del_dia(chat_id, context, league_id, query=None):
+    cached = _get_pick_day_payload(league_id)
+    if cached:
+        _store_last_generated(chat_id, cached)
+        await _send_payload(chat_id, context, cached, query=query)
         return
 
-    selected, meta, settings = generar_picks(
+    settings = USER_SETTINGS[chat_id]
+    selected, meta, _ = generar_picks(
         chat_id=chat_id,
+        league_id=league_id,
         market_filter="ALL",
         max_picks=1,
-        use_recent_form=settings["use_recent_form"] if "settings" in locals() else None,
-        enable_runline=settings["enable_runline"] if "settings" in locals() else None,
+        use_recent_form=settings["use_recent_form"],
+        enable_runline=settings["enable_runline"],
         strict_day=True
     )
 
     payload = _build_payload_from_selection(
-        selected,
-        meta,
-        settings,
+        selected=selected,
+        meta=meta,
+        settings=settings,
+        league_id=league_id,
         market_filter="ALL",
         max_picks=1,
         mode_label="Pick del Día",
         strict_day=True
     )
 
-    _save_pick_day_state({
-        "date": today,
-        "payload": payload
-    })
+    _set_pick_day_payload(league_id, payload)
+    guardar_historial(payload["picks"])
+    _store_last_generated(chat_id, payload)
 
-    guardar_picks_en_historial(payload["picks"])
-    await _dispatch_payload(chat_id, context, payload, query=query)
+    await _send_payload(chat_id, context, payload, query=query)
 
 async def publish_last_to_channel(chat_id, context):
     payload = _get_last_generated(chat_id)
@@ -1869,8 +1861,7 @@ async def publish_last_to_channel(chat_id, context):
         await context.bot.send_message(chat_id=channel_id, text=summary)
 
         for idx, pick in enumerate(payload["picks"], start=1):
-            texto = _build_channel_pick_text(pick, idx)
-            await context.bot.send_message(chat_id=channel_id, text=texto)
+            await context.bot.send_message(chat_id=channel_id, text=_build_channel_pick_text(pick, idx))
 
         payload["published_at"] = datetime.utcnow().isoformat()
         _store_last_generated(chat_id, payload)
@@ -1880,7 +1871,6 @@ async def publish_last_to_channel(chat_id, context):
         logging.error(f"Error publicando al canal: {e}")
         return False, f"No se pudo publicar en el canal: {e}"
 
-
 # ==========================
 # MENÚS / CALLBACKS
 # ==========================
@@ -1888,7 +1878,10 @@ async def publish_last_to_channel(chat_id, context):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     USER_SETTINGS[chat_id]
-    await update.message.reply_text(_main_menu_text(chat_id), reply_markup=main_menu_markup())
+    await update.message.reply_text(
+        _main_menu_text(chat_id),
+        reply_markup=main_menu_markup()
+    )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1898,27 +1891,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu:main":
         await query.answer()
-        await query.edit_message_text(_main_menu_text(chat_id), reply_markup=main_menu_markup())
-        return
-
-    if data == "menu:picks":
-        await query.answer()
-        await query.edit_message_text(_picks_menu_text(chat_id), reply_markup=picks_menu_markup())
-        return
-
-    if data == "menu:games":
-        await query.answer()
-        await query.edit_message_text(_games_text(), reply_markup=main_menu_markup())
+        await query.edit_message_text(
+            _main_menu_text(chat_id),
+            reply_markup=main_menu_markup()
+        )
         return
 
     if data == "menu:rendimiento":
         await query.answer()
         await query.edit_message_text(_build_performance_text(), reply_markup=main_menu_markup())
-        return
-
-    if data == "menu:rankings":
-        await query.answer()
-        await query.edit_message_text(_build_rankings_text(), reply_markup=main_menu_markup())
         return
 
     if data == "menu:historial":
@@ -1936,13 +1917,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
         return
 
+    if data.startswith("league:"):
+        _, lid = data.split(":", 1)
+        league_id = _safe_int(lid, 1)
+        settings["league_id"] = league_id
+        await query.answer()
+        await query.edit_message_text(
+            f"🎯 {_league_name(league_id)}\n\nElige una opción.",
+            reply_markup=league_menu_markup(league_id)
+        )
+        return
+
+    if data.startswith("rankings:"):
+        _, lid = data.split(":", 1)
+        league_id = _safe_int(lid, 1)
+        await query.answer()
+        await query.edit_message_text(_build_rankings_text(league_id), reply_markup=main_menu_markup())
+        return
+
     if data == "analysis:last":
         await query.answer()
-        payload = _latest_payload_for_analysis(chat_id)
-        await query.edit_message_text(
-            _build_analysis_text(payload),
-            reply_markup=main_menu_markup()
-        )
+        payload = _get_last_generated(chat_id) or _get_pick_day_payload(settings["league_id"])
+        await query.edit_message_text(_build_analysis_text(payload), reply_markup=main_menu_markup())
         return
 
     if data == "config:toggle_form":
@@ -1971,8 +1967,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(_config_menu_text(chat_id), reply_markup=config_menu_markup(chat_id))
         return
 
+    if data.startswith("test:"):
+        _, lid = data.split(":", 1)
+        league_id = _safe_int(lid, 2)
+        await query.answer()
+        await query.edit_message_text(_build_test_text(league_id), reply_markup=league_menu_markup(league_id))
+        return
+
     if data.startswith("gen:"):
-        _, mode, limit_s = data.split(":", 2)
+        _, lid, mode, limit_s = data.split(":", 3)
+        league_id = _safe_int(lid, settings["league_id"])
 
         strict_day = False
         premium_mode = False
@@ -1981,7 +1985,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if mode == "DAY":
             await query.answer("Generando Pick del Día...", show_alert=False)
-            await enviar_pick_del_dia(chat_id=chat_id, context=context, query=query)
+            await ejecutar_pick_del_dia(chat_id=chat_id, context=context, league_id=league_id, query=query)
             return
 
         if mode == "PREMIUM":
@@ -2003,17 +2007,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             limit = settings["max_picks"]
 
         await query.answer("Generando picks...", show_alert=False)
-        await enviar_picks(
+        await ejecutar_generacion(
             chat_id=chat_id,
             context=context,
+            league_id=league_id,
             market_filter=filter_key,
             max_picks=limit,
-            use_recent_form=settings["use_recent_form"],
-            enable_runline=settings["enable_runline"],
-            query=query,
             strict_day=strict_day,
             premium_mode=premium_mode,
-            best_odds_mode=best_odds_mode
+            best_odds_mode=best_odds_mode,
+            query=query
         )
         return
 
@@ -2036,7 +2039,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         current_text = query.message.text or ""
-        new_text = _replace_status(current_text, _result_label(result))
+        new_text = re.sub(r"Estado:\s*.*", f"Estado: {_result_label(result)}", current_text)
+        if new_text == current_text:
+            new_text += f"\n\nEstado: {_result_label(result)}"
 
         await query.edit_message_text(
             text=new_text,
@@ -2047,14 +2052,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-
 # ==========================
 # MAIN
 # ==========================
 
 def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
