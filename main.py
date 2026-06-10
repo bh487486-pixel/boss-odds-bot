@@ -208,6 +208,38 @@ def cargar_historial():
 def guardar_historial(historial):
     _save_json(HISTORY_FILE, historial)
 
+def guardar_picks_en_historial(picks):
+    if not picks:
+        return
+
+    historial = cargar_historial()
+    now = datetime.utcnow().isoformat()
+
+    for pick in picks:
+        historial.append({
+            "uid": pick["uid"],
+            "timestamp": now,
+            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "league_id": pick.get("league_id"),
+            "league_name": pick.get("league_name"),
+            "matchup": pick.get("matchup"),
+            "market": pick.get("market"),
+            "pick": pick.get("pick"),
+            "odd": pick.get("odd"),
+            "line": pick.get("line"),
+            "projection": pick.get("projection"),
+            "confidence": pick.get("confidence"),
+            "stake": pick.get("stake"),
+            "ev": pick.get("ev"),
+            "score": pick.get("score"),
+            "reason": pick.get("reason"),
+            "status": "pending",
+            "result": None,
+            "settled_at": None
+        })
+
+    guardar_historial(historial)
+
 def _load_last_generated_db():
     data = _load_json(LAST_GENERATED_FILE, {})
     return data if isinstance(data, dict) else {}
@@ -294,6 +326,12 @@ def _league_name(league_id):
 
 def _league_short(league_id):
     return "MLB" if league_id == MLB_LEAGUE_ID else "LMB" if league_id == LMB_LEAGUE_ID else f"L{league_id}"
+
+def _filter_label(filter_key):
+    return MARKET_FILTER_LABELS.get(
+        str(filter_key).upper(),
+        str(filter_key)
+    )
 
 def _is_reasonable_total_odd(odd):
     try:
@@ -892,7 +930,7 @@ def pick_moneyline(juego, standing_home, standing_away, form_home, form_away, ma
 
     form_note = ""
     if form_home and form_away:
-        form_note = f" Forma: {juego['home']} {_league_short(league_id)} {_summary_form(form_home)} | {juego['away']} {_summary_form(form_away)}."
+        form_note = f" Forma: {juego['home']} {_summary_form(form_home)} | {juego['away']} {_summary_form(form_away)}."
 
     confidence = int(_clamp(58 + abs(gap) * 0.35 + ev * 30.0, 58, 90))
     score = (confidence * cfg["market_weights"]["Moneyline"]) + (max(ev, 0.0) * 100.0 * 0.45)
@@ -1084,38 +1122,6 @@ def calcular_stake(confianza):
     if confianza >= 74:
         return 2
     return 1
-
-def guardar_picks_en_historial(picks):
-    if not picks:
-        return
-
-    historial = cargar_historial()
-    now = datetime.utcnow().isoformat()
-
-    for pick in picks:
-        historial.append({
-            "uid": pick["uid"],
-            "timestamp": now,
-            "date": datetime.utcnow().strftime("%Y-%m-%d"),
-            "league_id": pick.get("league_id"),
-            "league_name": pick.get("league_name"),
-            "matchup": pick.get("matchup"),
-            "market": pick.get("market"),
-            "pick": pick.get("pick"),
-            "odd": pick.get("odd"),
-            "line": pick.get("line"),
-            "projection": pick.get("projection"),
-            "confidence": pick.get("confidence"),
-            "stake": pick.get("stake"),
-            "ev": pick.get("ev"),
-            "score": pick.get("score"),
-            "reason": pick.get("reason"),
-            "status": "pending",
-            "result": None,
-            "settled_at": None
-        })
-
-    guardar_historial(historial)
 
 def marcar_resultado(uid, result):
     historial = cargar_historial()
@@ -1823,31 +1829,27 @@ async def ejecutar_generacion(
             strict_day=strict_day
         )
 
-        guardar_historial(payload["picks"])
+        guardar_picks_en_historial(payload["picks"])
         _store_last_generated(chat_id, payload)
 
         await _send_payload(chat_id, context, payload, query=query)
 
     except Exception as e:
         logging.exception(f"Error en ejecutar_generacion league={league_id}: {e}")
-        if query is not None:
-            try:
+        try:
+            if query is not None:
                 await query.edit_message_text(
                     f"⚠️ Ocurrió un error al generar picks.\n\n{e}",
                     reply_markup=main_menu_markup()
                 )
-            except Exception:
+            else:
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=f"⚠️ Ocurrió un error al generar picks.\n\n{e}",
                     reply_markup=main_menu_markup()
                 )
-        else:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"⚠️ Ocurrió un error al generar picks.\n\n{e}",
-                reply_markup=main_menu_markup()
-            )
+        except Exception:
+            pass
 
 async def ejecutar_pick_del_dia(chat_id, context, league_id, query=None):
     try:
@@ -1880,31 +1882,27 @@ async def ejecutar_pick_del_dia(chat_id, context, league_id, query=None):
         )
 
         _set_pick_day_payload(league_id, payload)
-        guardar_historial(payload["picks"])
+        guardar_picks_en_historial(payload["picks"])
         _store_last_generated(chat_id, payload)
 
         await _send_payload(chat_id, context, payload, query=query)
 
     except Exception as e:
         logging.exception(f"Error en ejecutar_pick_del_dia league={league_id}: {e}")
-        if query is not None:
-            try:
+        try:
+            if query is not None:
                 await query.edit_message_text(
                     f"⚠️ Ocurrió un error al generar el Pick del Día.\n\n{e}",
                     reply_markup=main_menu_markup()
                 )
-            except Exception:
+            else:
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=f"⚠️ Ocurrió un error al generar el Pick del Día.\n\n{e}",
                     reply_markup=main_menu_markup()
                 )
-        else:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"⚠️ Ocurrió un error al generar el Pick del Día.\n\n{e}",
-                reply_markup=main_menu_markup()
-            )
+        except Exception:
+            pass
 
 async def publish_last_to_channel(chat_id, context):
     payload = _get_last_generated(chat_id)
