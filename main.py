@@ -9,6 +9,8 @@ import logging
 
 from collections import defaultdict
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
@@ -43,6 +45,8 @@ LEAGUES = {
     LMB_LEAGUE_ID: "LMB",
 }
 
+MEXICO_TZ = ZoneInfo("America/Mexico_City")
+
 MAX_GAMES_TO_ANALYZE = 15
 DEFAULT_MAX_PICKS = 6
 MAX_PICKS_PER_MATCHUP = 2
@@ -71,6 +75,11 @@ DEFAULT_MAX_PER_MARKET = {
     "Totales": 2,
     "F5 Totales": 1,
     "Run Line": 1,
+}
+
+BASE_TOTALS = {
+    MLB_LEAGUE_ID: 8.7,
+    LMB_LEAGUE_ID: 10.0,
 }
 
 LEAGUE_MODEL = {
@@ -139,6 +148,15 @@ def _dbg(msg: str):
     logging.info(msg)
     print(msg, flush=True)
 
+def _mx_now():
+    return datetime.now(MEXICO_TZ)
+
+def _mx_date():
+    return _mx_now().strftime("%Y-%m-%d")
+
+def _mx_stamp():
+    return _mx_now().strftime("%d/%m/%Y %I:%M %p")
+
 def _headers():
     return {"x-apisports-key": API_KEY}
 
@@ -205,92 +223,6 @@ def _cache_get(cache, key):
 def _cache_set(cache, key, data):
     cache[key] = {"ts": time.time(), "data": data}
 
-def cargar_historial():
-    data = _load_json(HISTORY_FILE, [])
-    return data if isinstance(data, list) else []
-
-def guardar_historial(historial):
-    _save_json(HISTORY_FILE, historial)
-
-def guardar_picks_en_historial(picks):
-    if not picks:
-        return
-
-    historial = cargar_historial()
-    now = datetime.utcnow().isoformat()
-
-    for pick in picks:
-        historial.append({
-            "uid": pick["uid"],
-            "timestamp": now,
-            "date": datetime.utcnow().strftime("%Y-%m-%d"),
-            "league_id": pick.get("league_id"),
-            "league_name": pick.get("league_name"),
-            "matchup": pick.get("matchup"),
-            "market": pick.get("market"),
-            "pick": pick.get("pick"),
-            "odd": pick.get("odd"),
-            "line": pick.get("line"),
-            "projection": pick.get("projection"),
-            "confidence": pick.get("confidence"),
-            "stake": pick.get("stake"),
-            "ev": pick.get("ev"),
-            "score": pick.get("score"),
-            "reason": pick.get("reason"),
-            "status": "pending",
-            "result": None,
-            "settled_at": None
-        })
-
-    guardar_historial(historial)
-
-def _load_last_generated_db():
-    data = _load_json(LAST_GENERATED_FILE, {})
-    return data if isinstance(data, dict) else {}
-
-def _save_last_generated_db(data):
-    _save_json(LAST_GENERATED_FILE, data)
-
-def _store_last_generated(chat_id, payload):
-    db = _load_last_generated_db()
-    db[str(chat_id)] = payload
-    _save_last_generated_db(db)
-
-def _get_last_generated(chat_id):
-    db = _load_last_generated_db()
-    return db.get(str(chat_id))
-
-def _load_pick_day_state():
-    data = _load_json(PICK_DAY_FILE, {})
-    return data if isinstance(data, dict) else {}
-
-def _save_pick_day_state(state):
-    _save_json(PICK_DAY_FILE, state)
-
-def _get_pick_day_payload(league_id):
-    state = _load_pick_day_state()
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    key = f"{league_id}:{today}"
-    return state.get(key)
-
-def _set_pick_day_payload(league_id, payload):
-    state = _load_pick_day_state()
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    key = f"{league_id}:{today}"
-    state[key] = payload
-    _save_pick_day_state(state)
-
-def _get_channel_chat_id():
-    if not CHANNEL_ID_RAW:
-        return None
-    raw = str(CHANNEL_ID_RAW).strip()
-    if raw.startswith("@"):
-        return raw
-    try:
-        return int(raw)
-    except Exception:
-        return raw
-
 def _as_list(response):
     if isinstance(response, list):
         return response
@@ -299,7 +231,7 @@ def _as_list(response):
     return []
 
 def _make_uid():
-    return datetime.utcnow().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:8]
+    return _mx_now().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:8]
 
 def _market_profit(stake, odd, result):
     if result == "win":
@@ -352,11 +284,11 @@ def _is_reasonable_runline_odd(odd):
     except Exception:
         return False
 
-def _current_date():
-    return datetime.utcnow().strftime("%Y-%m-%d")
-
 def _league_settings(league_id):
     return LEAGUE_MODEL.get(league_id, LEAGUE_MODEL[MLB_LEAGUE_ID])
+
+def _league_baseline_total(league_id):
+    return BASE_TOTALS.get(league_id, BASE_TOTALS[MLB_LEAGUE_ID])
 
 def _format_runline_label(label, juego):
     txt = str(label or "").strip().lower()
@@ -454,19 +386,156 @@ def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score")
 
     return selected
 
+def _smart_confidence(total_gap, ev, league_id, market_name):
+    gap_abs = abs(total_gap)
+    base = 60.0
+
+    if market_name == "Moneyline":
+        base += gap_abs * 2.8
+        base += max(0.0, ev) * 180.0
+    elif market_name in {"Totales", "F5 Totales"}:
+        base += gap_abs * 4.2
+        base += max(0.0, ev) * 150.0
+    elif market_name == "Run Line":
+        base += gap_abs * 3.0
+        base += max(0.0, ev) * 140.0
+
+    if league_id == LMB_LEAGUE_ID:
+        base += 1.5
+
+    return int(_clamp(base, 60, 90))
+
+def _stake_from_confidence(confidence):
+    if confidence >= 88:
+        return 4
+    if confidence >= 82:
+        return 3
+    if confidence >= 74:
+        return 2
+    return 1
+
 # ==========================
-# DATA FETCH
+# STORAGE
+# ==========================
+
+def cargar_historial():
+    data = _load_json(HISTORY_FILE, [])
+    return data if isinstance(data, list) else []
+
+def guardar_historial(historial):
+    _save_json(HISTORY_FILE, historial)
+
+def guardar_picks_en_historial(picks):
+    if not picks:
+        return
+
+    historial = cargar_historial()
+    now = _mx_now().isoformat()
+
+    for pick in picks:
+        historial.append({
+            "uid": pick["uid"],
+            "timestamp": now,
+            "date": _mx_date(),
+            "league_id": pick.get("league_id"),
+            "league_name": pick.get("league_name"),
+            "matchup": pick.get("matchup"),
+            "market": pick.get("market"),
+            "pick": pick.get("pick"),
+            "odd": pick.get("odd"),
+            "line": pick.get("line"),
+            "projection": pick.get("projection"),
+            "confidence": pick.get("confidence"),
+            "stake": pick.get("stake"),
+            "ev": pick.get("ev"),
+            "score": pick.get("score"),
+            "reason": pick.get("reason"),
+            "status": "pending",
+            "result": None,
+            "settled_at": None
+        })
+
+    guardar_historial(historial)
+
+def _load_last_generated_db():
+    data = _load_json(LAST_GENERATED_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+def _save_last_generated_db(data):
+    _save_json(LAST_GENERATED_FILE, data)
+
+def _store_last_generated(chat_id, payload):
+    db = _load_last_generated_db()
+    db[str(chat_id)] = payload
+    _save_last_generated_db(db)
+
+def _get_last_generated(chat_id):
+    db = _load_last_generated_db()
+    return db.get(str(chat_id))
+
+def _load_pick_day_state():
+    data = _load_json(PICK_DAY_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+def _save_pick_day_state(state):
+    _save_json(PICK_DAY_FILE, state)
+
+def _get_pick_day_payload(league_id):
+    state = _load_pick_day_state()
+    key = f"{league_id}:{_mx_date()}"
+    return state.get(key)
+
+def _set_pick_day_payload(league_id, payload):
+    state = _load_pick_day_state()
+    key = f"{league_id}:{_mx_date()}"
+    state[key] = payload
+    _save_pick_day_state(state)
+
+def _get_channel_chat_id():
+    if not CHANNEL_ID_RAW:
+        return None
+    raw = str(CHANNEL_ID_RAW).strip()
+    if raw.startswith("@"):
+        return raw
+    try:
+        return int(raw)
+    except Exception:
+        return raw
+
+def _make_payload(selected, meta, settings, league_id, market_filter, max_picks, mode_label, strict_day=False):
+    picks_guardados = []
+    for pick in selected:
+        p = dict(pick)
+        p["uid"] = _make_uid()
+        p["stake"] = _stake_from_confidence(p["confidence"])
+        picks_guardados.append(p)
+
+    return {
+        "generated_at": _mx_now().isoformat(),
+        "league_id": league_id,
+        "league_name": _league_name(league_id),
+        "market_filter": market_filter,
+        "max_picks": max_picks,
+        "meta": meta,
+        "settings": settings,
+        "picks": picks_guardados,
+        "mode_label": mode_label,
+        "strict_day": strict_day,
+    }
+
+# ==========================
+# API SPORTS
 # ==========================
 
 def obtener_juegos(league_id):
-    cache_key = ("games", league_id, SEASON, _current_date())
+    cache_key = ("games", league_id, SEASON, _mx_date())
     cached = _cache_get(GAMES_CACHE, cache_key)
     if cached is not None:
         return cached
 
     headers = _headers()
-    fecha1 = datetime.utcnow().strftime("%Y-%m-%d")
-    fecha2 = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
+    fecha1 = _mx_date()
+    fecha2 = (_mx_now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
     juegos = []
     seen_pairs = set()
@@ -479,12 +548,7 @@ def obtener_juegos(league_id):
         }
 
         try:
-            r = requests.get(
-                f"{BASE_URL}/games",
-                headers=headers,
-                params=params,
-                timeout=30
-            )
+            r = requests.get(f"{BASE_URL}/games", headers=headers, params=params, timeout=30)
             r.raise_for_status()
             data = r.json()
 
@@ -536,18 +600,10 @@ def obtener_standings(league_id):
     if cached is not None:
         return cached
 
-    params = {
-        "league": league_id,
-        "season": SEASON
-    }
+    params = {"league": league_id, "season": SEASON}
 
     try:
-        r = requests.get(
-            f"{BASE_URL}/standings",
-            headers=_headers(),
-            params=params,
-            timeout=30
-        )
+        r = requests.get(f"{BASE_URL}/standings", headers=_headers(), params=params, timeout=30)
         r.raise_for_status()
 
         raw = r.json().get("response", [])
@@ -607,8 +663,8 @@ def obtener_forma_equipo(team_id, league_id, use_recent_form=True):
         _cache_set(FORM_CACHE, cache_key, {})
         return {}
 
-    date_to = datetime.utcnow().strftime("%Y-%m-%d")
-    date_from = (datetime.utcnow() - timedelta(days=FORM_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    date_to = _mx_date()
+    date_from = (_mx_now() - timedelta(days=FORM_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
 
     params = {
         "league": league_id,
@@ -619,17 +675,11 @@ def obtener_forma_equipo(team_id, league_id, use_recent_form=True):
     }
 
     try:
-        r = requests.get(
-            f"{BASE_URL}/games",
-            headers=_headers(),
-            params=params,
-            timeout=30
-        )
+        r = requests.get(f"{BASE_URL}/games", headers=_headers(), params=params, timeout=30)
         r.raise_for_status()
 
         raw = r.json().get("response", [])
         games = _as_list(raw)
-
         valid_games = []
 
         for game in games:
@@ -743,12 +793,7 @@ def obtener_odds(game_id, league_id):
     }
 
     try:
-        r = requests.get(
-            f"{BASE_URL}/odds",
-            headers=_headers(),
-            params=params,
-            timeout=30
-        )
+        r = requests.get(f"{BASE_URL}/odds", headers=_headers(), params=params, timeout=30)
         r.raise_for_status()
         data = r.json().get("response", [])
         _cache_set(ODDS_CACHE, cache_key, data)
@@ -771,11 +816,7 @@ def _parse_total_market(values):
 
         side = m.group(1).title()
         line = float(m.group(2))
-        candidates.append({
-            "line": line,
-            "side": side,
-            "odd": odd
-        })
+        candidates.append({"line": line, "side": side, "odd": odd})
 
     if not candidates:
         return None
@@ -798,7 +839,7 @@ def _parse_total_market(values):
     ]
 
     pool = sane if sane else complete
-    line, over_odd, under_odd = min(pool, key=lambda x: abs(x[0] - 8.5))
+    line, over_odd, under_odd = min(pool, key=lambda x: abs(x[0] - (8.5 if line <= 10 else 10.0)))
 
     logging.info(f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}")
     print(f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}", flush=True)
@@ -944,7 +985,7 @@ def pick_moneyline(juego, standing_home, standing_away, form_home, form_away, ma
     if form_home and form_away:
         form_note = f" Forma: {juego['home']} {_summary_form(form_home)} | {juego['away']} {_summary_form(form_away)}."
 
-    confidence = int(_clamp(58 + abs(gap) * 0.35 + ev * 30.0, 58, 90))
+    confidence = _smart_confidence(gap, ev, league_id, "Moneyline")
     score = (confidence * cfg["market_weights"]["Moneyline"]) + (max(ev, 0.0) * 100.0 * 0.45)
 
     return {
@@ -982,63 +1023,71 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
         print(f"[TOTALS DEBUG] descartado {juego['partido']} {market_name} line={line} over={over_odd} under={under_odd}", flush=True)
         return None
 
-    home_for = _blend(
-        standing_home.get("runs_for_pg", 0.0) if standing_home else 0.0,
+    base_total = _league_baseline_total(league_id)
+
+    home_off = _blend(
         form_home.get("recent_runs_for_pg") if form_home else None,
-        0.35
+        standing_home.get("runs_for_pg", 0.0) if standing_home else 0.0,
+        0.90
     )
-    home_against = _blend(
-        standing_home.get("runs_against_pg", 0.0) if standing_home else 0.0,
+    home_def = _blend(
         form_home.get("recent_runs_against_pg") if form_home else None,
-        0.35
+        standing_home.get("runs_against_pg", 0.0) if standing_home else 0.0,
+        0.90
     )
-    away_for = _blend(
-        standing_away.get("runs_for_pg", 0.0) if standing_away else 0.0,
+    away_off = _blend(
         form_away.get("recent_runs_for_pg") if form_away else None,
-        0.35
+        standing_away.get("runs_for_pg", 0.0) if standing_away else 0.0,
+        0.90
     )
-    away_against = _blend(
-        standing_away.get("runs_against_pg", 0.0) if standing_away else 0.0,
+    away_def = _blend(
         form_away.get("recent_runs_against_pg") if form_away else None,
-        0.35
+        standing_away.get("runs_against_pg", 0.0) if standing_away else 0.0,
+        0.90
     )
 
     _dbg(
         f"[TOTALS INPUT] {juego['partido']} | "
-        f"home_for={home_for:.2f} home_against={home_against:.2f} "
-        f"away_for={away_for:.2f} away_against={away_against:.2f} line={line}"
+        f"home_off={home_off:.2f} home_def={home_def:.2f} "
+        f"away_off={away_off:.2f} away_def={away_def:.2f} line={line}"
     )
 
-    proj_home = (home_for + away_against) / 2.0
-    proj_away = (away_for + home_against) / 2.0
-    proj_total = proj_home + proj_away
+    home_est = (0.58 * home_off) + (0.42 * away_def)
+    away_est = (0.58 * away_off) + (0.42 * home_def)
+    raw_total = home_est + away_est
+
+    proj_total = (base_total * 0.78) + (raw_total * 0.22)
+    proj_total = _clamp(proj_total, base_total - 2.0, base_total + 3.5)
 
     _dbg(
         f"[TOTALS PROJECTION] {juego['partido']} | "
-        f"proj_home={proj_home:.2f} proj_away={proj_away:.2f} proj_total={proj_total:.2f} line={line}"
+        f"home_est={home_est:.2f} away_est={away_est:.2f} raw_total={raw_total:.2f} "
+        f"proj_total={proj_total:.2f} line={line}"
     )
 
     gap = proj_total - line
+    abs_gap = abs(gap)
 
-    if abs(gap) < 0.20:
+    if abs_gap < 0.35:
         return None
 
     if gap > 0:
         pick_side = "Over"
         odd = over_odd
-        model_prob = _sigmoid(gap * cfg["totals_gap_mult"])
     else:
         pick_side = "Under"
         odd = under_odd
-        model_prob = _sigmoid((-gap) * cfg["totals_gap_mult"])
 
     implied = 1.0 / odd
+
+    sensitivity = 1.15 if league_id == MLB_LEAGUE_ID else 1.05
+    model_prob = 0.50 + min(0.24, (abs_gap / sensitivity) * 0.10)
     ev = model_prob - implied
 
-    if ev < cfg["totals_ev_min"]:
+    if ev < cfg["totals_ev_min"] and abs_gap < 0.90:
         return None
 
-    confidence = int(_clamp(58 + abs(gap) * 7.5 + ev * 25.0, 58, 88))
+    confidence = _smart_confidence(gap, ev, league_id, market_name)
     score = (confidence * cfg["market_weights"][market_name]) + (max(ev, 0.0) * 100.0 * 0.40)
 
     form_note = ""
@@ -1111,7 +1160,7 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
     _, raw_pick, odd, ev = opciones[0]
 
     friendly_pick = _format_runline_label(raw_pick, juego)
-    confidence = int(_clamp(58 + abs(gap) * 0.2 + ev * 22.0, 58, 84))
+    confidence = _smart_confidence(gap, ev, league_id, "Run Line")
     score = (confidence * cfg["market_weights"]["Run Line"]) + (max(ev, 0.0) * 100.0 * 0.25)
 
     form_note = ""
@@ -1138,15 +1187,6 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
 # HISTORIAL / RESULTADOS
 # ==========================
 
-def calcular_stake(confianza):
-    if confianza >= 88:
-        return 4
-    if confianza >= 82:
-        return 3
-    if confianza >= 74:
-        return 2
-    return 1
-
 def marcar_resultado(uid, result):
     historial = cargar_historial()
     found = None
@@ -1155,7 +1195,7 @@ def marcar_resultado(uid, result):
         if item.get("uid") == uid:
             item["status"] = result
             item["result"] = result
-            item["settled_at"] = datetime.utcnow().isoformat()
+            item["settled_at"] = _mx_now().isoformat()
             found = item
             break
 
@@ -1253,15 +1293,11 @@ def _build_candidates_for_league(league_id, market_filter, use_recent_form, enab
                 candidatos.append(ml_pick)
 
         if _market_allowed(market_filter, "Totales", enable_runline):
-            total_pick = pick_total(
-                juego, home_standing, away_standing, home_form, away_form, markets.get("total"), "Totales"
-            )
+            total_pick = pick_total(juego, home_standing, away_standing, home_form, away_form, markets.get("total"), "Totales")
             if total_pick:
                 candidatos.append(total_pick)
 
-            f5_pick = pick_total(
-                juego, home_standing, away_standing, home_form, away_form, markets.get("f5_total"), "F5 Totales"
-            )
+            f5_pick = pick_total(juego, home_standing, away_standing, home_form, away_form, markets.get("f5_total"), "F5 Totales")
             if f5_pick:
                 candidatos.append(f5_pick)
 
@@ -1361,27 +1397,6 @@ def generar_picks(
 
     return seleccionados, meta, settings
 
-def _build_payload_from_selection(selected, meta, settings, league_id, market_filter, max_picks, mode_label, strict_day=False):
-    picks_guardados = []
-    for pick in selected:
-        pick = dict(pick)
-        pick["uid"] = _make_uid()
-        pick["stake"] = calcular_stake(pick["confidence"])
-        picks_guardados.append(pick)
-
-    return {
-        "generated_at": datetime.utcnow().isoformat(),
-        "league_id": league_id,
-        "league_name": _league_name(league_id),
-        "market_filter": market_filter,
-        "max_picks": max_picks,
-        "meta": meta,
-        "settings": settings,
-        "picks": picks_guardados,
-        "mode_label": mode_label,
-        "strict_day": strict_day,
-    }
-
 def _build_summary_text(payload):
     meta = payload["meta"]
     picks = payload["picks"]
@@ -1400,7 +1415,8 @@ def _build_summary_text(payload):
     texto += f"📈 Juegos usados: {meta['usados']}\n"
     texto += f"📈 Candidatos: {meta['candidatos']}\n"
     texto += f"🎯 Seleccionados: {len(picks)}\n"
-    texto += f"🔢 Top solicitado: {payload['max_picks']}\n\n"
+    texto += f"🔢 Top solicitado: {payload['max_picks']}\n"
+    texto += f"🕒 {_mx_stamp()}\n\n"
 
     for market in ["Moneyline", "Totales", "F5 Totales", "Run Line"]:
         if counts.get(market):
@@ -1478,7 +1494,7 @@ def _build_channel_summary_text(payload):
     texto += f"📈 Candidatos: {meta['candidatos']}\n"
     texto += f"🎯 Publicados: {len(payload.get('picks', []))}\n"
     texto += f"🔢 Top: {payload.get('max_picks', len(payload.get('picks', [])))}\n"
-    texto += f"🕒 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+    texto += f"🕒 {_mx_stamp()}\n\n"
     texto += f"Forma reciente: {'ON' if settings['use_recent_form'] else 'OFF'} | Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
     return texto[:4000]
 
@@ -1501,13 +1517,6 @@ def _build_channel_pick_text(pick, idx):
         f"Boss Odds MX VIP\n"
     )
     return texto[:4000]
-
-def _replace_status(text, new_status_label):
-    if not text:
-        return f"Estado: {new_status_label}"
-    if "Estado:" in text:
-        return re.sub(r"Estado:\s*.*", f"Estado: {new_status_label}", text, count=1)
-    return text + f"\n\nEstado: {new_status_label}"
 
 def _build_vip_text():
     return (
@@ -1599,11 +1608,11 @@ def _build_rankings_text(league_id):
     return texto[:4000]
 
 def _build_games_text(league_id):
-    mlb = obtener_juegos(league_id)
+    juegos = obtener_juegos(league_id)
     texto = f"📅 CARTELERA {_league_name(league_id)}\n\n"
-    texto += f"⚾ Juegos encontrados: {len(mlb)}\n\n"
+    texto += f"⚾ Juegos encontrados: {len(juegos)}\n\n"
 
-    for juego in mlb:
+    for juego in juegos:
         texto += f"• {juego['away']} vs {juego['home']}  (ID {juego['game_id']})\n"
 
     return texto[:4000]
@@ -1675,6 +1684,10 @@ def main_menu_markup():
             InlineKeyboardButton("🇲🇽 LMB", callback_data=f"league:{LMB_LEAGUE_ID}"),
         ],
         [
+            InlineKeyboardButton("📅 Juegos", callback_data="menu:games"),
+            InlineKeyboardButton("📋 Análisis", callback_data="analysis:last"),
+        ],
+        [
             InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
             InlineKeyboardButton("📈 Rankings MLB", callback_data=f"rankings:{MLB_LEAGUE_ID}"),
         ],
@@ -1708,6 +1721,7 @@ def league_menu_markup(league_id):
             InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
         ],
         [
+            InlineKeyboardButton("📅 Juegos", callback_data=f"games:{league_id}"),
             InlineKeyboardButton("📋 Ver análisis", callback_data="analysis:last"),
         ]
     ]
@@ -1842,7 +1856,7 @@ async def ejecutar_generacion(
         else:
             mode_label = "Top Picks"
 
-        payload = _build_payload_from_selection(
+        payload = _make_payload(
             selected=selected,
             meta=meta,
             settings=settings,
@@ -1894,7 +1908,7 @@ async def ejecutar_pick_del_dia(chat_id, context, league_id, query=None):
             strict_day=True
         )
 
-        payload = _build_payload_from_selection(
+        payload = _make_payload(
             selected=selected,
             meta=meta,
             settings=settings,
@@ -1944,7 +1958,7 @@ async def publish_last_to_channel(chat_id, context):
         for idx, pick in enumerate(payload["picks"], start=1):
             await context.bot.send_message(chat_id=channel_id, text=_build_channel_pick_text(pick, idx))
 
-        payload["published_at"] = datetime.utcnow().isoformat()
+        payload["published_at"] = _mx_now().isoformat()
         _store_last_generated(chat_id, payload)
 
         return True, f"Publicado en el canal: {len(payload['picks'])} picks."
@@ -1973,10 +1987,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data == "menu:main":
             await query.answer()
-            await query.edit_message_text(
-                _main_menu_text(chat_id),
-                reply_markup=main_menu_markup()
-            )
+            await query.edit_message_text(_main_menu_text(chat_id), reply_markup=main_menu_markup())
+            return
+
+        if data == "menu:games":
+            await query.answer()
+            await query.edit_message_text(_build_games_text(settings["league_id"]), reply_markup=league_menu_markup(settings["league_id"]))
             return
 
         if data == "menu:rendimiento":
@@ -2006,6 +2022,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             await query.edit_message_text(
                 f"🎯 {_league_name(league_id)}\n\nElige una opción.",
+                reply_markup=league_menu_markup(league_id)
+            )
+            return
+
+        if data.startswith("games:"):
+            _, lid = data.split(":", 1)
+            league_id = _safe_int(lid, settings["league_id"])
+            await query.answer()
+            await query.edit_message_text(
+                _build_games_text(league_id),
                 reply_markup=league_menu_markup(league_id)
             )
             return
