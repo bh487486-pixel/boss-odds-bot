@@ -36,8 +36,13 @@ BOOKMAKER_ID = 4  # Pinnacle
 
 MAX_GAMES_TO_ANALYZE = 15
 DEFAULT_MAX_PICKS = 6
+MAX_PICKS_PER_MATCHUP = 2
+
 FORM_LOOKBACK_DAYS = 30
 USE_RECENT_FORM_DEFAULT = True
+
+PICK_DAY_MIN_CONFIDENCE = 85
+PICK_DAY_MIN_EV = 0.03
 
 HISTORY_FILE = "picks_history.json"
 LAST_GENERATED_FILE = "last_generated.json"
@@ -53,7 +58,7 @@ MARKET_WEIGHTS = {
     "Moneyline": 1.00,
     "Totales": 0.97,
     "F5 Totales": 0.92,
-    "Run Line": 0.50,
+    "Run Line": 0.40,
 }
 
 DEFAULT_MAX_PER_MARKET = {
@@ -246,7 +251,7 @@ def _is_reasonable_total_odd(odd):
 def _is_reasonable_runline_odd(odd):
     try:
         odd = float(odd)
-        return 1.20 <= odd <= 2.50
+        return 1.20 <= odd <= 2.30
     except Exception:
         return False
 
@@ -260,6 +265,59 @@ def _get_channel_chat_id():
         return int(raw)
     except Exception:
         return raw
+
+def _correlation_key(pick):
+    matchup = str(pick.get("matchup", ""))
+    market = str(pick.get("market", ""))
+    pick_text = str(pick.get("pick", "")).strip()
+    pick_norm = _norm(pick_text)
+
+    if market == "Moneyline":
+        return f"{matchup}|team|{pick_norm}"
+
+    if market == "Run Line":
+        team = re.sub(r"\s*[+-]1\.5\s*$", "", pick_text).strip()
+        return f"{matchup}|team|{_norm(team)}"
+
+    if market in {"Totales", "F5 Totales"}:
+        side = "over" if pick_text.lower().startswith("over") else "under"
+        return f"{matchup}|{market}|{side}"
+
+    return f"{matchup}|{market}|{pick_norm}"
+
+def _select_candidates(candidates, max_picks, strict_day=False):
+    candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+
+    if strict_day:
+        for pick in candidates:
+            if pick.get("confidence", 0) < PICK_DAY_MIN_CONFIDENCE:
+                continue
+            if pick.get("ev", 0.0) < PICK_DAY_MIN_EV:
+                continue
+            return [pick]
+        return []
+
+    selected = []
+    selected_by_matchup = defaultdict(int)
+    used_corr = set()
+
+    for pick in candidates:
+        matchup = pick["matchup"]
+        if selected_by_matchup[matchup] >= MAX_PICKS_PER_MATCHUP:
+            continue
+
+        corr = _correlation_key(pick)
+        if corr in used_corr:
+            continue
+
+        selected.append(pick)
+        selected_by_matchup[matchup] += 1
+        used_corr.add(corr)
+
+        if len(selected) >= max_picks:
+            break
+
+    return selected
 
 # ==========================
 # TEXT BUILDERS
@@ -314,12 +372,13 @@ def _build_history_text():
 
     return texto[:4000]
 
-def _build_summary_text(meta, selected_picks, market_filter, max_picks, settings):
+def _build_summary_text(meta, selected_picks, market_filter, max_picks, settings, strict_day=False):
     counts = defaultdict(int)
     for pick in selected_picks:
         counts[pick["market"]] += 1
 
     texto = "🔥 TOP PICKS BOSS ODDS\n\n"
+    texto += f"🎛 Modo: {'Pick del Día' if strict_day else 'Top Picks'}\n"
     texto += f"🎛 Filtro: {_filter_label(market_filter)}\n"
     texto += f"📊 MLB analizados: {meta['analizados']}\n"
     texto += f"📈 Juegos usados en picks: {meta['usados']}\n"
@@ -382,8 +441,10 @@ def _build_channel_summary_text(payload):
     settings = payload["settings"]
     market_filter = payload["market_filter"]
     max_picks = payload["max_picks"]
+    strict_day = payload.get("strict_day", False)
 
     texto = "🔥 BOSS ODDS MX | TOP PICKS\n\n"
+    texto += f"🎛 Modo: {'Pick del Día' if strict_day else 'Top Picks'}\n"
     texto += f"🎛 Filtro: {_filter_label(market_filter)}\n"
     texto += f"📊 MLB analizados: {meta['analizados']}\n"
     texto += f"📈 Candidatos: {meta['candidatos']}\n"
@@ -526,7 +587,7 @@ def main_menu_markup():
 def picks_menu_markup():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔥 Pick del Día", callback_data="gen:DEFAULT:1"),
+            InlineKeyboardButton("🔥 Pick del Día", callback_data="gen:DAY:1"),
         ],
         [
             InlineKeyboardButton("🥇 Top 3", callback_data="gen:DEFAULT:3"),
@@ -1362,8 +1423,12 @@ def resumen_historial():
 # GENERACIÓN
 # ==========================
 
-def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None):
+def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None, strict_day=False):
     settings = USER_SETTINGS[chat_id]
+
+    if strict_day:
+        market_filter = "ALL"
+        max_picks = 1
 
     if market_filter == "DEFAULT":
         market_filter = settings["market_filter"]
@@ -1437,34 +1502,30 @@ def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form
             if runline_pick:
                 candidatos.append(runline_pick)
 
-    mejores_por_partido = {}
-    for pick in candidatos:
-        partido = pick["matchup"]
-        if partido not in mejores_por_partido:
-            mejores_por_partido[partido] = pick
-        elif pick["score"] > mejores_por_partido[partido]["score"]:
-            mejores_por_partido[partido] = pick
-
-    candidatos = list(mejores_por_partido.values())
     candidatos.sort(key=lambda x: x["score"], reverse=True)
 
-    market_caps = _market_caps_for_filter(market_filter, max_picks)
+    if strict_day:
+        seleccionados = _select_candidates(candidatos, 1, strict_day=True)
+    else:
+        market_caps = _market_caps_for_filter(market_filter, max_picks)
+        # Selección por mercado con límite por partido y correlación
+        # (aplicamos el límite máximo final por mercado posteriormente)
+        preliminares = _select_candidates(candidatos, max_picks * 2, strict_day=False)
 
-    seleccionados = []
-    conteo_mercados = defaultdict(int)
+        seleccionados = []
+        conteo_mercados = defaultdict(int)
+        for pick in preliminares:
+            mercado = pick["market"]
+            limite = market_caps.get(mercado, max_picks)
 
-    for pick in candidatos:
-        mercado = pick["market"]
-        limite = market_caps.get(mercado, max_picks)
+            if conteo_mercados[mercado] >= limite:
+                continue
 
-        if conteo_mercados[mercado] >= limite:
-            continue
+            seleccionados.append(pick)
+            conteo_mercados[mercado] += 1
 
-        seleccionados.append(pick)
-        conteo_mercados[mercado] += 1
-
-        if len(seleccionados) >= max_picks:
-            break
+            if len(seleccionados) >= max_picks:
+                break
 
     meta = {
         "analizados": len(juegos_mlb),
@@ -1474,7 +1535,7 @@ def generar_picks(chat_id, market_filter="DEFAULT", max_picks=0, use_recent_form
 
     return seleccionados, meta, settings
 
-async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None, query=None):
+async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, use_recent_form=None, enable_runline=None, query=None, strict_day=False):
     if query is not None:
         await query.edit_message_text("⏳ Analizando MLB y buscando valor...")
     else:
@@ -1485,11 +1546,16 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
         market_filter=market_filter,
         max_picks=max_picks,
         use_recent_form=use_recent_form,
-        enable_runline=enable_runline
+        enable_runline=enable_runline,
+        strict_day=strict_day
     )
 
     if not seleccionados:
-        no_picks = "No se encontraron picks con ventaja suficiente para MLB."
+        if strict_day:
+            no_picks = "No se encontró un Pick del Día con el umbral actual."
+        else:
+            no_picks = "No se encontraron picks con ventaja suficiente para MLB."
+
         if query is not None:
             await query.edit_message_text(no_picks, reply_markup=main_menu_markup())
         else:
@@ -1512,6 +1578,7 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
         "meta": meta,
         "settings": settings,
         "picks": picks_guardados,
+        "strict_day": strict_day,
     }
     _store_last_generated(chat_id, payload)
 
@@ -1520,7 +1587,8 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
         picks_guardados,
         payload["market_filter"],
         payload["max_picks"],
-        settings
+        settings,
+        strict_day=strict_day
     )
 
     if query is not None:
@@ -1539,7 +1607,7 @@ async def enviar_picks(chat_id, context, market_filter="DEFAULT", max_picks=0, u
 async def publish_last_to_channel(chat_id, context):
     payload = _get_last_generated(chat_id)
     if not payload or not payload.get("picks"):
-        return False, "No hay picks recientes para publicar. Genera primero un Top 3 o Top 6."
+        return False, "No hay picks recientes para publicar. Genera primero un Top 3, Top 6 o Pick del Día."
 
     channel_id = _get_channel_chat_id()
     if channel_id is None:
@@ -1643,12 +1711,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("gen:"):
-        _, filter_key, limit_s = data.split(":", 2)
+        _, mode, limit_s = data.split(":", 2)
 
-        if filter_key == "DEFAULT":
+        strict_day = False
+        filter_key = settings["market_filter"]
+
+        if mode == "DAY":
+            strict_day = True
+            filter_key = "ALL"
+            limit = 1
+        elif mode == "DEFAULT":
+            limit = _safe_int(limit_s, settings["max_picks"])
             filter_key = settings["market_filter"]
+        else:
+            limit = _safe_int(limit_s, settings["max_picks"])
+            filter_key = mode
 
-        limit = _safe_int(limit_s, 0)
         if limit <= 0:
             limit = settings["max_picks"]
 
@@ -1660,7 +1738,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             max_picks=limit,
             use_recent_form=settings["use_recent_form"],
             enable_runline=settings["enable_runline"],
-            query=query
+            query=query,
+            strict_day=strict_day
         )
         return
 
