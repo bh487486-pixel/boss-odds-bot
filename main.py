@@ -36,8 +36,8 @@ if not API_KEY:
 BASE_URL = "https://v1.baseball.api-sports.io"
 SEASON = 2026
 
-# 1xBet
-BOOKMAKER_ID = 1
+# Ahora se usan todas las casas disponibles
+BOOKMAKER_ID = None
 
 MLB_LEAGUE_ID = 1
 LMB_LEAGUE_ID = 21
@@ -428,6 +428,21 @@ def _stake_from_confidence(confidence):
         return 2
     return 1
 
+def _best_odd_update(store, key, odd):
+    odd = _safe_float(odd, 0.0)
+    if odd <= 0:
+        return
+    current = store.get(key)
+    if current is None or odd > current:
+        store[key] = odd
+
+def _flatten_side_line_values(grouped):
+    values = []
+    for line, sides in grouped.items():
+        for side, odd in sides.items():
+            values.append({"value": f"{side} {line}", "odd": odd})
+    return values
+
 # ==========================
 # STORAGE
 # ==========================
@@ -794,7 +809,7 @@ def obtener_forma_equipo(team_id, league_id, use_recent_form=True):
         return {}
 
 def obtener_odds(game_id, league_id):
-    cache_key = ("odds", league_id, game_id, SEASON, BOOKMAKER_ID)
+    cache_key = ("odds", league_id, game_id, SEASON, "ALL")
     cached = _cache_get(ODDS_CACHE, cache_key)
     if cached is not None:
         return cached
@@ -802,7 +817,6 @@ def obtener_odds(game_id, league_id):
     params = {
         "league": league_id,
         "season": SEASON,
-        "bookmaker": BOOKMAKER_ID,
         "game": game_id
     }
 
@@ -817,7 +831,7 @@ def obtener_odds(game_id, league_id):
         logging.error(f"Error odds game={game_id} league={league_id}: {e}")
         return []
 
-def _parse_total_market(values):
+def _parse_total_market(values, league_id=None):
     candidates = []
 
     for v in values or []:
@@ -830,7 +844,11 @@ def _parse_total_market(values):
 
         side = m.group(1).title()
         line = float(m.group(2))
-        candidates.append({"line": line, "side": side, "odd": odd})
+        candidates.append({
+            "line": line,
+            "side": side,
+            "odd": odd
+        })
 
     if not candidates:
         return None
@@ -853,7 +871,7 @@ def _parse_total_market(values):
     ]
 
     pool = sane if sane else complete
-    baseline = 8.5 if _league_id_for_total_guess(pool) == MLB_LEAGUE_ID else 10.0
+    baseline = _league_baseline_total(league_id) if league_id in LEAGUES else 8.5
     line, over_odd, under_odd = min(pool, key=lambda x: abs(x[0] - baseline))
 
     logging.info(f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}")
@@ -865,10 +883,7 @@ def _parse_total_market(values):
         "under": under_odd
     }
 
-def _league_id_for_total_guess(pool):
-    return MLB_LEAGUE_ID
-
-def extraer_mercados_odds(odds_response):
+def extraer_mercados_odds(odds_response, league_id=None):
     if not odds_response:
         return {}
 
@@ -877,51 +892,82 @@ def extraer_mercados_odds(odds_response):
     if not bookmakers:
         return {}
 
-    bookmaker = next(
-        (b for b in bookmakers if _safe_int(b.get("id")) == BOOKMAKER_ID),
-        bookmakers[0]
-    )
+    moneyline_best = {"home": None, "away": None}
+    runline_best = {}
+    total_grouped = defaultdict(dict)
+    f5_grouped = defaultdict(dict)
+
+    for bookmaker in bookmakers:
+        bets = bookmaker.get("bets", []) or []
+
+        for bet in bets:
+            bet_id = _safe_int(bet.get("id"))
+            bet_name = str(bet.get("name", "")).strip()
+
+            if bet_id == 1 or bet_name == "Home/Away":
+                vals = bet.get("values", [])
+                for v in vals:
+                    value = str(v.get("value", "")).strip()
+                    odd = _safe_float(v.get("odd"))
+                    if value == "Home":
+                        _best_odd_update(moneyline_best, "home", odd)
+                    elif value == "Away":
+                        _best_odd_update(moneyline_best, "away", odd)
+
+            elif bet_id == 2 or bet_name == "Asian Handicap":
+                for v in bet.get("values", []):
+                    value = str(v.get("value", "")).strip()
+                    odd = _safe_float(v.get("odd"))
+                    _best_odd_update(runline_best, value, odd)
+
+            elif bet_id == 5 or bet_name == "Over/Under":
+                for v in bet.get("values", []):
+                    label = str(v.get("value", "")).strip()
+                    odd = _safe_float(v.get("odd"))
+
+                    m = re.match(r"(?i)^(Over|Under)\s+([0-9]+(?:\.[0-9]+)?)$", label)
+                    if not m:
+                        continue
+
+                    side = m.group(1).title()
+                    line = float(m.group(2))
+                    _best_odd_update(total_grouped[line], side, odd)
+
+            elif bet_id == 6 or bet_name == "Over/Under (1st 5 Innings)":
+                for v in bet.get("values", []):
+                    label = str(v.get("value", "")).strip()
+                    odd = _safe_float(v.get("odd"))
+
+                    m = re.match(r"(?i)^(Over|Under)\s+([0-9]+(?:\.[0-9]+)?)$", label)
+                    if not m:
+                        continue
+
+                    side = m.group(1).title()
+                    line = float(m.group(2))
+                    _best_odd_update(f5_grouped[line], side, odd)
 
     markets = {}
 
-    for bet in bookmaker.get("bets", []):
-        bet_id = _safe_int(bet.get("id"))
-        bet_name = str(bet.get("name", "")).strip()
+    if moneyline_best.get("home") and moneyline_best.get("away"):
+        markets["moneyline"] = {
+            "home": moneyline_best["home"],
+            "away": moneyline_best["away"]
+        }
 
-        if bet_id == 1 or bet_name == "Home/Away":
-            vals = bet.get("values", [])
-            home_odd = None
-            away_odd = None
+    if runline_best:
+        markets["runline"] = runline_best
 
-            for v in vals:
-                value = str(v.get("value", "")).strip()
-                odd = _safe_float(v.get("odd"))
-                if value == "Home":
-                    home_odd = odd
-                elif value == "Away":
-                    away_odd = odd
+    total_values = _flatten_side_line_values(total_grouped)
+    f5_values = _flatten_side_line_values(f5_grouped)
 
-            if home_odd and away_odd:
-                markets["moneyline"] = {"home": home_odd, "away": away_odd}
+    parsed_total = _parse_total_market(total_values, league_id)
+    parsed_f5 = _parse_total_market(f5_values, league_id)
 
-        elif bet_id == 2 or bet_name == "Asian Handicap":
-            handicap = {}
-            for v in bet.get("values", []):
-                value = str(v.get("value", "")).strip()
-                odd = _safe_float(v.get("odd"))
-                handicap[value] = odd
-            if handicap:
-                markets["runline"] = handicap
+    if parsed_total:
+        markets["total"] = parsed_total
 
-        elif bet_id == 5 or bet_name == "Over/Under":
-            parsed = _parse_total_market(bet.get("values", []))
-            if parsed:
-                markets["total"] = parsed
-
-        elif bet_id == 6 or bet_name == "Over/Under (1st 5 Innings)":
-            parsed = _parse_total_market(bet.get("values", []))
-            if parsed:
-                markets["f5_total"] = parsed
+    if parsed_f5:
+        markets["f5_total"] = parsed_f5
 
     return markets
 
@@ -1298,7 +1344,7 @@ def _build_candidates_for_league(league_id, market_filter, use_recent_form, enab
         away_form = obtener_forma_equipo(juego["away_team_id"], league_id, use_recent_form) if use_recent_form else {}
 
         odds_response = obtener_odds(juego["game_id"], league_id)
-        markets = extraer_mercados_odds(odds_response)
+        markets = extraer_mercados_odds(odds_response, league_id)
 
         logging.info(f"{juego['partido']} ({_league_short(league_id)}) -> markets={list(markets.keys())}")
 
@@ -1653,7 +1699,7 @@ def _build_test_text(league_id):
         odds_response = obtener_odds(j["game_id"], league_id)
         if odds_response:
             total_odds += 1
-            markets = extraer_mercados_odds(odds_response)
+            markets = extraer_mercados_odds(odds_response, league_id)
             if markets.get("moneyline"):
                 ml += 1
             if markets.get("total"):
