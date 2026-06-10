@@ -50,7 +50,7 @@ MAX_PICKS_PER_MATCHUP = 2
 FORM_LOOKBACK_DAYS = 30
 USE_RECENT_FORM_DEFAULT = True
 
-CACHE_TTL_SECONDS = 900  # 15 minutos
+CACHE_TTL_SECONDS = 900
 
 PICK_DAY_MIN_CONFIDENCE = 85
 PICK_DAY_MIN_EV = 0.03
@@ -74,7 +74,7 @@ DEFAULT_MAX_PER_MARKET = {
 }
 
 LEAGUE_MODEL = {
-    MLB_LEAGUE_ID: {  # MLB
+    MLB_LEAGUE_ID: {
         "base_win": 68.0,
         "base_diff": 7.0,
         "base_pos": 0.45,
@@ -93,7 +93,7 @@ LEAGUE_MODEL = {
             "Run Line": 0.40,
         }
     },
-    LMB_LEAGUE_ID: {  # LMB
+    LMB_LEAGUE_ID: {
         "base_win": 55.0,
         "base_diff": 4.5,
         "base_pos": 0.25,
@@ -134,6 +134,10 @@ USER_SETTINGS = defaultdict(lambda: {
 # ==========================
 # HELPERS
 # ==========================
+
+def _dbg(msg: str):
+    logging.info(msg)
+    print(msg, flush=True)
 
 def _headers():
     return {"x-apisports-key": API_KEY}
@@ -325,13 +329,14 @@ def _league_name(league_id):
     return LEAGUES.get(league_id, f"Liga {league_id}")
 
 def _league_short(league_id):
-    return "MLB" if league_id == MLB_LEAGUE_ID else "LMB" if league_id == LMB_LEAGUE_ID else f"L{league_id}"
+    if league_id == MLB_LEAGUE_ID:
+        return "MLB"
+    if league_id == LMB_LEAGUE_ID:
+        return "LMB"
+    return f"L{league_id}"
 
 def _filter_label(filter_key):
-    return MARKET_FILTER_LABELS.get(
-        str(filter_key).upper(),
-        str(filter_key)
-    )
+    return MARKET_FILTER_LABELS.get(str(filter_key).upper(), str(filter_key))
 
 def _is_reasonable_total_odd(odd):
     try:
@@ -579,6 +584,12 @@ def obtener_standings(league_id):
                 "runs_against_pg": points_against / max(1, games_played),
             }
 
+            _dbg(
+                f"[STANDINGS] {league_id} | {team.get('name')} | "
+                f"PF={points_for:.1f} PA={points_against:.1f} GP={games_played} | "
+                f"RF/G={standings[team_id]['runs_for_pg']:.2f} RA/G={standings[team_id]['runs_against_pg']:.2f}"
+            )
+
         _cache_set(STANDINGS_CACHE, cache_key, standings)
         return standings
 
@@ -790,6 +801,7 @@ def _parse_total_market(values):
     line, over_odd, under_odd = min(pool, key=lambda x: abs(x[0] - 8.5))
 
     logging.info(f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}")
+    print(f"[TOTALS DEBUG] chosen line={line} over={over_odd} under={under_odd} candidates={complete}", flush=True)
 
     return {
         "line": line,
@@ -967,6 +979,7 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
 
     if not _is_reasonable_total_odd(over_odd) or not _is_reasonable_total_odd(under_odd):
         logging.info(f"[TOTALS DEBUG] descartado {juego['partido']} {market_name} line={line} over={over_odd} under={under_odd}")
+        print(f"[TOTALS DEBUG] descartado {juego['partido']} {market_name} line={line} over={over_odd} under={under_odd}", flush=True)
         return None
 
     home_for = _blend(
@@ -990,9 +1003,20 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
         0.35
     )
 
+    _dbg(
+        f"[TOTALS INPUT] {juego['partido']} | "
+        f"home_for={home_for:.2f} home_against={home_against:.2f} "
+        f"away_for={away_for:.2f} away_against={away_against:.2f} line={line}"
+    )
+
     proj_home = (home_for + away_against) / 2.0
     proj_away = (away_for + home_against) / 2.0
     proj_total = proj_home + proj_away
+
+    _dbg(
+        f"[TOTALS PROJECTION] {juego['partido']} | "
+        f"proj_home={proj_home:.2f} proj_away={proj_away:.2f} proj_total={proj_total:.2f} line={line}"
+    )
 
     gap = proj_total - line
 
