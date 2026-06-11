@@ -36,7 +36,7 @@ if not API_KEY:
 BASE_URL = "https://v1.baseball.api-sports.io"
 SEASON = 2026
 
-# Ahora se usan todas las casas disponibles
+# Usar todas las casas disponibles
 BOOKMAKER_ID = None
 
 MLB_LEAGUE_ID = 1
@@ -904,7 +904,8 @@ def extraer_mercados_odds(odds_response, league_id=None):
             bet_id = _safe_int(bet.get("id"))
             bet_name = str(bet.get("name", "")).strip()
 
-            if bet_id == 1 or bet_name == "Home/Away":
+            # Moneyline / Match Winner
+            if bet_id in {1, 14} or bet_name in {"Home/Away", "Match Winner", "1x2"}:
                 vals = bet.get("values", [])
                 for v in vals:
                     value = str(v.get("value", "")).strip()
@@ -914,12 +915,14 @@ def extraer_mercados_odds(odds_response, league_id=None):
                     elif value == "Away":
                         _best_odd_update(moneyline_best, "away", odd)
 
-            elif bet_id == 2 or bet_name == "Asian Handicap":
+            # Run line / Handicap
+            elif bet_id in {2, 3, 12} or bet_name in {"Asian Handicap", "Asian Handicap (1st 5 Innings)", "Asian Handicap (1st Inning)"}:
                 for v in bet.get("values", []):
                     value = str(v.get("value", "")).strip()
                     odd = _safe_float(v.get("odd"))
                     _best_odd_update(runline_best, value, odd)
 
+            # Totales
             elif bet_id == 5 or bet_name == "Over/Under":
                 for v in bet.get("values", []):
                     label = str(v.get("value", "")).strip()
