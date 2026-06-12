@@ -9,6 +9,7 @@ import logging
 
 from collections import defaultdict
 from datetime import datetime, timedelta
+from itertools import combinations
 from zoneinfo import ZoneInfo
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -144,9 +145,7 @@ USER_SETTINGS = defaultdict(lambda: {
 
 # ==========================
 # HELPERS
-# ==========================
-
-def _dbg(msg: str):
+# ==========================def _dbg(msg: str):
     logging.info(msg)
     print(msg, flush=True)
 
@@ -273,7 +272,6 @@ def _replace_status(text, new_status):
         return text + f"\n\nEstado: {new_status}"
     except Exception:
         return text
-
 def _probability_label(probability):
     if probability >= 88:
         return "Muy alta"
@@ -376,9 +374,7 @@ def _rank_candidates(candidates, rank_by="score"):
         return sorted(candidates, key=lambda x: (x["odd"], x["score"]), reverse=True)
     if rank_by == "premium":
         return sorted(candidates, key=lambda x: (x["probability"], x["ev"], x["score"]), reverse=True)
-    return sorted(candidates, key=lambda x: x["score"], reverse=True)
-
-def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score"):
+    return sorted(candidates, key=lambda x: x["score"], reverse=True)def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score"):
     candidates = _rank_candidates(candidates, rank_by=rank_by)
 
     if strict_day:
@@ -466,6 +462,170 @@ def _history_settled_items_current_month():
         if str(p.get("timestamp", ""))[:7] == mk
     ]
 
+
+def _combo_market_group(market):
+    market = str(market or "").strip()
+    if market in {"Totales", "F5 Totales"}:
+        return "TOTALS"
+    if market == "Moneyline":
+        return "ML"
+    if market == "Run Line":
+        return "RUNLINE"
+    return market.upper()
+
+def _combo_kind_label(kind):
+    return {
+        "parlay": "Parlay",
+        "combinada": "Combinada",
+    }.get(str(kind).lower(), str(kind).title())
+
+def _combo_option_label(option):
+    kind = str(option.get("kind", "")).lower()
+    probability = _safe_int(option.get("probability", option.get("confidence", 0)))
+    odd = _safe_float(option.get("odd", 0.0), 0.0)
+if kind == "parlay":
+        prefix = "🧩"
+    elif kind == "combinada":
+        prefix = "🧠"
+    else:
+        prefix = "⭐"
+
+    pick = str(option.get("pick", "")).strip()
+    matchup = str(option.get("matchup", "")).strip()
+
+    if matchup and matchup != pick:
+        label = f"{prefix} {pick} | {matchup} | {probability}% | {odd:.2f}"
+    else:
+        label = f"{prefix} {pick} | {probability}% | {odd:.2f}"
+
+    return label[:120]
+
+def _build_combo_option(kind, league_id, legs):
+    odd = 1.0
+    prob_decimal = 1.0
+    score = 0.0
+    matchups = []
+
+    for leg in legs:
+        odd *= _safe_float(leg.get("odd"), 1.0)
+        prob_decimal *= _safe_float(leg.get("probability", leg.get("confidence", 0)), 0.0) / 100.0
+        score += _safe_float(leg.get("score"), 0.0)
+        matchups.append(str(leg.get("matchup", "")).strip())
+
+    probability = int(_clamp(prob_decimal * 100.0, 1, 99))
+    implied = 1.0 / odd if odd > 0 else 0.0
+    ev = prob_decimal - implied
+
+    if kind == "parlay":
+        leg_label = " + ".join(str(leg.get("pick", "")).strip() for leg in legs)
+        matchup_label = " / ".join(dict.fromkeys(matchups))
+        market_label = "Parlay"
+        reason = "Parlay construido con valor combinado."
+    else:
+        leg_label = " + ".join(str(leg.get("pick", "")).strip() for leg in legs)
+        matchup_label = matchups[0] if matchups else "Combinada"
+        market_label = "Combinada"
+        reason = "Combinada del mismo juego con mercados compatibles."
+
+    return {
+        "uid": _make_uid(),
+        "league_id": league_id,
+        "league_name": _league_name(league_id),
+        "matchup": matchup_label,
+        "market": market_label,
+        "pick": leg_label,
+        "odd": odd,
+        "line": None,
+        "projection": None,
+        "confidence": probability,
+        "probability": probability,
+        "ev": ev,
+        "stake": _stake_from_probability(probability),
+        "score": score + (probability * 0.5),
+        "reason": reason,
+        "notes": [],
+        "kind": kind,
+        "legs": legs,
+    }
+
+def _build_parlay_options(candidates, league_id, limit=6):
+    top = _rank_candidates(
+        [c for c in candidates if _safe_int(c.get("probability", c.get("confidence", 0)), 0) >= 65],
+        rank_by="premium"
+    )[:10]
+
+    options = []
+    for leg1, leg2 in combinations(top, 2):
+        if leg1.get("matchup") == leg2.get("matchup"):
+            continue
+        option = _build_combo_option("parlay", league_id, [leg1, leg2])
+        if option["probability"] < 15:
+            continue
+        options.append(option)
+
+    options.sort(key=lambda x: (x["score"], x["probability"], x["odd"]), reverse=True)
+    return options[:limit]
+
+def _build_combinada_options(candidates, league_id, limit=6):
+    grouped = defaultdict(list)
+    for c in candidates:
+        grouped[str(c.get("matchup", ""))].append(c)
+
+    options = []
+    for matchup, group in grouped.items():
+        ranked = _rank_candidates(group, rank_by="premium")[:5]
+
+        for size in (2, 3):
+            for legs in combinations(ranked, size):
+                groups = [_combo_market_group(leg.get("market")) for leg in legs]
+                if len(groups) != len(set(groups)):
+                    continue
+                option = _build_combo_option("combinada", league_id, list(legs))
+                if option["probability"] < 20:
+                    continue
+                options.append(option)
+
+    options.sort(key=lambda x: (x["score"], x["probability"], x["odd"]), reverse=True)
+    return options[:limit]
+
+def _build_combo_payload(chat_id, league_id, combo_kind="parlay", limit=6):
+    settings = USER_SETTINGS[chat_id]
+    use_recent_form = settings["use_recent_form"]
+    enable_runline = settings["enable_runline"]
+
+    juegos_all, juegos, candidatos = _build_candidates_for_league(
+        league_id=league_id,
+        market_filter="ALL",
+        use_recent_form=use_recent_form,
+        enable_runline=enable_runline
+    )
+
+    if combo_kind == "parlay":
+        selected = _build_parlay_options(candidatos, league_id, limit=limit)
+        mode_label = "Parlay"
+    else:
+        selected = _build_combinada_options(candidatos, league_id, limit=limit)
+        mode_label = "Combinada"
+
+    meta = {
+        "analizados": len(juegos_all),
+        "usados": len(juegos),
+        "candidatos": len(candidatos),
+    }
+
+    payload = _make_payload(
+        selected=selected,
+        meta=meta,
+        settings=settings,
+        league_id=league_id,
+        market_filter="ALL",
+        max_picks=len(selected),
+        mode_label=mode_label,
+        strict_day=False,
+        mode_kind=combo_kind,
+    )
+    return payload
+
 # ==========================
 # STORAGE
 # ==========================
@@ -510,9 +670,7 @@ def guardar_picks_en_historial(picks, published_at=None, publish_scope="ALL"):
             "publish_scope": publish_scope,
         })
 
-    guardar_historial(historial)
-
-def _load_last_generated_db():
+    guardar_historial(historial)def _load_last_generated_db():
     data = _load_json(LAST_GENERATED_FILE, {})
     return data if isinstance(data, dict) else {}
 
@@ -557,7 +715,7 @@ def _get_channel_chat_id():
     except Exception:
         return raw
 
-def _make_payload(selected, meta, settings, league_id, market_filter, max_picks, mode_label, strict_day=False):
+def _make_payload(selected, meta, settings, league_id, market_filter, max_picks, mode_label, strict_day=False, mode_kind="picks"):
     picks_guardados = []
     for pick in selected:
         p = dict(pick)
@@ -576,6 +734,7 @@ def _make_payload(selected, meta, settings, league_id, market_filter, max_picks,
         "picks": picks_guardados,
         "mode_label": mode_label,
         "strict_day": strict_day,
+        "mode_kind": mode_kind,
     }
 
 # ==========================
@@ -647,9 +806,7 @@ def obtener_juegos(league_id):
             logging.error(f"Error API games ({fecha}) league={league_id}: {e}")
 
     _cache_set(GAMES_CACHE, cache_key, juegos)
-    return juegos
-
-def obtener_standings(league_id):
+    return juegosdef obtener_standings(league_id):
     cache_key = ("standings", league_id, SEASON)
     cached = _cache_get(STANDINGS_CACHE, cache_key)
     if cached is not None:
@@ -824,9 +981,7 @@ def obtener_forma_equipo(team_id, league_id, use_recent_form=True):
             "last5_runs_for_pg": r5["runs_for_pg"],
             "last5_runs_against_pg": r5["runs_against_pg"],
             "last5_run_diff_pg": r5["run_diff_pg"],
-        }
-
-        _cache_set(FORM_CACHE, cache_key, forma)
+    }_cache_set(FORM_CACHE, cache_key, forma)
         return forma
 
     except Exception as e:
@@ -981,9 +1136,7 @@ def extraer_mercados_odds(odds_response, league_id=None):
         markets["moneyline"] = {
             "home": moneyline_best["home"],
             "away": moneyline_best["away"]
-        }
-
-    if runline_best:
+    }if runline_best:
         markets["runline"] = runline_best
 
     total_values = _flatten_side_line_values(total_grouped)
@@ -1180,8 +1333,7 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
 
     if ev < cfg["totals_ev_min"] and abs_gap < 0.90:
         return None
-
-    probability = _smart_probability(gap, ev, league_id, market_name)
+probability = _smart_probability(gap, ev, league_id, market_name)
     score = (probability * cfg["market_weights"][market_name]) + (max(ev, 0.0) * 100.0 * 0.40)
 
     form_note = ""
@@ -1371,8 +1523,7 @@ def _build_candidates_for_league(league_id, market_filter, use_recent_form, enab
         home_standing = standings.get(juego["home_team_id"])
         away_standing = standings.get(juego["away_team_id"])
 
-        home_form = obtener_forma_equipo(juego["home_team_id"], league_id, use_recent_form) if use_recent_form else {}
-        away_form = obtener_forma_equipo(juego["away_team_id"], league_id, use_recent_form) if use_recent_form else {}
+        home_form = obtener_forma_equipo(juego["home_team_id"], league_id, use_recent_form) if use_recent_form else {}away_form = obtener_forma_equipo(juego["away_team_id"], league_id, use_recent_form) if use_recent_form else {}
 
         odds_response = obtener_odds(juego["game_id"], league_id)
         markets = extraer_mercados_odds(odds_response, league_id)
@@ -1527,13 +1678,18 @@ def _build_summary_text(payload):
     texto += "\nCada apuesta llega en un mensaje separado.\n"
 
     return texto[:4000]
-
 def _build_pick_card(pick, idx):
     level = _probability_label(pick.get("probability", pick.get("confidence", 0)))
     probability = _safe_int(pick.get("probability", pick.get("confidence", 0)))
+    league_short = _league_short(pick.get("league_id", MLB_LEAGUE_ID))
+
+    if pick.get("kind"):
+        title = f"{'🔥' if idx == 1 else '🥈' if idx == 2 else '🥉' if idx == 3 else '⭐'} {_combo_kind_label(pick.get('kind'))} #{idx}"
+    else:
+        title = f"{'🔥' if idx == 1 else '🥈' if idx == 2 else '🥉' if idx == 3 else '⭐'} PICK {league_short} #{idx}"
 
     texto = (
-        f"{'🔥' if idx == 1 else '🥈' if idx == 2 else '🥉' if idx == 3 else '⭐'} APUESTA #{idx}\n"
+        f"{title}\n"
         f"⚾ {pick['matchup']}\n"
         f"━━━━━━━━━━━━━━\n"
         f"✅ Selección: {pick['pick']}\n"
@@ -1585,6 +1741,8 @@ def _build_analysis_text(payload):
 
     return texto[:4000]
 
+
+
 def _build_channel_summary_text(payload, picks=None):
     meta = payload["meta"]
     settings = payload["settings"]
@@ -1606,9 +1764,15 @@ def _build_channel_summary_text(payload, picks=None):
 def _build_channel_pick_text(pick, idx):
     level = _probability_label(pick.get("probability", pick.get("confidence", 0)))
     probability = _safe_int(pick.get("probability", pick.get("confidence", 0)))
+    league_short = _league_short(pick.get("league_id", MLB_LEAGUE_ID))
+
+    if pick.get("kind"):
+        title = f"{'🔥' if idx == 1 else '🥈' if idx == 2 else '🥉' if idx == 3 else '⭐'} {_combo_kind_label(pick.get('kind'))} #{idx}"
+    else:
+        title = f"{'🔥' if idx == 1 else '🥈' if idx == 2 else '🥉' if idx == 3 else '⭐'} PICK {league_short} #{idx}"
 
     texto = (
-        f"{'🔥' if idx == 1 else '🥈' if idx == 2 else '🥉' if idx == 3 else '⭐'} APUESTA #{idx}\n"
+        f"{title}\n"
         f"⚾ {pick['matchup']}\n"
         f"✅ {pick['pick']}\n"
         f"🎯 Mercado: {pick['market']}\n"
@@ -1617,7 +1781,7 @@ def _build_channel_pick_text(pick, idx):
     if pick.get("line") is not None:
         texto += f"📏 Línea: {pick['line']:.1f}\n"
     texto += (
-        f"🎲 Apuesta: {pick['stake']}/5\n"
+        f"🎲 Stake: {pick.get('stake', 1)}/5\n"
         f"📊 Probabilidad: {probability}% ({level})\n"
         f"📉 EV: {pick.get('ev', 0.0) * 100:+.1f}%\n"
         f"━━━━━━━━━━━━━━\n"
@@ -1627,13 +1791,24 @@ def _build_channel_pick_text(pick, idx):
 
 def _build_publish_prompt_text(payload):
     picks = payload.get("picks", [])
-    texto = "📢 PUBLICAR AL CANAL\n\n"
-    texto += "Selecciona qué apuesta quieres publicar.\n"
-    texto += "También puedes publicar todas de una vez.\n\n"
+    mode_kind = payload.get("mode_kind", "picks")
+    kind_label = _combo_kind_label(mode_kind) if mode_kind != "picks" else "PUBLICAR AL CANAL"
+
+    if mode_kind == "picks":
+        texto = "📢 PUBLICAR AL CANAL\n\n"
+        texto += "Selecciona qué apuesta quieres publicar.\n"
+        texto += "También puedes publicar todas de una vez.\n\n"
+    else:
+        texto = f"📢 {kind_label.upper()} DISPONIBLES\n\n"
+        texto += "Selecciona la combinación que quieres publicar.\n"
+        texto += "También puedes publicar todas de una vez.\n\n"
 
     for idx, pick in enumerate(picks, start=1):
         probability = _safe_int(pick.get("probability", pick.get("confidence", 0)))
-        texto += f"{idx}. {pick['matchup']} | {pick['market']} | {pick['pick']} | Probabilidad {probability}%\n"
+        if mode_kind == "picks":
+            texto += f"{idx}. {pick['matchup']} | {pick['market']} | {pick['pick']} | Probabilidad {probability}%\n"
+        else:
+            texto += f"{idx}. {pick['matchup']} | {pick['pick']} | Probabilidad {probability}% | Cuota {pick['odd']:.2f}\n"
 
     return texto[:4000]
 
@@ -1674,8 +1849,7 @@ def _build_performance_text():
 
     if not overall:
         return f"📊 RESUMEN MENSUAL\n\nAún no hay picks cerrados en {_month_label()}."
-
-    def _line(title, data):
+def _line(title, data):
         settled = data["settled"]
         wins = data["wins"]
         losses = data["losses"]
@@ -1806,6 +1980,7 @@ def _config_menu_text(chat_id):
 # KEYBOARDS
 # ==========================
 
+
 def main_menu_markup():
     return InlineKeyboardMarkup([
         [
@@ -1813,15 +1988,11 @@ def main_menu_markup():
             InlineKeyboardButton("🇲🇽 LMB", callback_data=f"league:{LMB_LEAGUE_ID}"),
         ],
         [
-            InlineKeyboardButton("📅 Juegos", callback_data="menu:games"),
+            InlineKeyboardButton("📈 Rankings", callback_data="menu:rankings"),
             InlineKeyboardButton("📋 Análisis", callback_data="analysis:last"),
         ],
         [
             InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
-            InlineKeyboardButton("📈 Rankings MLB", callback_data=f"rankings:{MLB_LEAGUE_ID}"),
-        ],
-        [
-            InlineKeyboardButton("📈 Rankings LMB", callback_data=f"rankings:{LMB_LEAGUE_ID}"),
             InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
         ],
         [
@@ -1829,7 +2000,6 @@ def main_menu_markup():
             InlineKeyboardButton("⚙️ Configuración", callback_data="menu:config"),
         ]
     ])
-
 def league_menu_markup(league_id):
     rows = [
         [InlineKeyboardButton("🔥 Pick del Día", callback_data=f"gen:{league_id}:DAY:1")],
@@ -1847,6 +2017,10 @@ def league_menu_markup(league_id):
         ],
         [
             InlineKeyboardButton("🏃 Run Line", callback_data=f"gen:{league_id}:RUNLINE:0"),
+            InlineKeyboardButton("🧩 Parlay", callback_data=f"gen:{league_id}:PARLAY:6"),
+        ],
+        [
+            InlineKeyboardButton("🧠 Combinada", callback_data=f"gen:{league_id}:COMBINADA:6"),
             InlineKeyboardButton("📢 Publicar al Canal", callback_data="publish:last"),
         ],
         [
@@ -1861,14 +2035,33 @@ def league_menu_markup(league_id):
     rows.append([InlineKeyboardButton("🔙 Menú", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
+def rankings_menu_markup():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📈 Rankings MLB", callback_data=f"rankings:{MLB_LEAGUE_ID}"),
+            InlineKeyboardButton("📈 Rankings LMB", callback_data=f"rankings:{LMB_LEAGUE_ID}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Menú", callback_data="menu:main"),
+        ]
+    ])
+
 def publish_selector_markup(payload):
     picks = payload.get("picks", [])
+    mode_kind = payload.get("mode_kind", "picks")
+
     rows = [[InlineKeyboardButton("📢 Publicar todos", callback_data="publish:all")]]
 
     for idx, pick in enumerate(picks):
         probability = _safe_int(pick.get("probability", pick.get("confidence", 0)))
-        label = f"{idx + 1}. {pick.get('market', '')} | {pick.get('pick', '')} | {probability}%"
-        rows.append([InlineKeyboardButton(label[:60], callback_data=f"publish:pick:{idx}")])
+        if mode_kind == "picks":
+            label = f"{idx + 1}. {pick.get('market', '')} | {pick.get('pick', '')} | {probability}%"
+            callback = f"publish:pick:{idx}"
+        else:
+            label = f"{idx + 1}. {pick.get('pick', '')} | {probability}%"
+            callback = f"publish:pick:{idx}"
+
+        rows.append([InlineKeyboardButton(label[:60], callback_data=callback)])
 
     rows.append([InlineKeyboardButton("🔙 Menú", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
@@ -1934,6 +2127,7 @@ def _subset_payload_picks(payload, indexes):
             selected.append(picks[idx])
     return selected
 
+
 async def _publish_picks_to_channel(chat_id, context, payload, selected_picks):
     channel_id = _get_channel_chat_id()
     if channel_id is None:
@@ -1943,13 +2137,9 @@ async def _publish_picks_to_channel(chat_id, context, payload, selected_picks):
         return False, "No hay apuestas seleccionadas para publicar."
 
     try:
-        summary = _build_channel_summary_text(payload, selected_picks)
-        await context.bot.send_message(chat_id=channel_id, text=summary)
-
         for idx, pick in enumerate(selected_picks, start=1):
             await context.bot.send_message(chat_id=channel_id, text=_build_channel_pick_text(pick, idx))
-
-        guardar_picks_en_historial(selected_picks, published_at=_mx_now().isoformat(), publish_scope="SELECTED")
+guardar_picks_en_historial(selected_picks, published_at=_mx_now().isoformat(), publish_scope="SELECTED")
         payload["published_at"] = _mx_now().isoformat()
         payload["published_pick_uids"] = [p.get("uid") for p in selected_picks]
         _store_last_generated(chat_id, payload)
@@ -1958,6 +2148,7 @@ async def _publish_picks_to_channel(chat_id, context, payload, selected_picks):
     except Exception as e:
         logging.error(f"Error publicando al canal: {e}")
         return False, f"No se pudo publicar en el canal: {e}"
+
 
 # ==========================
 # ACTIONS
@@ -1974,18 +2165,30 @@ async def _send_payload(chat_id, context, payload, query=None):
             await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=main_menu_markup())
         return
 
-    summary_text = _build_summary_text(payload)
-    if query is not None:
-        await query.edit_message_text(summary_text, reply_markup=publish_selector_markup(payload))
-    else:
-        await context.bot.send_message(chat_id=chat_id, text=summary_text, reply_markup=publish_selector_markup(payload))
+    mode_kind = payload.get("mode_kind", "picks")
 
-    for idx, pick in enumerate(payload["picks"], start=1):
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=_build_pick_card(pick, idx),
-            reply_markup=pick_result_markup(pick["uid"])
-        )
+    if mode_kind == "picks":
+        summary_text = _build_summary_text(payload)
+        selector_markup = publish_selector_markup(payload)
+        if query is not None:
+            await query.edit_message_text(summary_text, reply_markup=selector_markup)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=summary_text, reply_markup=selector_markup)
+
+        for idx, pick in enumerate(payload["picks"], start=1):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=_build_pick_card(pick, idx),
+                reply_markup=pick_result_markup(pick["uid"])
+            )
+        return
+
+    prompt_text = _build_publish_prompt_text(payload)
+    selector_markup = publish_selector_markup(payload)
+    if query is not None:
+        await query.edit_message_text(prompt_text, reply_markup=selector_markup)
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=prompt_text, reply_markup=selector_markup)
 
 async def ejecutar_generacion(
     chat_id,
@@ -2035,7 +2238,8 @@ async def ejecutar_generacion(
             market_filter=market_filter if market_filter != "DEFAULT" else settings["market_filter"],
             max_picks=max_picks if max_picks > 0 else settings["max_picks"],
             mode_label=mode_label,
-            strict_day=strict_day
+            strict_day=strict_day,
+            mode_kind="picks"
         )
 
         _store_last_generated(chat_id, payload)
@@ -2054,6 +2258,43 @@ async def ejecutar_generacion(
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=f"⚠️ Ocurrió un error al generar apuestas.\n\n{e}",
+                    reply_markup=main_menu_markup()
+                )
+        except Exception:
+            pass
+
+async def ejecutar_generacion_combo(
+    chat_id,
+    context,
+    league_id,
+    combo_kind="parlay",
+    limit=6,
+    query=None
+):
+    try:
+        if query is not None:
+            await query.edit_message_text("⏳ Armando combinaciones con valor...")
+        else:
+            awaitcontext.bot.send_message(chat_id=chat_id, text="⏳ Armando combinaciones con valor...")
+
+        payload = _build_combo_payload(chat_id, league_id, combo_kind=combo_kind, limit=limit)
+
+        _store_last_generated(chat_id, payload)
+
+        await _send_payload(chat_id, context, payload, query=query)
+
+    except Exception as e:
+        logging.exception(f"Error en ejecutar_generacion_combo league={league_id} kind={combo_kind}: {e}")
+        try:
+            if query is not None:
+                await query.edit_message_text(
+                    f"⚠️ Ocurrió un error al generar combinaciones.\n\n{e}",
+                    reply_markup=main_menu_markup()
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⚠️ Ocurrió un error al generar combinaciones.\n\n{e}",
                     reply_markup=main_menu_markup()
                 )
         except Exception:
@@ -2086,7 +2327,8 @@ async def ejecutar_pick_del_dia(chat_id, context, league_id, query=None):
             market_filter="ALL",
             max_picks=1,
             mode_label="Pick del Día",
-            strict_day=True
+            strict_day=True,
+            mode_kind="picks"
         )
 
         _set_pick_day_payload(league_id, payload)
@@ -2114,7 +2356,7 @@ async def ejecutar_pick_del_dia(chat_id, context, league_id, query=None):
 async def publish_last_to_channel(chat_id, context, indexes=None):
     payload = _get_last_generated(chat_id)
     if not payload or not payload.get("picks"):
-        return False, "No hay apuestas recientes para publicar. Genera primero un Top 3, Top 6 o Pick del Día."
+        return False, "No hay apuestas recientes para publicar. Genera primero un Top 3, Top 6, Parlay o Combinada."
 
     if indexes is None:
         selected_picks = payload.get("picks", [])
@@ -2122,6 +2364,10 @@ async def publish_last_to_channel(chat_id, context, indexes=None):
         selected_picks = _subset_payload_picks(payload, indexes)
 
     return await _publish_picks_to_channel(chat_id, context, payload, selected_picks)
+
+# ==========================
+# MENÚS / CALLBACKS
+# ==========================
 
 # ==========================
 # MENÚS / CALLBACKS
@@ -2135,6 +2381,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_markup()
     )
 
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         query = update.callback_query
@@ -2145,6 +2393,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "menu:main":
             await query.answer()
             await query.edit_message_text(_main_menu_text(chat_id), reply_markup=main_menu_markup())
+            return
+
+        if data == "menu:rankings":
+            await query.answer()
+            await query.edit_message_text("📈 Rankings\n\nSelecciona una liga.", reply_markup=rankings_menu_markup())
             return
 
         if data == "menu:games":
@@ -2183,6 +2436,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        if data.startswith("rankings:"):
+            _, lid = data.split(":", 1)
+            league_id = _safe_int(lid, MLB_LEAGUE_ID)
+            await query.answer()
+            await query.edit_message_text(_build_rankings_text(league_id), reply_markup=main_menu_markup())
+            returnif data.startswith("rankings:"):
+            _, lid = data.split(":", 1)
+            league_id = _safe_int(lid, MLB_LEAGUE_ID)
+            await query.answer()
+            await query.edit_message_text(_build_rankings_text(league_id), reply_markup=main_menu_markup())
+            return
+
         if data.startswith("games:"):
             _, lid = data.split(":", 1)
             league_id = _safe_int(lid, settings["league_id"])
@@ -2191,13 +2456,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _build_games_text(league_id),
                 reply_markup=league_menu_markup(league_id)
             )
-            return
-
-        if data.startswith("rankings:"):
-            _, lid = data.split(":", 1)
-            league_id = _safe_int(lid, MLB_LEAGUE_ID)
-            await query.answer()
-            await query.edit_message_text(_build_rankings_text(league_id), reply_markup=main_menu_markup())
             return
 
         if data == "analysis:last":
@@ -2243,25 +2501,65 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _, lid, mode, limit_s = data.split(":", 3)
             league_id = _safe_int(lid, settings["league_id"])
 
-            strict_day = False
-            premium_mode = False
-            best_odds_mode = False
-            filter_key = settings["market_filter"]
-
             if mode == "DAY":
                 await query.answer("Generando Pick del Día...", show_alert=False)
                 await ejecutar_pick_del_dia(chat_id=chat_id, context=context, league_id=league_id, query=query)
                 return
 
             if mode == "PREMIUM":
-                premium_mode = True
-                filter_key = "ALL"
                 limit = _safe_int(limit_s, 3)
-            elif mode == "ODDS":
-                best_odds_mode = True
-                filter_key = "ALL"
-                limit = 1
-            elif mode == "DEFAULT":
+                await query.answer("Generando apuestas...", show_alert=False)
+                await ejecutar_generacion(
+                    chat_id=chat_id,
+                    context=context,
+                    league_id=league_id,
+                    market_filter="ALL",
+                    max_picks=limit,
+                    premium_mode=True,
+                    query=query
+                )
+                return
+
+            if mode == "ODDS":
+                await query.answer("Generando apuestas...", show_alert=False)
+                await ejecutar_generacion(
+                    chat_id=chat_id,
+                    context=context,
+                    league_id=league_id,
+                    market_filter="ALL",
+                    max_picks=1,
+                    best_odds_mode=True,
+                    query=query
+                )
+                return
+
+            if mode == "PARLAY":
+                limit = _safe_int(limit_s, 6)
+                await query.answer("Generando parlay...", show_alert=False)
+                await ejecutar_generacion_combo(
+                    chat_id=chat_id,
+                    context=context,
+                    league_id=league_id,
+                    combo_kind="parlay",
+                    limit=limit,
+                    query=query
+                )
+                return
+
+            if mode == "COMBINADA":
+                limit = _safe_int(limit_s, 6)
+                await query.answer("Generando combinadas...", show_alert=False)
+                await ejecutar_generacion_combo(
+                    chat_id=chat_id,
+                    context=context,
+                    league_id=league_id,
+                    combo_kind="combinada",
+                    limit=limit,
+                    query=query
+                )
+                return
+
+            if mode == "DEFAULT":
                 limit = _safe_int(limit_s, settings["max_picks"])
                 filter_key = settings["market_filter"]
             else:
@@ -2278,14 +2576,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 league_id=league_id,
                 market_filter=filter_key,
                 max_picks=limit,
-                strict_day=strict_day,
-                premium_mode=premium_mode,
-                best_odds_mode=best_odds_mode,
                 query=query
             )
-            return
-
-        if data == "publish:last":
+            returnif data == "publish:last":
             await query.answer()
             payload = _get_last_generated(chat_id)
             if not payload or not payload.get("picks"):
@@ -2352,6 +2645,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         except Exception:
             pass
+
+# ==========================
+# ERROR HANDLER
+# ==========================
+
+# ==========================
+# ERROR HANDLER
+# ==========================
 
 # ==========================
 # ERROR HANDLER
