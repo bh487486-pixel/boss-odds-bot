@@ -374,10 +374,12 @@ def _correlation_key(pick):
 
 def _rank_candidates(candidates, rank_by="score"):
     if rank_by == "odd":
-        return sorted(candidates, key=lambda x: (x["odd"], x["score"]), reverse=True)
+        return sorted(candidates, key=lambda x: (x["odd"], x["probability"], x["score"]), reverse=True)
     if rank_by == "premium":
-        return sorted(candidates, key=lambda x: (x["probability"], x["ev"], x["score"]), reverse=True)
-    return sorted(candidates, key=lambda x: x["score"], reverse=True)
+        return sorted(candidates, key=lambda x: (x["probability"], x["score"], x["ev"], -x.get("odd", 0.0)), reverse=True)
+    if rank_by == "probability":
+        return sorted(candidates, key=lambda x: (x["probability"], x["score"], x["ev"], -x.get("odd", 0.0)), reverse=True)
+    return sorted(candidates, key=lambda x: (x["probability"], x["score"], x["ev"], -x.get("odd", 0.0)), reverse=True)
 
 def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score"):
     candidates = _rank_candidates(candidates, rank_by=rank_by)
@@ -415,20 +417,20 @@ def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score")
 
 def _smart_probability(total_gap, ev, league_id, market_name):
     gap_abs = abs(total_gap)
-    base = 56.0
+    base = 57.0
 
     if market_name == "Moneyline":
-        base += gap_abs * 2.1
-        base += max(0.0, ev) * 120.0
+        base += gap_abs * 2.0
+        base += max(0.0, ev) * 95.0
     elif market_name in {"Totales", "F5 Totales"}:
-        base += gap_abs * 3.0
-        base += max(0.0, ev) * 110.0
+        base += gap_abs * 2.8
+        base += max(0.0, ev) * 90.0
     elif market_name == "Run Line":
-        base += gap_abs * 2.4
-        base += max(0.0, ev) * 105.0
+        base += gap_abs * 2.2
+        base += max(0.0, ev) * 85.0
 
     if league_id == LMB_LEAGUE_ID:
-        base += 1.0
+        base += 0.5
 
     return int(_clamp(base, 55, 90))
 
@@ -440,6 +442,35 @@ def _stake_from_probability(probability):
     if probability >= 74:
         return 2
     return 1
+
+def _odd_pressure(odd):
+    """Small penalty for higher odds so the model favors hit-rate over payout size."""
+    odd = _safe_float(odd, 0.0)
+    if odd <= 1.95:
+        return 0.0
+    if odd <= 2.30:
+        return (odd - 1.95) * 2.0
+    return (odd - 1.95) * 3.5
+
+def _odds_gate(probability, odd, market_name):
+    odd = _safe_float(odd, 0.0)
+    probability = _safe_int(probability, 0)
+    if market_name == "Moneyline":
+        if odd >= 2.20 and probability < 84:
+            return False
+        if odd >= 2.60 and probability < 88:
+            return False
+    elif market_name in {"Totales", "F5 Totales"}:
+        if odd >= 2.15 and probability < 83:
+            return False
+        if odd >= 2.50 and probability < 87:
+            return False
+    elif market_name == "Run Line":
+        if odd >= 2.20 and probability < 82:
+            return False
+        if odd >= 2.60 and probability < 86:
+            return False
+    return True
 
 def _best_odd_update(store, key, odd):
     odd = _safe_float(odd, 0.0)
@@ -1246,7 +1277,9 @@ def pick_moneyline(juego, standing_home, standing_away, form_home, form_away, ma
         form_note = f" Forma: {juego['home']} {_summary_form(form_home)} | {juego['away']} {_summary_form(form_away)}."
 
     probability = _smart_probability(gap, ev, league_id, "Moneyline")
-    score = (probability * cfg["market_weights"]["Moneyline"]) + (max(ev, 0.0) * 100.0 * 0.45)
+    if not _odds_gate(probability, odd, "Moneyline"):
+        return None
+    score = (probability * 1.20) + (max(ev, 0.0) * 100.0 * 0.12) - _odd_pressure(odd)
 
     return {
         "league_id": league_id,
@@ -1349,7 +1382,9 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
         return None
 
     probability = _smart_probability(gap, ev, league_id, market_name)
-    score = (probability * cfg["market_weights"][market_name]) + (max(ev, 0.0) * 100.0 * 0.40)
+    if not _odds_gate(probability, odd, market_name):
+        return None
+    score = (probability * 1.15) + (max(ev, 0.0) * 100.0 * 0.10) - _odd_pressure(odd)
 
     form_note = ""
     if form_home and form_away:
@@ -1412,7 +1447,7 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
         if ev < cfg["runline_ev_min"]:
             continue
 
-        score = (ev * 100.0 * 0.35) + abs(gap) * 0.5
+        score = (ev * 100.0 * 0.15) + abs(gap) * 0.25 - _odd_pressure(odd)
         opciones.append((score, nombre, odd, ev))
 
     if not opciones:
@@ -1423,7 +1458,9 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
 
     friendly_pick = _format_runline_label(raw_pick, juego)
     probability = _smart_probability(gap, ev, league_id, "Run Line")
-    score = (probability * cfg["market_weights"]["Run Line"]) + (max(ev, 0.0) * 100.0 * 0.25)
+    if not _odds_gate(probability, odd, "Run Line"):
+        return None
+    score = (probability * 1.05) + (max(ev, 0.0) * 100.0 * 0.08) - _odd_pressure(odd)
 
     form_note = ""
     if form_home and form_away:
@@ -1580,14 +1617,14 @@ def _select_final_picks(candidatos, market_filter, max_picks, strict_day=False, 
     if best_odds_mode:
         candidatos = [c for c in candidatos if c.get("probability", c.get("confidence", 0)) >= 75 and c.get("ev", 0.0) >= 0.02]
 
-    rank_by = "score"
+    rank_by = "probability"
     if premium_mode:
         rank_by = "premium"
     elif best_odds_mode:
         rank_by = "odd"
 
     if strict_day:
-        return _select_candidates(candidatos, 1, strict_day=True, rank_by="score")
+        return _select_candidates(candidatos, 1, strict_day=True, rank_by="probability")
 
     market_caps = _market_caps_for_filter(market_filter, max_picks)
     preliminares = _select_candidates(candidatos, max_picks * 2, strict_day=False, rank_by=rank_by)
