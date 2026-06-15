@@ -59,7 +59,7 @@ USE_RECENT_FORM_DEFAULT = True
 
 CACHE_TTL_SECONDS = 900
 
-PICK_DAY_MIN_CONFIDENCE = 85
+PICK_DAY_MIN_CONFIDENCE = 80
 PICK_DAY_MIN_EV = 0.03
 
 PICK_DAY_FILE = "pick_day_cache.json"
@@ -374,12 +374,31 @@ def _correlation_key(pick):
 
 def _rank_candidates(candidates, rank_by="score"):
     if rank_by == "odd":
-        return sorted(candidates, key=lambda x: (x["odd"], x["probability"], x["score"]), reverse=True)
+        return sorted(candidates, key=lambda x: (
+            x["odd"],
+            x.get("probability", x.get("confidence", 0)),
+            x["score"]
+        ), reverse=True)
     if rank_by == "premium":
-        return sorted(candidates, key=lambda x: (x["probability"], x["score"], x["ev"], -x.get("odd", 0.0)), reverse=True)
+        return sorted(candidates, key=lambda x: (
+            x.get("probability", x.get("confidence", 0)),
+            x["score"],
+            x["ev"],
+            -x.get("odd", 0.0)
+        ), reverse=True)
     if rank_by == "probability":
-        return sorted(candidates, key=lambda x: (x["probability"], x["score"], x["ev"], -x.get("odd", 0.0)), reverse=True)
-    return sorted(candidates, key=lambda x: (x["probability"], x["score"], x["ev"], -x.get("odd", 0.0)), reverse=True)
+        return sorted(candidates, key=lambda x: (
+            x.get("probability", x.get("confidence", 0)),
+            x["score"],
+            x["ev"],
+            -x.get("odd", 0.0)
+        ), reverse=True)
+    return sorted(candidates, key=lambda x: (
+        x.get("probability", x.get("confidence", 0)),
+        x["score"],
+        x["ev"],
+        -x.get("odd", 0.0)
+    ), reverse=True)
 
 def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score"):
     candidates = _rank_candidates(candidates, rank_by=rank_by)
@@ -417,22 +436,22 @@ def _select_candidates(candidates, max_picks, strict_day=False, rank_by="score")
 
 def _smart_probability(total_gap, ev, league_id, market_name):
     gap_abs = abs(total_gap)
-    base = 57.0
+    base = 50.0
 
     if market_name == "Moneyline":
-        base += gap_abs * 2.0
-        base += max(0.0, ev) * 95.0
+        base += gap_abs * 2.65
+        base += max(0.0, ev) * 125.0
     elif market_name in {"Totales", "F5 Totales"}:
-        base += gap_abs * 2.8
-        base += max(0.0, ev) * 90.0
+        base += gap_abs * 2.95
+        base += max(0.0, ev) * 118.0
     elif market_name == "Run Line":
-        base += gap_abs * 2.2
-        base += max(0.0, ev) * 85.0
+        base += gap_abs * 2.45
+        base += max(0.0, ev) * 110.0
 
     if league_id == LMB_LEAGUE_ID:
-        base += 0.5
+        base += 1.0
 
-    return int(_clamp(base, 55, 90))
+    return int(_clamp(base, 50, 90))
 
 def _stake_from_probability(probability):
     if probability >= 88:
@@ -444,31 +463,47 @@ def _stake_from_probability(probability):
     return 1
 
 def _odd_pressure(odd):
-    """Small penalty for higher odds so the model favors hit-rate over payout size."""
+    """Penalty for higher odds so the model favors hit-rate over payout size."""
     odd = _safe_float(odd, 0.0)
-    if odd <= 1.95:
+    if odd <= 1.55:
         return 0.0
-    if odd <= 2.30:
-        return (odd - 1.95) * 2.0
-    return (odd - 1.95) * 3.5
+    if odd <= 1.90:
+        return (odd - 1.55) * 0.8
+    if odd <= 2.20:
+        return 0.28 + (odd - 1.90) * 2.0
+    if odd <= 2.60:
+        return 0.88 + (odd - 2.20) * 3.0
+    return 2.08 + (odd - 2.60) * 4.0
 
 def _odds_gate(probability, odd, market_name):
     odd = _safe_float(odd, 0.0)
     probability = _safe_int(probability, 0)
     if market_name == "Moneyline":
-        if odd >= 2.20 and probability < 84:
+        if odd >= 1.80 and probability < 72:
+            return False
+        if odd >= 2.05 and probability < 78:
+            return False
+        if odd >= 2.30 and probability < 84:
             return False
         if odd >= 2.60 and probability < 88:
             return False
     elif market_name in {"Totales", "F5 Totales"}:
-        if odd >= 2.15 and probability < 83:
+        if odd >= 1.90 and probability < 70:
             return False
-        if odd >= 2.50 and probability < 87:
+        if odd >= 2.15 and probability < 76:
+            return False
+        if odd >= 2.40 and probability < 82:
+            return False
+        if odd >= 2.65 and probability < 86:
             return False
     elif market_name == "Run Line":
-        if odd >= 2.20 and probability < 82:
+        if odd >= 1.85 and probability < 70:
             return False
-        if odd >= 2.60 and probability < 86:
+        if odd >= 2.10 and probability < 75:
+            return False
+        if odd >= 2.35 and probability < 80:
+            return False
+        if odd >= 2.60 and probability < 85:
             return False
     return True
 
@@ -497,6 +532,22 @@ def _history_settled_items_current_month():
         p for p in _history_settled_items()
         if str(p.get("timestamp", ""))[:7] == mk
     ]
+
+
+def _published_uids(payload):
+    return set(payload.get("published_pick_uids", []))
+
+def _history_items_for_today():
+    today = _mx_date()
+    historial = cargar_historial()
+    return [
+        p for p in historial
+        if str(p.get("published_at", ""))[:10] == today or p.get("date") == today
+    ]
+
+def _daily_result_items():
+    return _history_items_for_today()
+
 
 
 def _combo_market_group(market):
@@ -1277,9 +1328,11 @@ def pick_moneyline(juego, standing_home, standing_away, form_home, form_away, ma
         form_note = f" Forma: {juego['home']} {_summary_form(form_home)} | {juego['away']} {_summary_form(form_away)}."
 
     probability = _smart_probability(gap, ev, league_id, "Moneyline")
+    if probability < 72:
+        return None
     if not _odds_gate(probability, odd, "Moneyline"):
         return None
-    score = (probability * 1.20) + (max(ev, 0.0) * 100.0 * 0.12) - _odd_pressure(odd)
+    score = (probability * 1.25) + (max(ev, 0.0) * 100.0 * 0.10) - _odd_pressure(odd)
 
     return {
         "league_id": league_id,
@@ -1382,9 +1435,11 @@ def pick_total(juego, standing_home, standing_away, form_home, form_away, market
         return None
 
     probability = _smart_probability(gap, ev, league_id, market_name)
+    if probability < 68:
+        return None
     if not _odds_gate(probability, odd, market_name):
         return None
-    score = (probability * 1.15) + (max(ev, 0.0) * 100.0 * 0.10) - _odd_pressure(odd)
+    score = (probability * 1.10) + (max(ev, 0.0) * 100.0 * 0.08) - _odd_pressure(odd)
 
     form_note = ""
     if form_home and form_away:
@@ -1458,9 +1513,11 @@ def pick_runline(juego, standing_home, standing_away, form_home, form_away, mark
 
     friendly_pick = _format_runline_label(raw_pick, juego)
     probability = _smart_probability(gap, ev, league_id, "Run Line")
+    if probability < 70:
+        return None
     if not _odds_gate(probability, odd, "Run Line"):
         return None
-    score = (probability * 1.05) + (max(ev, 0.0) * 100.0 * 0.08) - _odd_pressure(odd)
+    score = (probability * 1.00) + (max(ev, 0.0) * 100.0 * 0.06) - _odd_pressure(odd)
 
     form_note = ""
     if form_home and form_away:
@@ -1613,9 +1670,15 @@ def _build_candidates_for_league(league_id, market_filter, use_recent_form, enab
 
 def _select_final_picks(candidatos, market_filter, max_picks, strict_day=False, premium_mode=False, best_odds_mode=False):
     if premium_mode:
-        candidatos = [c for c in candidatos if c.get("probability", c.get("confidence", 0)) >= 82 and c.get("ev", 0.0) >= 0.04]
+        candidatos = [
+            c for c in candidatos
+            if c.get("probability", c.get("confidence", 0)) >= 80 and c.get("ev", 0.0) >= 0.035
+        ]
     if best_odds_mode:
-        candidatos = [c for c in candidatos if c.get("probability", c.get("confidence", 0)) >= 75 and c.get("ev", 0.0) >= 0.02]
+        candidatos = [
+            c for c in candidatos
+            if c.get("probability", c.get("confidence", 0)) >= 74 and c.get("ev", 0.0) >= 0.02
+        ]
 
     rank_by = "probability"
     if premium_mode:
@@ -1728,7 +1791,7 @@ def _build_summary_text(payload):
     texto += "\n"
     texto += f"Probabilidad inteligente: {'ON' if settings['use_recent_form'] else 'OFF'}\n"
     texto += f"Run Line: {'ON' if settings['enable_runline'] else 'OFF'}\n"
-    texto += "\nCada apuesta llega en un mensaje separado.\n"
+    texto += "\nLas opciones quedan disponibles para publicar.\n"
 
     return texto[:4000]
 
@@ -1833,7 +1896,7 @@ def _build_channel_pick_text(pick, idx):
         f"✅ {pick['pick']}\n"
         f"🎯 Mercado: {pick['market']}\n"
         f"💰 Cuota: {pick['odd']:.2f}\n"
-)
+    )
     if pick.get("line") is not None:
         texto += f"📏 Línea: {pick['line']:.1f}\n"
     texto += (
@@ -1849,22 +1912,24 @@ def _build_publish_prompt_text(payload):
     picks = payload.get("picks", [])
     mode_kind = payload.get("mode_kind", "picks")
     kind_label = _combo_kind_label(mode_kind) if mode_kind != "picks" else "PUBLICAR AL CANAL"
+    published = _published_uids(payload)
 
     if mode_kind == "picks":
         texto = "📢 PUBLICAR AL CANAL\n\n"
         texto += "Selecciona qué apuesta quieres publicar.\n"
-        texto += "También puedes publicar todas de una vez.\n\n"
+        texto += "Las publicadas quedarán marcadas con ✅ y la lista seguirá visible.\n\n"
     else:
         texto = f"📢 {kind_label.upper()} DISPONIBLES\n\n"
         texto += "Selecciona la combinación que quieres publicar.\n"
-        texto += "También puedes publicar todas de una vez.\n\n"
+        texto += "Las publicadas quedarán marcadas con ✅ y la lista seguirá visible.\n\n"
 
     for idx, pick in enumerate(picks, start=1):
         probability = _safe_int(pick.get("probability", pick.get("confidence", 0)))
+        mark = "✅ " if pick.get("uid") in published else ""
         if mode_kind == "picks":
-            texto += f"{idx}. {pick['matchup']} | {pick['market']} | {pick['pick']} | Probabilidad {probability}%\n"
+            texto += f"{mark}{idx}. {pick['matchup']} | {pick['market']} | {pick['pick']} | Probabilidad {probability}%\n"
         else:
-            texto += f"{idx}. {pick['matchup']} | {pick['pick']} | Probabilidad {probability}% | Cuota {pick['odd']:.2f}\n"
+            texto += f"{mark}{idx}. {pick['matchup']} | {pick['pick']} | Probabilidad {probability}% | Cuota {pick['odd']:.2f}\n"
 
     return texto[:4000]
 
@@ -1938,6 +2003,93 @@ def _build_performance_text():
             texto += _line(league_name, by_league[league_name]) + "\n"
 
     return texto[:4000]
+
+
+def _daily_summary_data():
+    items = _daily_result_items()
+    published = len(items)
+    settled = [p for p in items if p.get("status") in {"win", "loss", "push"}]
+    wins = sum(1 for p in settled if p.get("status") == "win")
+    losses = sum(1 for p in settled if p.get("status") == "loss")
+    pushes = sum(1 for p in settled if p.get("status") == "push")
+    pending = published - len(settled)
+    staked = sum(_safe_float(p.get("stake"), 0.0) for p in settled)
+    profit = sum(_market_profit(_safe_float(p.get("stake"), 0.0), _safe_float(p.get("odd"), 0.0), p.get("status")) for p in settled)
+    effectiveness = (wins / max(1, len(settled)) * 100.0) if settled else 0.0
+    return {
+        "date": _mx_date(),
+        "published": published,
+        "settled": len(settled),
+        "wins": wins,
+        "losses": losses,
+        "pushes": pushes,
+        "pending": pending,
+        "staked": staked,
+        "profit": profit,
+        "effectiveness": effectiveness,
+        "items": items,
+    }
+
+def _build_daily_results_text():
+    data = _daily_summary_data()
+
+    texto = "📋 RESULTADO DEL DÍA\n\n"
+    texto += f"Fecha: {data['date']}\n"
+    texto += f"📌 Publicados: {data['published']}\n"
+    texto += f"✅ Ganados: {data['wins']}\n"
+    texto += f"❌ Perdidos: {data['losses']}\n"
+    texto += f"➖ Push: {data['pushes']}\n"
+    texto += f"⏳ Pendientes: {data['pending']}\n"
+    texto += f"🎯 Efectividad: {data['effectiveness']:.1f}%\n"
+    texto += f"💵 Apuesta total: {data['staked']:.2f}\n"
+    texto += f"📈 Beneficio: {data['profit']:+.2f}\n\n"
+
+    if data["items"]:
+        texto += "Últimos resultados:\n"
+        for item in reversed(data["items"][-8:]):
+            odd = _safe_float(item.get("odd"), 0.0)
+            texto += (
+                f"• {item.get('market')} | {item.get('pick')} | "
+                f"{odd:.2f} | {_result_label(item.get('status'))}\n"
+            )
+    else:
+        texto += "Aún no hay picks del día para mostrar.\n"
+
+    return texto[:4000]
+
+def _build_channel_daily_results_text():
+    data = _daily_summary_data()
+    texto = "📅 RESULTADO DEL DÍA\n\n"
+    texto += f"Fecha: {data['date']}\n"
+    texto += f"✅ Ganados: {data['wins']}\n"
+    texto += f"❌ Perdidos: {data['losses']}\n"
+    texto += f"➖ Push: {data['pushes']}\n"
+    texto += f"🎯 Efectividad: {data['effectiveness']:.1f}%\n"
+    texto += f"📈 Beneficio: {data['profit']:+.2f}\n"
+    return texto[:4000]
+
+def daily_results_markup():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📢 Publicar al Canal", callback_data="resultado:publish")
+        ],
+        [
+            InlineKeyboardButton("🔙 Menú", callback_data="menu:main")
+        ]
+    ])
+
+
+async def publish_daily_results_to_channel(chat_id, context):
+    channel_id = _get_channel_chat_id()
+    if channel_id is None:
+        return False, "Falta configurar TELEGRAM_CHANNEL_ID en Render."
+
+    try:
+        await context.bot.send_message(chat_id=channel_id, text=_build_channel_daily_results_text())
+        return True, "Resultado del día publicado."
+    except Exception as e:
+        logging.error(f"Error publicando resultado del día: {e}")
+        return False, f"No se pudo publicar el resultado del día: {e}"
 
 def _build_rankings_text(league_id):
     standings = obtener_standings(league_id)
@@ -2049,15 +2201,17 @@ def main_menu_markup():
             InlineKeyboardButton("📋 Análisis", callback_data="analysis:last"),
         ],
         [
+            InlineKeyboardButton("📋 Resultado del Día", callback_data="menu:resultado"),
             InlineKeyboardButton("📊 Rendimiento", callback_data="menu:rendimiento"),
-            InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
         ],
         [
+            InlineKeyboardButton("🗂 Historial", callback_data="menu:historial"),
             InlineKeyboardButton("👑 VIP", callback_data="menu:vip"),
+        ],
+        [
             InlineKeyboardButton("⚙️ Configuración", callback_data="menu:config"),
         ]
     ])
-
 
 def league_menu_markup(league_id):
     rows = [
@@ -2108,16 +2262,19 @@ def rankings_menu_markup():
 def publish_selector_markup(payload):
     picks = payload.get("picks", [])
     mode_kind = payload.get("mode_kind", "picks")
+    published = _published_uids(payload)
 
     rows = [[InlineKeyboardButton("📢 Publicar todos", callback_data="publish:all")]]
 
     for idx, pick in enumerate(picks):
         probability = _safe_int(pick.get("probability", pick.get("confidence", 0)))
+        is_published = pick.get("uid") in published
+
         if mode_kind == "picks":
-            label = f"{idx + 1}. {pick.get('market', '')} | {pick.get('pick', '')} | {probability}%"
+            label = f"{'✅ ' if is_published else ''}{idx + 1}. {pick.get('market', '')} | {pick.get('pick', '')} | {probability}%"
             callback = f"publish:pick:{idx}"
         else:
-            label = f"{idx + 1}. {pick.get('pick', '')} | {probability}%"
+            label = f"{'✅ ' if is_published else ''}{idx + 1}. {pick.get('pick', '')} | {probability}%"
             callback = f"publish:pick:{idx}"
 
         rows.append([InlineKeyboardButton(label[:60], callback_data=callback)])
@@ -2195,16 +2352,21 @@ async def _publish_picks_to_channel(chat_id, context, payload, selected_picks):
     if not selected_picks:
         return False, "No hay apuestas seleccionadas para publicar."
 
+    published = _published_uids(payload)
+    to_publish = [p for p in selected_picks if p.get("uid") not in published]
+    if not to_publish:
+        return False, "Esa apuesta ya estaba publicada."
+
     try:
-        for idx, pick in enumerate(selected_picks, start=1):
+        for idx, pick in enumerate(to_publish, start=1):
             await context.bot.send_message(chat_id=channel_id, text=_build_channel_pick_text(pick, idx))
 
-        guardar_picks_en_historial(selected_picks, published_at=_mx_now().isoformat(), publish_scope="SELECTED")
+        guardar_picks_en_historial(to_publish, published_at=_mx_now().isoformat(), publish_scope="SELECTED")
         payload["published_at"] = _mx_now().isoformat()
-        payload["published_pick_uids"] = [p.get("uid") for p in selected_picks]
+        payload["published_pick_uids"] = sorted(published.union({p.get("uid") for p in to_publish}))
         _store_last_generated(chat_id, payload)
 
-        return True, f"Publicado en el canal: {len(selected_picks)} apuesta(s)."
+        return True, f"Publicado en el canal: {len(to_publish)} apuesta(s)."
     except Exception as e:
         logging.error(f"Error publicando al canal: {e}")
         return False, f"No se pudo publicar en el canal: {e}"
@@ -2460,6 +2622,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("📈 Rankings\n\nSelecciona una liga.", reply_markup=rankings_menu_markup())
             return
 
+        if data == "menu:resultado":
+            await query.answer()
+            await query.edit_message_text(_build_daily_results_text(), reply_markup=daily_results_markup())
+            return
+
         if data == "menu:games":
             await query.answer()
             await query.edit_message_text(_build_games_text(settings["league_id"]), reply_markup=league_menu_markup(settings["league_id"]))
@@ -2654,10 +2821,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "publish:all":
             await query.answer("Publicando todas...")
             ok, msg = await publish_last_to_channel(chat_id, context, indexes=None)
-            await query.edit_message_text(
-                ("✅ " + msg) if ok else ("⚠️ " + msg),
-                reply_markup=main_menu_markup()
-            )
+            payload = _get_last_generated(chat_id)
+            if payload and payload.get("picks"):
+                await query.edit_message_text(
+                    _build_publish_prompt_text(payload),
+                    reply_markup=publish_selector_markup(payload)
+                )
+            else:
+                await query.edit_message_text(
+                    ("✅ " + msg) if ok else ("⚠️ " + msg),
+                    reply_markup=main_menu_markup()
+                )
             return
 
         if data.startswith("publish:pick:"):
@@ -2665,11 +2839,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             idx = _safe_int(idx_s, -1)
             await query.answer("Publicando apuesta seleccionada...")
             ok, msg = await publish_last_to_channel(chat_id, context, indexes=[idx])
-            await query.edit_message_text(
-                ("✅ " + msg) if ok else ("⚠️ " + msg),
-                reply_markup=main_menu_markup()
-            )
+            payload = _get_last_generated(chat_id)
+            if payload and payload.get("picks"):
+                await query.edit_message_text(
+                    _build_publish_prompt_text(payload),
+                    reply_markup=publish_selector_markup(payload)
+                )
+            else:
+                await query.edit_message_text(
+                    ("✅ " + msg) if ok else ("⚠️ " + msg),
+                    reply_markup=main_menu_markup()
+                )
             return
+
+        if data.startswith("resultado:"):
+            if data == "resultado:publish":
+                await query.answer("Publicando resultado del día...", show_alert=False)
+                ok, msg = await publish_daily_results_to_channel(chat_id, context)
+                payload = _build_daily_results_text()
+                await query.edit_message_text(
+                    payload,
+                    reply_markup=daily_results_markup()
+                )
+                return
 
         if data.startswith("res:"):
             _, uid, result = data.split(":", 2)
